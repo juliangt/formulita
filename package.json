@@ -1,0 +1,23 @@
+{
+  "name": "formulita",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Videojuego de carreras de F1 en 2D, estilo retro 8-bit, mobile-first portrait (720x1280). Phaser 3 + Vite + TypeScript strict.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.14.5",
+    "phaser3spectorjs": "^0.0.8",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}
