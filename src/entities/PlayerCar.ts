@@ -6,6 +6,7 @@ import {
   type IInputState,
 } from '../systems/InputSystem';
 import {
+  OIL_SLIP_SECONDS,
   PLAYER_LATERAL_ACCELERATION,
   PLAYER_LATERAL_DRAG,
   PLAYER_MAX_LATERAL_SPEED,
@@ -24,6 +25,18 @@ export interface TrackBounds {
 
 function defaultTrackBounds(): TrackBounds {
   return { left: TRACK.roadLeft, right: TRACK.roadRight };
+}
+
+/**
+ * Steering durante el derrape de aceite (puro): la dirección pedida se
+ * INVIERTE (el auto no obedece) y, si el jugador no está doblando, zigzaguea
+ * solo hacia los lados. `slipElapsed` son los segundos transcurridos derrapando.
+ */
+export function slipSteer(steer: number, slipElapsed: number): number {
+  if (steer !== 0) {
+    return steer > 0 ? -1 : 1;
+  }
+  return Math.sin(slipElapsed * 16) >= 0 ? 1 : -1;
 }
 
 /**
@@ -46,6 +59,10 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
 
   /** Último estado de input leído (neutro hasta el primer preUpdate). */
   private lastInput: IInputState = EMPTY_INPUT_STATE;
+
+  /* Derrape por aceite (Fase 4): steering invertido/aleatorio breve. */
+  private slipSeconds = 0;
+  private slipElapsed = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -83,15 +100,44 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
     return this.lastInput;
   }
 
+  /** `true` mientras dure el derrape por aceite. */
+  get isSlipping(): boolean {
+    return this.slipSeconds > 0;
+  }
+
+  /**
+   * Pisó aceite: pérdida de control lateral breve (no destructiva). Si se
+   * pisa de nuevo mientras derrapa, refresca la duración. Duración inválida
+   * (NaN/≤0) es un no-op.
+   */
+  slip(duration: number = OIL_SLIP_SECONDS): void {
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return;
+    }
+    this.slipSeconds = Math.max(this.slipSeconds, duration);
+  }
+
   override preUpdate(time: number, delta: number): void {
     super.preUpdate(time, delta);
+    const dt = delta / 1000;
 
     // ÚNICO punto de lectura de input: el estado fusionado de la fuente.
     this.lastInput = this.inputSource.getState();
-    this.setAccelerationX(steerDirection(this.lastInput) * PLAYER_LATERAL_ACCELERATION);
+
+    let steer = steerDirection(this.lastInput);
+    if (this.slipSeconds > 0) {
+      this.slipSeconds = Math.max(0, this.slipSeconds - dt);
+      this.slipElapsed += dt;
+      steer = slipSteer(steer, this.slipElapsed);
+    } else {
+      this.slipElapsed = 0;
+    }
+
+    this.setAccelerationX(steer * PLAYER_LATERAL_ACCELERATION);
 
     this.clampToTrack();
     this.applyTilt();
+    this.applySlipVisual();
   }
 
   /** Clamp a los límites de pista; al tocar el tope se anula la velocidad. */
@@ -112,8 +158,24 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
   /** Inclinación visual sutil, proporcional a la velocidad lateral. */
   private applyTilt(): void {
     const ratio = this.physicsBody.velocity.x / PLAYER_MAX_LATERAL_SPEED;
-    this.setAngle(
-      Phaser.Math.Clamp(ratio * PLAYER_TILT_MAX_DEGREES, -PLAYER_TILT_MAX_DEGREES, PLAYER_TILT_MAX_DEGREES),
+    let angle = Phaser.Math.Clamp(
+      ratio * PLAYER_TILT_MAX_DEGREES,
+      -PLAYER_TILT_MAX_DEGREES,
+      PLAYER_TILT_MAX_DEGREES,
     );
+    // Derrapando: bamboleo adicional que "vende" la pérdida de control.
+    if (this.slipSeconds > 0) {
+      angle += Math.sin(this.slipElapsed * 30) * 6;
+    }
+    this.setAngle(angle);
+  }
+
+  /** Feedback visual del derrape: tinte cálido mientras no obedece. */
+  private applySlipVisual(): void {
+    if (this.slipSeconds > 0) {
+      this.setTint(0xff8a5a);
+    } else {
+      this.clearTint();
+    }
   }
 }

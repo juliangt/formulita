@@ -151,6 +151,92 @@ export const PLAYER_START_Y = 1020;
 /* Pista (Fase 1)                                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Entidades de pista y generación procedural (Fase 4). El ritmo de spawn
+ * depende de la velocidad actual (más rápido = más frecuente) y de la
+ * densidad marcada por DifficultySystem; el SpawnScheduler garantiza
+ * siempre al menos un carril libre (pasabilidad).
+ */
+export const SPAWN = {
+  /** Cantidad de carriles dentro del asfalto. */
+  laneCount: 4,
+  /** Y donde nacen las entidades (fuera de pantalla, arriba). */
+  spawnY: -96,
+  /** Y donde las entidades se reciclan al pool (fuera de pantalla, abajo). */
+  despawnY: 1376, // GAME_HEIGHT (1280) + margen
+  /** Monedas por línea (mínimo y máximo). */
+  coinLineMin: 5,
+  coinLineMax: 8,
+  /** Separación vertical entre monedas consecutivas (px). */
+  coinGap: 110,
+  /** Escalonado vertical entre obstáculos de una misma oleada (px). */
+  waveGap: 150,
+  /** Separación vertical entre rivales de un slalom (px). */
+  slalomGap: 300,
+  /** Cierre mínimo (px/s) de un rival aunque el jugador frene a fondo. */
+  rivalMinClosing: 40,
+  /** Intervalo base entre oleadas, a velocidad de referencia (s). */
+  baseWaveInterval: 1.2,
+  /** Piso del intervalo entre oleadas (punta de velocidad + dificultad). */
+  minWaveInterval: 0.5,
+  /** Demora de la primera oleada tras arrancar la carrera (s). */
+  initialWaveDelay: 1.1,
+  /** Probabilidad de que una oleada incluya un pickup (0–1). */
+  pickupChance: 0.16,
+} as const;
+
+/** Comportamiento de cambio de carril de los rivales. */
+export const RIVAL = {
+  /** Solo cambian de carril por encima de esta Y (lejos del jugador). */
+  laneChangeMaxY: 360,
+  /** Enfriamiento entre cambios de carril, en segundos (mín./máx.). */
+  laneChangeCooldownMin: 1.4,
+  laneChangeCooldownMax: 2.8,
+  /** Velocidad lateral del cambio de carril (px/s). */
+  laneChangeSpeed: 190,
+} as const;
+
+/** Duración del derrape al pisar aceite (s). */
+export const OIL_SLIP_SECONDS = 0.8;
+
+/**
+ * Límites de pool por familia de entidad: el juego crea como máximo estas
+ * instancias por escena y las recicla (sin fugas en sesiones largas).
+ */
+export const ENTITY_POOL_LIMITS = {
+  rival: 10,
+  coin: 44,
+  hazard: 14,
+  pickup: 4,
+} as const;
+
+/** Rampa de dificultad por distancia recorrida (px). */
+export const DIFFICULTY = {
+  /** Distancia a la que se alcanza la dificultad máxima. */
+  maxDistance: 75000,
+  /** Velocidad extra de los rivales al llegar al tope (×1 → ×1+bonus). */
+  rivalSpeedBonus: 0.35,
+  /** Densidad de spawn al llegar al tope (el intervalo se divide por esto). */
+  spawnDensityMax: 2.2,
+  /** Cantidad de niveles de variedad de patrones. */
+  maxPatternLevel: 3,
+} as const;
+
+/** X del centro de un carril del asfalto (índice 0 = izquierda). */
+export function laneCenterX(index: number, laneCount: number = SPAWN.laneCount): number {
+  const roadWidth = TRACK.roadRight - TRACK.roadLeft;
+  const laneWidth = roadWidth / laneCount;
+  return TRACK.roadLeft + laneWidth * (index + 0.5);
+}
+
+/** Índice del carril más cercano a una X (clampeado a [0, laneCount-1]). */
+export function laneIndexAtX(x: number, laneCount: number = SPAWN.laneCount): number {
+  const roadWidth = TRACK.roadRight - TRACK.roadLeft;
+  const laneWidth = roadWidth / laneCount;
+  const index = Math.floor((x - TRACK.roadLeft) / laneWidth);
+  return Math.min(Math.max(index, 0), laneCount - 1);
+}
+
 /* ------------------------------------------------------------------ */
 /* HUD táctil (Fase 2)                                                 */
 /* ------------------------------------------------------------------ */
