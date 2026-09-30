@@ -1,6 +1,6 @@
 # Formulita
 
-Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 3 + Vite + TypeScript strict.**
+Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 4 + Vite + TypeScript strict.**
 
 Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado).
 
@@ -158,5 +158,4 @@ Criterio de aceptación global: **sesión de 10 minutos sin errores de consola**
 
 ## Notas
 
-- `phaser3spectorjs` está como devDependency porque Phaser 3.90.0 la importa sin declararla en sus propias dependencias (bug de packaging conocido).
 - Todos los números de balance (velocidades, turbo, DRS, spawns, layout de HUD) viven en `src/config/balance.ts` con comentarios de intención: ajustables sin tocar lógica.
