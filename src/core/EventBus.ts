@@ -9,6 +9,9 @@
 /** Tipo de handler para un evento con payload `P`. */
 export type EventHandler<P> = (payload: P) => void;
 
+/** Estado del DRS que consume el chip del HUD (Fase 3). */
+export type DrsStatus = 'off' | 'ready' | 'active' | 'cooldown';
+
 /**
  * Mapa de eventos del juego. Cada clave es un nombre de evento y su tipo es
  * el payload que transporta. Se irá extendiendo en fases posteriores
@@ -19,12 +22,16 @@ export type GameEvents = {
   score: number;
   /** Cantidad de monedas recolectadas en la carrera actual. */
   coins: number;
-  /** Velocidad actual en px/s (para el velocímetro del HUD). */
+  /** Velocidad de avance efectiva en px/s (para el velocímetro del HUD). */
   speed: number;
-  /** Nivel del medidor de turbo (0–100). */
-  turbo: number;
-  /** Estado del DRS. */
-  drs: 'off' | 'ready' | 'active' | 'cooldown';
+  /** Turbo: nivel del medidor (0–100) y si está activo en este instante. */
+  turbo: { level: number; active: boolean };
+  /**
+   * DRS: estado del chip + progreso de cooldown (`cooldownRatio` 1 → recién
+   * entra en cooldown, 0 → termina; 0 siempre fuera de cooldown) y segundos
+   * restantes de cooldown (`cooldownSeconds`).
+   */
+  drs: { state: DrsStatus; cooldownRatio: number; cooldownSeconds: number };
   /** Toggle de mute del audio. */
   mute: boolean;
   /** Fin de la carrera (colisión con rival o resto). */

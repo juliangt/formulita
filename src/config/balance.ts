@@ -64,6 +64,58 @@ export const DRS_COOLDOWN_SECONDS = 8;
 export const DRS_SPEED_THRESHOLD = 0.75;
 
 /* ------------------------------------------------------------------ */
+/* SpeedSystem (Fase 3)                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Aceleración con el acelerador (px/s²): de `BASE_SPEED` a `MAX_SPEED`
+ * en ≈ 1.2 s de acelerador sostenido.
+ */
+export const SPEED_ACCELERATION = 100;
+
+/** Desaceleración con el freno (px/s²): más brusca que acelerar. */
+export const SPEED_BRAKE_DECELERATION = 260;
+
+/**
+ * Arrastre al soltar todo (px/s²): sin acelerador ni freno la velocidad
+ * vuelve sola hacia `BASE_SPEED` (la base es autónoma).
+ */
+export const SPEED_COAST_DRAG = 60;
+
+/**
+ * Conversión estética del velocímetro: km/h mostrados por cada px/s reales.
+ * Calibrada para que la punta combinada (MAX × turbo × DRS = 840 px/s)
+ * marque ≈ 336 km/h, típico de una F1.
+ */
+export const SPEEDOMETER_KMH_PER_PX = 0.4;
+
+/* ------------------------------------------------------------------ */
+/* HUD de carrera (Fase 3)                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Layout del HUD superior de la Fase 3 (velocímetro, barra de turbo y chip
+ * DRS) sobre un lienzo de 720×1280. Columna centrada en el borde superior:
+ * los pulgares quedan libres para el TOUCH_HUD inferior (depth 50).
+ */
+export const RACE_HUD = {
+  /** Profundidad del HUD (encima del auto, debajo de los botones táctiles). */
+  depth: 40,
+  /** Y del velocímetro numérico (centro del texto). */
+  speedometerY: 64,
+  /** Tamaño de la barra de turbo. */
+  turboBarWidth: 320,
+  turboBarHeight: 24,
+  /** Y de la barra de turbo (centro). */
+  turboBarY: 112,
+  /** Tamaño del chip de DRS. */
+  drsChipWidth: 180,
+  drsChipHeight: 48,
+  /** Y del chip de DRS (centro). */
+  drsChipY: 158,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Monedas y puntaje                                                   */
 /* ------------------------------------------------------------------ */
 
