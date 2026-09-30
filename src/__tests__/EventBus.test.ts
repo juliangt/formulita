@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EventBus, type GameEvents } from '../core/EventBus';
+import {
+  EVENT_BUS_REGISTRY_KEY,
+  EventBus,
+  getSessionEventBus,
+  type GameEvents,
+} from '../core/EventBus';
 
 /** Mapa de eventos mínimo para probar el bus sin acoplarse a GameEvents. */
 interface TestEvents {
@@ -115,5 +120,57 @@ describe('EventBus', () => {
 
     expect(onCoins).toHaveBeenCalledWith(7);
     expect(onGameOver).toHaveBeenCalledWith({ score: 1234, distance: 567, coins: 7 });
+  });
+});
+
+describe('getSessionEventBus — resolución desde el registry', () => {
+  /** Registry fake mínimo (la misma porción que Phaser.Data.DataManager). */
+  class FakeRegistry {
+    private readonly map = new Map<string, unknown>();
+
+    get(key: string): unknown {
+      return this.map.get(key);
+    }
+
+    set(key: string, value: unknown): this {
+      this.map.set(key, value);
+      return this;
+    }
+  }
+
+  it('crea y cachea el bus de sesión si el registry está vacío', () => {
+    const registry = new FakeRegistry();
+
+    const bus = getSessionEventBus(registry);
+
+    expect(bus).toBeInstanceOf(EventBus);
+    expect(registry.get(EVENT_BUS_REGISTRY_KEY)).toBe(bus); // misma instancia
+  });
+
+  it('devuelve SIEMPRE la misma instancia en resoluciones repetidas', () => {
+    const registry = new FakeRegistry();
+
+    const first = getSessionEventBus(registry);
+    const second = getSessionEventBus(registry);
+
+    expect(second).toBe(first);
+  });
+
+  it('respeta un bus inyectado previamente (inversión de dependencias)', () => {
+    const registry = new FakeRegistry();
+    const injected = new EventBus<GameEvents>();
+    registry.set(EVENT_BUS_REGISTRY_KEY, injected);
+
+    expect(getSessionEventBus(registry)).toBe(injected);
+  });
+
+  it('un valor ajeno en la clave del bus se reemplaza por uno propio', () => {
+    const registry = new FakeRegistry();
+    registry.set(EVENT_BUS_REGISTRY_KEY, 'no-soy-un-bus');
+
+    const bus = getSessionEventBus(registry);
+
+    expect(bus).toBeInstanceOf(EventBus);
+    expect(registry.get(EVENT_BUS_REGISTRY_KEY)).toBe(bus);
   });
 });

@@ -106,8 +106,9 @@ Decisiones clave:
 
 ## Tests
 
-- 22 archivos / 336 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
-- Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
+- 28 archivos / 392 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), steering del derrape (`slipSteer`), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
+- Tests de integración sin runtime de Phaser: input → steering (fusión consumida por el auto, con derrape), SpawnScheduler × DifficultySystem (ritmo, patrones y cierre conjuntos), colisiones → economía (monedas/pickups → Score/Turbo/DRS/bus) y carrera → guardado → recarga.
 
 ---
 

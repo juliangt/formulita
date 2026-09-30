@@ -1,10 +1,12 @@
 import Phaser from 'phaser';
-import { DISTANCE_METERS_PER_PIXEL, GAME_OVER } from '../config/balance';
+import { GAME_OVER } from '../config/balance';
+import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { GameScene } from './GameScene';
 import { MenuScene } from './MenuScene';
+import { formatDistance, formatScore } from '../ui/format';
 import { MenuButton } from '../ui/MenuButton';
 
 const TITLE_COLOR = '#d63c3c';
@@ -28,19 +30,6 @@ const HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontSize: '24px',
   color: DIM_COLOR,
 };
-
-/** Distancia en px → texto estético (m por debajo del km, km después). */
-function formatDistance(px: number): string {
-  const safe = Number.isFinite(px) && px > 0 ? px : 0;
-  const meters = Math.round(safe * DISTANCE_METERS_PER_PIXEL);
-  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} KM` : `${meters} M`;
-}
-
-/** Puntaje con ceros a la izquierda (look arcade de 6 dígitos). */
-function formatScore(score: number): string {
-  const safe = Number.isFinite(score) && score > 0 ? Math.floor(score) : 0;
-  return String(safe).padStart(6, '0');
-}
 
 /**
  * GameOverScene — resultados de la carrera (Fase 5).
@@ -158,9 +147,7 @@ export class GameOverScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-M', this.goToMenu);
 
     // Ayuda de teclado solo en desktop (en móvil mandan los botones).
-    const device = this.game.device;
-    const isTouch = device.input.touch && !device.os.desktop;
-    if (!isTouch) {
+    if (!prefersTouchControls(this.game.device)) {
       this.add
         .text(centerX, GAME_OVER.hintY, 'ENTER / ESPACIO  REINTENTAR   ·   M  MENÚ', HINT_STYLE)
         .setOrigin(0.5);

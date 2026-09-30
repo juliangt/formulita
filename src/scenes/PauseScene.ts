@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { PAUSE } from '../config/balance';
+import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { MenuButton } from '../ui/MenuButton';
 import { GameScene } from './GameScene';
@@ -115,9 +116,7 @@ export class PauseScene extends Phaser.Scene {
     this.keyM = this.input.keyboard?.addKey('M') ?? null;
 
     // Ayuda de teclado solo en desktop (en móvil mandan los botones).
-    const device = this.game.device;
-    const isTouch = device.input.touch && !device.os.desktop;
-    if (!isTouch) {
+    if (!prefersTouchControls(this.game.device)) {
       this.add
         .text(centerX, PAUSE.hintY, 'P / ESC  REANUDAR   ·   M  MENÚ', HINT_STYLE)
         .setOrigin(0.5);

@@ -3,6 +3,7 @@ import {
   AUDIO_SETTINGS_STORAGE_KEY,
   AudioManager,
   engineFrequencyForSpeed,
+  getAudioEngine,
   type AudioBufferLike,
   type AudioBufferSourceNodeLike,
   type AudioContextFactory,
@@ -16,6 +17,7 @@ import {
   type OscillatorNodeLike,
   type UnlockEventTarget,
 } from '../audio/AudioManager';
+import { AUDIO_ENGINE_REGISTRY_KEY } from '../audio/ISfxEngine';
 import { AUDIO, DRS_MULTIPLIER, MAX_SPEED, TURBO_MULTIPLIER } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
 import { FakeStorage } from './fakeStorage';
@@ -706,5 +708,71 @@ describe('AudioManager — integración por EventBus', () => {
 
     bus.emit('coins', 2);
     expect(ctx.oscillators.length).toBe(1);
+  });
+});
+
+describe('getAudioEngine — resolución desde el registry', () => {
+  /** Registry fake mínimo (la misma porción que Phaser.Data.DataManager). */
+  class FakeRegistry {
+    private readonly map = new Map<string, unknown>();
+
+    get(key: string): unknown {
+      return this.map.get(key);
+    }
+
+    set(key: string, value: unknown): this {
+      this.map.set(key, value);
+      return this;
+    }
+  }
+
+  it('crea y cachea el motor default si el registry está vacío', () => {
+    const registry = new FakeRegistry();
+
+    const engine = getAudioEngine(registry);
+
+    expect(engine).toBeInstanceOf(AudioManager);
+    expect(registry.get(AUDIO_ENGINE_REGISTRY_KEY)).toBe(engine); // misma instancia
+  });
+
+  it('devuelve SIEMPRE la misma instancia en resoluciones repetidas', () => {
+    const registry = new FakeRegistry();
+
+    const first = getAudioEngine(registry);
+    const second = getAudioEngine(registry);
+
+    expect(second).toBe(first);
+  });
+
+  it('respeta un motor inyectado previamente (inversión de dependencias)', () => {
+    const registry = new FakeRegistry();
+    const injected = new AudioManager({ storage: new FakeStorage() });
+    registry.set(AUDIO_ENGINE_REGISTRY_KEY, injected);
+
+    expect(getAudioEngine(registry)).toBe(injected);
+  });
+
+  it('el shape-check acepta cualquier ISfxEngine con play + setMuted (Liskov)', () => {
+    const registry = new FakeRegistry();
+    const calls: string[] = [];
+    const injected = {
+      play: (sfx: string) => calls.push(`play:${sfx}`),
+      setMuted: (muted: boolean) => calls.push(`muted:${muted}`),
+    };
+    registry.set(AUDIO_ENGINE_REGISTRY_KEY, injected);
+
+    const resolved = getAudioEngine(registry);
+
+    expect(resolved).toBe(injected as unknown as AudioManager);
+  });
+
+  it('un valor ajeno en la clave del motor se reemplaza por uno propio', () => {
+    const registry = new FakeRegistry();
+    registry.set(AUDIO_ENGINE_REGISTRY_KEY, 42);
+
+    const engine = getAudioEngine(registry);
+
+    expect(engine).toBeInstanceOf(AudioManager);
+    expect(registry.get(AUDIO_ENGINE_REGISTRY_KEY)).toBe(engine);
   });
 });

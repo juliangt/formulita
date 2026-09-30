@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { getAudioEngine } from '../audio/AudioManager';
 import { MUTE_BUTTON, MENU, TRACK } from '../config/balance';
+import { prefersTouchControls } from '../core/device';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
@@ -133,8 +134,7 @@ export class MenuScene extends Phaser.Scene {
     // Ayuda de controles y extras según el dispositivo. El fullscreen (Fase
     // 7) es OPCIONAL y solo desktop: en móvil el HUD táctil ya ocupa los
     // pulgares y el navegador maneja la pantalla completa a su manera.
-    const device = this.game.device;
-    const isTouch = device.input.touch && !device.os.desktop;
+    const isTouch = prefersTouchControls(this.game.device);
     this.createControlsHelp(centerX, isTouch);
     this.createMuteButton(width, bus);
     if (!isTouch) {

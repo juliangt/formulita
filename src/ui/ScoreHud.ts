@@ -11,6 +11,7 @@
 import Phaser from 'phaser';
 import { EventBus, type GameEvents } from '../core/EventBus';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { formatScore } from './format';
 
 export interface ScoreHudConfig {
   /** X del puntaje (el texto ancla por su borde izquierdo). */
@@ -27,16 +28,8 @@ export interface ScoreHudConfig {
   readonly depth?: number;
 }
 
-/** Dígitos del marcador, con ceros a la izquierda (look arcade). */
-const SCORE_DIGITS = 6;
-
 /** Separación entre el icono de moneda y su contador (px). */
 const COIN_ICON_GAP = 10;
-
-function formatScore(score: number): string {
-  const safe = Number.isFinite(score) ? Math.max(0, Math.floor(score)) : 0;
-  return String(safe).padStart(SCORE_DIGITS, '0');
-}
 
 export class ScoreHud {
   readonly container: Phaser.GameObjects.Container;
