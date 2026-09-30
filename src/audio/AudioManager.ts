@@ -224,6 +224,11 @@ export class AudioManager implements ISfxEngine {
   /** Última velocidad y turbo reportados (vía bus). */
   private latestSpeed = 0;
   private turboActive = false;
+  /**
+   * Último estado de turbo APLICADO al filtro del dron (anti-spam: la escena
+   * emite `turbo` por frame; el `setTargetAtTime` del filtro solo en flanco).
+   */
+  private filterTurboActive = false;
   /** Última frecuencia programada (para no spamear setTargetAtTime por frame). */
   private scheduledEngineFreq = 0;
 
@@ -553,6 +558,11 @@ export class AudioManager implements ISfxEngine {
       this.engineSub = sub;
       this.engineFilter = filter;
       this.engineGain = gain;
+
+      // El filtro arranca en el brillo que corresponda al turbo vigente (y el
+      // estado queda sincronizado para el guard de flancos de setTurboActive).
+      filter.frequency.value = this.turboActive ? ENGINE_FILTER_TURBO_HZ : ENGINE_FILTER_HZ;
+      this.filterTurboActive = this.turboActive;
     } catch {
       this.engineOsc = null;
       this.engineSub = null;
@@ -604,6 +614,12 @@ export class AudioManager implements ISfxEngine {
   setTurboActive(active: boolean): void {
     this.turboActive = active;
     this.applyEngineFrequency();
+    // Anti-spam: la escena emite `turbo` por frame; el brillo del filtro solo
+    // se reprograma en el flanco (el estado se sincroniza también en
+    // startEngine, por si el dron se re-crea con el turbo ya activo).
+    if (active === this.filterTurboActive) {
+      return;
+    }
     try {
       if (this.engineFilter && this.context) {
         this.engineFilter.frequency.setTargetAtTime(
@@ -611,6 +627,7 @@ export class AudioManager implements ISfxEngine {
           this.context.currentTime,
           0.08,
         );
+        this.filterTurboActive = active;
       }
     } catch {
       // El brillo extra es cosmético: sin filtro activo se sigue sonando.
@@ -653,6 +670,10 @@ export class AudioManager implements ISfxEngine {
    *   (son eventos por-frame: el SFX solo en la transición a activo).
    * - `coins` → SFX de moneda; `pickup` → SFX de pickup.
    * - `game-over` → SFX de crash + apaga el dron.
+   * - `game-paused` / `game-resumed` (Fase 7) → apaga y re-arranca el dron
+   *   (la carrera está congelada: el motor no sigue sonando en pausa).
+   * - `game-aborted` (Fase 7) → apaga el dron sin SFX de crash (MENÚ desde
+   *   la pausa).
    * - `ui-click` → click; `mute` → aplica y persiste el mute.
    *
    * @returns función de desuscripción (el audio vive toda la sesión: no se
@@ -685,6 +706,9 @@ export class AudioManager implements ISfxEngine {
         this.play('crash');
         this.stopEngine();
       }),
+      bus.on('game-paused', () => this.stopEngine()),
+      bus.on('game-resumed', () => this.startEngine()),
+      bus.on('game-aborted', () => this.stopEngine()),
       bus.on('ui-click', () => this.play('click')),
       bus.on('mute', (muted) => this.setMuted(muted)),
     ];

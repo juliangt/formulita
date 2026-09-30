@@ -46,6 +46,19 @@ export type GameEvents = {
   'game-over': { score: number; distance: number; coins: number };
   /** Inicio de una carrera nueva. */
   'game-start': undefined;
+  /**
+   * La carrera entró en pausa (botón, tecla P o pérdida de foco — Fase 7).
+   * El AudioManager apaga el dron del motor; el overlay de pausa no necesita
+   * payload (el flag `auto` viaja como init data de la escena de pausa).
+   */
+  'game-paused': undefined;
+  /** La carrera salió de la pausa (REANUDAR / P / ESC): vuelve el dron. */
+  'game-resumed': undefined;
+  /**
+   * La carrera se abandonó sin crash (MENÚ desde la pausa — Fase 7): corta el
+   * dron del motor sin sonar el SFX de crash (a diferencia de `game-over`).
+   */
+  'game-aborted': undefined;
 };
 
 export class EventBus<TEvents extends object> {

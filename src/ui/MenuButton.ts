@@ -134,6 +134,14 @@ export class MenuButton {
     this.label.setColor(this.textColor);
   };
 
+  /**
+   * Cambia la etiqueta en caliente (p. ej. FULLSCREEN ↔ VENTANA en el botón
+   * de pantalla completa del menú, Fase 7). No toca el feedback de presión.
+   */
+  setLabel(text: string): void {
+    this.label.setText(text);
+  }
+
   destroy(): void {
     this.container.destroy();
   }

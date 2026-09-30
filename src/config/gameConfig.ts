@@ -4,6 +4,7 @@ import { PreloadScene } from '../scenes/PreloadScene';
 import { MenuScene } from '../scenes/MenuScene';
 import { GameScene } from '../scenes/GameScene';
 import { GameOverScene } from '../scenes/GameOverScene';
+import { PauseScene } from '../scenes/PauseScene';
 
 /** Resolución base de diseño (portrait). */
 export const GAME_WIDTH = 720;
@@ -48,9 +49,11 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
     input: {
       activePointers: 5,
     },
-    // Flujo completo (Fase 5): Boot → Preload (texturas) → Menu → Game →
-    // GameOver; REINTENTAR vuelve a Game y MENÚ a Menu. El orden del array
-    // es el flujo: Phaser arranca la primera escena.
-    scene: [BootScene, PreloadScene, MenuScene, GameScene, GameOverScene],
+    // Flujo completo (Fase 5 + pausa de Fase 7): Boot → Preload (texturas) →
+    // Menu → Game → GameOver; REINTENTAR vuelve a Game y MENÚ a Menu.
+    // PauseScene es un OVERLAY: no está en el flujo, se lanza encima de Game
+    // (pausada) y se detiene al reanudar. El orden del array es el flujo:
+    // Phaser arranca la primera escena.
+    scene: [BootScene, PreloadScene, MenuScene, GameScene, GameOverScene, PauseScene],
   };
 }

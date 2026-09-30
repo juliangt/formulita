@@ -125,6 +125,18 @@ export const RACE_HUD = {
   coinsY: 64,
   /** Tamaño de fuente del marcador de puntaje y de las monedas (px). */
   scoreFontSize: 26,
+  /* Botón de pausa (Fase 7): debajo del puntaje, alineado a la altura del
+   * chip DRS. Zona libre: la barra de turbo arranca en x≈196 y el botón
+   * termina en x≈104. La profundidad es la del botón de mute (MUTE_BUTTON
+   * .gameDepth): sobre el HUD, bajo el HUD táctil. */
+  /** X del centro del botón de pausa. */
+  pauseX: 64,
+  /** Y del centro del botón de pausa. */
+  pauseY: 158,
+  /** Tamaño del botón de pausa (cuadrado). */
+  pauseButtonSize: 72,
+  /** Tamaño de fuente de la etiqueta del botón de pausa (px). */
+  pauseButtonFontSize: 30,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -159,6 +171,17 @@ export const MENU = {
   helpLineHeight: 34,
   /** Tamaño de fuente de las líneas de récord/monedas (px). */
   statFontSize: 34,
+  /* Botón FULLSCREEN (Fase 7, solo desktop): esquina superior izquierda,
+   * espejo del botón de mute (que usa MUTE_BUTTON.margin). Libre: el título
+   * arranca en y≈192 y el botón termina en y≈120. */
+  /** Margen del botón fullscreen desde el borde. */
+  fullscreenMargin: 44,
+  /** Ancho del botón fullscreen. */
+  fullscreenWidth: 300,
+  /** Alto del botón fullscreen. */
+  fullscreenHeight: 72,
+  /** Tamaño de fuente de la etiqueta fullscreen (px). */
+  fullscreenFontSize: 22,
 } as const;
 
 /** Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
@@ -400,6 +423,63 @@ export const MUTE_BUTTON = {
   margin: 44,
   /** Profundidad en GameScene: sobre el HUD, bajo el HUD táctil. */
   gameDepth: 45,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Countdown, pausa y viñeta (Fase 7)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Countdown 3-2-1-GO! (Fase 7): el mundo (scroll, spawn, puntaje, física)
+ * queda congelado hasta terminar la cuenta. Los números se muestran
+ * `stepSeconds` cada uno y el GO! `goSeconds`.
+ */
+export const COUNTDOWN = {
+  /** Duración de cada número (3, 2, 1), en segundos. */
+  stepSeconds: 0.8,
+  /** Duración del GO!, en segundos. */
+  goSeconds: 0.7,
+  /** Tamaño de fuente del número gigante (px). */
+  fontSize: 168,
+} as const;
+
+/**
+ * Overlay de pausa (Fase 7): escena superpuesta a la carrera pausada con
+ * REANUDAR / MENÚ. La pausa es real: `scene.pause()` congela update, física,
+ * tweens, timers y partículas de la escena de juego.
+ */
+export const PAUSE = {
+  /** Opacidad del velo oscuro sobre la carrera congelada (0–1). */
+  veilAlpha: 0.74,
+  /** Y del título PAUSA / PAUSA AUTOMÁTICA (centro). */
+  titleY: 400,
+  /** Y del subtítulo (centro). */
+  subtitleY: 486,
+  /** Botones REANUDAR y MENÚ: centro Y, tamaño y fuente compartida. */
+  resumeY: 700,
+  menuY: 860,
+  buttonWidth: 380,
+  buttonHeight: 104,
+  buttonFontSize: 40,
+  /** Y de la ayuda de teclado (solo desktop). */
+  hintY: 1010,
+  /** Tamaño de fuente del subtítulo (px). */
+  subtitleFontSize: 28,
+} as const;
+
+/**
+ * Viñeta de velocidad (Fase 7): textura de gradiente radial horneada UNA vez
+ * (cero `Graphics` dinámicos) cuyo alfa se interpola hacia `maxAlpha` mientras
+ * el turbo empuja y vuelve a 0 al soltar. `lerpRate` es la velocidad de la
+ * interpolación (por segundo, exponencial suave).
+ */
+export const SPEED_VIGNETTE = {
+  /** Clave de la textura horneada en GameScene.create. */
+  textureKey: 'speed-vignette',
+  /** Alfa máximo de la viñeta con turbo activo (0–1). */
+  maxAlpha: 0.5,
+  /** Velocidad de la interpolación del alfa (1/s). */
+  lerpRate: 7,
 } as const;
 
 /**

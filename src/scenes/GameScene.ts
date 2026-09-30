@@ -2,11 +2,13 @@ import Phaser from 'phaser';
 import { getAudioEngine } from '../audio/AudioManager';
 import {
   BASE_SPEED,
+  COUNTDOWN,
   GAMEOVER_TRANSITION_MS,
   MUTE_BUTTON,
   OIL_SLIP_SECONDS,
   PLAYER_START_Y,
   RACE_HUD,
+  SPEED_VIGNETTE,
   TOUCH_HUD,
   TRACK,
   TURBO_MAX,
@@ -18,9 +20,11 @@ import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { parseGameOverData } from '../data/types';
 import { PlayerCar } from '../entities/PlayerCar';
 import { TrackEntity } from '../entities/TrackEntity';
+import { CountdownSystem, type CountdownLabel } from '../systems/CountdownSystem';
 import { DifficultySystem } from '../systems/DifficultySystem';
 import { InputSystem } from '../systems/InputSystem';
 import { KeyboardSource } from '../systems/KeyboardSource';
+import { PauseSystem } from '../systems/PauseSystem';
 import { TouchSource } from '../systems/TouchSource';
 import { ScoreSystem } from '../systems/ScoreSystem';
 import { SpawnSystem } from '../systems/SpawnSystem';
@@ -30,10 +34,12 @@ import { DrsSystem } from '../systems/DrsSystem';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { EnergyBar } from '../ui/EnergyBar';
 import { DrsIndicator } from '../ui/DrsIndicator';
+import { MenuButton } from '../ui/MenuButton';
 import { ScoreHud } from '../ui/ScoreHud';
 import { Speedometer } from '../ui/Speedometer';
 import { MuteButton } from '../ui/MuteButton';
 import { GameOverScene } from './GameOverScene';
+import { PauseScene } from './PauseScene';
 
 /** Widget del HUD de esta fase: se destruye en el shutdown de la escena. */
 type HudWidget = { destroy(): void };
@@ -68,6 +74,14 @@ type HudWidget = { destroy(): void };
  *   (`getSessionEventBus`, resuelto del registry) es el desacoplador: acá se
  *   emiten `game-start`/`speed`/`turbo`/`drs`/`coins`/`pickup`/`game-over` y
  *   el AudioManager conectado en Boot los traduce a SFX y al dron del motor.
+ * - Fase 7 — pulido y QA: countdown 3-2-1-GO! (el mundo no arranca hasta
+ *   terminar la cuenta: física pausada, cero scroll/spawn/puntaje), pausa
+ *   REAL con overlay (botón en pantalla + tecla P; automática al perder
+ *   foco) — `scene.pause()` congela update, física, tweens, timers y
+ *   partículas de verdad —, viñeta de velocidad con turbo (textura de
+ *   gradiente horneada una vez) y flash de crash. El HUD se arma con el
+ *   estado inicial de los sistemas para que no haya valores vacíos durante
+ *   la cuenta.
  */
 export class GameScene extends Phaser.Scene {
   static readonly KEY = 'Game';
@@ -110,6 +124,17 @@ export class GameScene extends Phaser.Scene {
   /* HUD de la fase (widgets en ui/, conectados por EventBus). */
   private hudWidgets: HudWidget[] = [];
 
+  /* Fase 7 — countdown 3-2-1-GO!: el mundo no arranca hasta terminar. */
+  private countdown!: CountdownSystem;
+  private countdownText!: Phaser.GameObjects.Text;
+
+  /* Fase 7 — pausa real: estado puro + overlay (PauseScene) lanzado encima. */
+  private pauseSystem!: PauseSystem;
+  private touchSource!: TouchSource;
+  private pauseKey: Phaser.Input.Keyboard.Key | null = null;
+  /** Viñeta de velocidad (turbo); null si el canvas 2D no está disponible. */
+  private vignette: Phaser.GameObjects.Image | null = null;
+
   constructor() {
     super(GameScene.KEY);
   }
@@ -127,6 +152,16 @@ export class GameScene extends Phaser.Scene {
     this.coins = 0;
     this.gameOver = false;
 
+    // Fase 7 — pausa y countdown frescos, y mundo CONGELADO hasta el GO!:
+    // ni scroll, ni spawn, ni puntaje, ni física durante la cuenta (el plan
+    // pide que el mundo no arranque hasta terminar). `physics.world.pause()`
+    // congela la integración del auto; el update de la escena queda en gate.
+    this.pauseSystem = new PauseSystem();
+    this.countdown = new CountdownSystem();
+    this.physics.world.pause();
+    this.createCountdownText(width, height);
+    this.renderCountdownLabel(this.countdown.label ?? '3');
+
     // Fase 5 — puntaje y persistencia frescos. El repositorio se resuelve
     // del registry (inyectado en Boot; aquí solo se consume la interfaz).
     this.scoreSystem = new ScoreSystem();
@@ -136,9 +171,11 @@ export class GameScene extends Phaser.Scene {
     this.lastEmittedScore = -1;
 
     // Fase 2 — fuentes de entrada fusionadas en un único IInputState.
-    // Agregar/quitar fuentes (gamepad, demo IA…) = editar esta lista.
-    const touchSource = new TouchSource(this, { width, height });
-    this.inputSystem = new InputSystem([KeyboardSource.fromScene(this), touchSource]);
+    // Agregar/quitar fuentes (gamepad, demo IA…) = editar esta lista. La
+    // táctil queda en campo: la pausa la desarma (detach) y el RESUME la
+    // re-arma, para que ningún botón quede "pegado" tras congelar la escena.
+    this.touchSource = new TouchSource(this, { width, height });
+    this.inputSystem = new InputSystem([KeyboardSource.fromScene(this), this.touchSource]);
     this.inputSystem.attach();
 
     // El auto consume el estado fusionado (steer); los sistemas de la Fase 3
@@ -165,26 +202,45 @@ export class GameScene extends Phaser.Scene {
 
     this.createTurboEffects();
     this.createCollectEffects();
+    this.createSpeedVignette(width, height);
     this.createHud(width, height);
+    this.createPauseControls();
+
+    // Durante el countdown el update está en gate (no hay emisiones por
+    // frame): el HUD arranca ya poblado con el estado inicial de los sistemas.
+    this.bus.emit('speed', this.currentSpeed);
+    this.bus.emit('turbo', { level: TURBO_MAX, active: false });
+    this.bus.emit('drs', { state: 'off', cooldownRatio: 0, cooldownSeconds: 0 });
 
     // Fase 5 — no perder progreso: guardar también al ocultar la pestaña o
     // al perder foco (Phaser emite HIDDEN/BLUR desde visibilitychange/blur
-    // del document). El listener vive en game.events (global): se baja en el
-    // shutdown para no duplicar tras un restart.
+    // del document). Fase 7 — además, PAUSA AUTOMÁTICA: mejor congelar la
+    // carrera que volver a una pista en movimiento. Los listeners viven en
+    // game.events (global): se bajan en el shutdown para no duplicar tras un
+    // restart.
     this.game.events.on(Phaser.Core.Events.HIDDEN, this.persistProgress);
     this.game.events.on(Phaser.Core.Events.BLUR, this.persistProgress);
+    this.game.events.on(Phaser.Core.Events.HIDDEN, this.handleFocusLoss);
+    this.game.events.on(Phaser.Core.Events.BLUR, this.handleFocusLoss);
+
+    // Fase 7 — re-sincronización al volver de la pausa: PauseScene hace
+    // `resume(Game)` y este evento es el que actualiza el PauseSystem y
+    // re-arma el input táctil y las teclas (pueden quedar "presionadas" si
+    // la escena se congeló a mitad de un toque/tecla).
+    this.events.on(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
 
     // Notificación de inicio de carrera (consumidores desacoplados del bus).
     this.bus.emit('game-start', undefined);
 
-    // Al apagarse la escena (restart) nada puede quedar colgado: detach de
-    // fuentes, destrucción del HUD táctil y de los widgets (cada uno se
-    // desuscribe del bus de sesión en su destroy — el bus NO se limpia: es
-    // compartido con el audio de la sesión, Fase 6), de los grupos del
-    // SpawnSystem y de los listeners globales de guardado.
+    // Al apagarse la escena (restart o MENÚ desde la pausa) nada puede quedar
+    // colgado: detach de fuentes, destrucción del HUD táctil y de los widgets
+    // (cada uno se desuscribe del bus de sesión en su destroy — el bus NO se
+    // limpia: es compartido con el audio de la sesión, Fase 6), de los grupos
+    // del SpawnSystem, de los listeners globales de guardado/pausa y del
+    // handler de RESUME.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.inputSystem.detach();
-      touchSource.destroy();
+      this.touchSource.destroy();
       for (const widget of this.hudWidgets) {
         widget.destroy();
       }
@@ -194,6 +250,13 @@ export class GameScene extends Phaser.Scene {
       this.spawnSystem.destroy();
       this.game.events.off(Phaser.Core.Events.HIDDEN, this.persistProgress);
       this.game.events.off(Phaser.Core.Events.BLUR, this.persistProgress);
+      this.game.events.off(Phaser.Core.Events.HIDDEN, this.handleFocusLoss);
+      this.game.events.off(Phaser.Core.Events.BLUR, this.handleFocusLoss);
+      this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
+      // Salida sin crash (MENÚ desde la pausa, Fase 7): corta el dron del
+      // motor sin SFX de crash. En el flujo a GameOver es un no-op: el dron
+      // ya se apagó con `game-over`.
+      this.bus.emit('game-aborted', undefined);
     });
   }
 
@@ -275,6 +338,10 @@ export class GameScene extends Phaser.Scene {
     this.gameOver = true;
     this.spawnSystem.setEnabled(false);
 
+    // Fase 7 — flash rojo de impacto + viñeta a cero mientras arde el auto.
+    this.cameras.main.flash(160, 255, 90, 64);
+    this.vignette?.setAlpha(0);
+
     this.crashEmitter.explode(60, this.playerCar.x, this.playerCar.y);
     this.playerCar.setActive(false).setVisible(false);
     (this.playerCar.body as Phaser.Physics.Arcade.Body).enable = false;
@@ -327,6 +394,172 @@ export class GameScene extends Phaser.Scene {
     if (value !== this.lastEmittedScore) {
       this.lastEmittedScore = value;
       this.bus.emit('score', value);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Fase 7 — countdown, pausa real y viñeta de velocidad              */
+  /* ---------------------------------------------------------------- */
+
+  /** Texto gigante del countdown (por encima de todo lo demás). */
+  private createCountdownText(width: number, height: number): void {
+    this.countdownText = this.add
+      .text(width / 2, height / 2, '3', {
+        fontFamily: 'monospace',
+        fontSize: `${COUNTDOWN.fontSize}px`,
+        color: '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 14)
+      .setDepth(60);
+  }
+
+  /** Repinta el label del countdown con el pop de escala del cambio. */
+  private renderCountdownLabel(label: CountdownLabel): void {
+    this.tweens.killTweensOf(this.countdownText);
+    this.countdownText
+      .setText(label)
+      .setColor(label === 'GO!' ? '#5dff8a' : '#f2f2f2')
+      .setAlpha(1)
+      .setScale(1.45);
+    this.tweens.add({
+      targets: this.countdownText,
+      scale: 1,
+      duration: 240,
+      ease: 'Cubic.Out',
+    });
+  }
+
+  /**
+   * Un paso del countdown. El update de la escena queda en gate mientras
+   * `!countdown.isFinished`: el scroll, el spawn, el puntaje y los sistemas
+   * de la carrera no avanzan un milímetro durante la cuenta (la física ya
+   * está pausada desde create()).
+   */
+  private updateCountdown(dt: number): void {
+    const previous = this.countdown.label;
+    this.countdown.update(dt);
+    const label = this.countdown.label;
+    if (label === previous) {
+      return;
+    }
+    if (label === null) {
+      this.finishCountdown();
+      return;
+    }
+    this.renderCountdownLabel(label);
+  }
+
+  /** Fin de la cuenta: se reanuda el mundo arcade y el GO! se desvanece. */
+  private finishCountdown(): void {
+    this.physics.world.resume();
+    this.tweens.killTweensOf(this.countdownText);
+    this.tweens.add({
+      targets: this.countdownText,
+      alpha: 0,
+      scale: 1.3,
+      duration: 260,
+      ease: 'Cubic.Out',
+      onComplete: () => this.countdownText.setVisible(false),
+    });
+  }
+
+  /**
+   * Controles de pausa (Fase 7): botón en pantalla (columna izquierda, a la
+   * altura del chip DRS) + tecla P. La congelación REAL la hace
+   * `scene.pause()` desde `pauseGame()`: update, física arcade, tweens,
+   * timers y emisores de partículas de ESTA escena quedan congelados. El
+   * overlay (REANUDAR / MENÚ) vive en PauseScene, lanzada encima, porque una
+   * escena pausada tampoco procesa su propio input.
+   */
+  private createPauseControls(): void {
+    this.hudWidgets.push(
+      new MenuButton(this, {
+        x: RACE_HUD.pauseX,
+        y: RACE_HUD.pauseY,
+        width: RACE_HUD.pauseButtonSize,
+        height: RACE_HUD.pauseButtonSize,
+        label: 'II',
+        tint: 0x525868,
+        fontSize: RACE_HUD.pauseButtonFontSize,
+        depth: MUTE_BUTTON.gameDepth,
+        bus: this.bus,
+        onPress: () => this.pauseGame(false),
+      }),
+    );
+
+    this.pauseKey = this.input.keyboard?.addKey('P') ?? null;
+  }
+
+  /**
+   * Pausa la carrera: manual (botón `II` o tecla P) o automática (pérdida de
+   * foco). Idempotente vía `PauseSystem` — pausar dos veces no lanza dos
+   * overlays —, avisa al audio por el bus (el dron del motor se calla) y
+   * congela la escena de verdad con `scene.pause()`. Durante el crash y su
+   * transición a GameOver la pausa se ignora: ya todo está congelado y hay
+   * un `delayedCall` pendiente que no debe quedar detenido.
+   */
+  private readonly pauseGame = (auto: boolean): void => {
+    if (this.gameOver) {
+      return;
+    }
+    if (!this.pauseSystem.pause(auto)) {
+      return;
+    }
+    this.bus.emit('game-paused', undefined);
+    // Desarmar el HUD táctil: sin listeners no hay botones "pegados" si la
+    // escena se congela a mitad de un toque (el attach vuelve en el RESUME).
+    this.touchSource.detach();
+    this.scene.launch(PauseScene.KEY, { auto });
+    this.scene.pause();
+  };
+
+  /** RESUME (vuelve de PauseScene): estado + input re-armados. */
+  private readonly handleSceneResume = (): void => {
+    this.pauseSystem.resume();
+    this.touchSource.attach();
+    // Teclas: un keydown pudo quedar "colgado" durante la congelación.
+    this.input.keyboard?.resetKeys();
+  };
+
+  /** HIDDEN/BLUR (pestaña oculta o ventana sin foco) → pausa automática. */
+  private readonly handleFocusLoss = (): void => {
+    this.pauseGame(true);
+  };
+
+  /**
+   * Viñeta de velocidad (Fase 7): gradiente radial horneado UNA vez en una
+   * textura canvas — elipse portrait que oscurece los bordes dejando el
+   * centro de la pista despejado. Cero `Graphics` dinámicos: por frame solo
+   * se interpola el alfa de la imagen. Si el canvas 2D no está disponible,
+   * el juego sigue sin viñeta (degradación silenciosa).
+   */
+  private createSpeedVignette(width: number, height: number): void {
+    try {
+      const key = SPEED_VIGNETTE.textureKey;
+      if (!this.textures.exists(key)) {
+        const canvasTexture = this.textures.createCanvas(key, width, height);
+        if (!canvasTexture) {
+          return;
+        }
+        const ctx = canvasTexture.getContext();
+        // Gradiente circular re-escalado en Y = viñeta elíptica (portrait).
+        ctx.save();
+        ctx.translate(width / 2, height / 2);
+        ctx.scale(1, height / width);
+        const radius = width * 0.75;
+        const gradient = ctx.createRadialGradient(0, 0, radius * 0.45, 0, 0, radius);
+        gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        gradient.addColorStop(0.55, 'rgba(0, 0, 0, 0.1)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0.92)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(-width, -width, width * 2, width * 2);
+        ctx.restore();
+        canvasTexture.refresh();
+      }
+      this.vignette = this.add.image(width / 2, height / 2, key).setDepth(35).setAlpha(0);
+    } catch {
+      this.vignette = null;
     }
   }
 
@@ -467,6 +700,22 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // Fase 7 — tecla P: pausa con JustDown (el auto-repeat del SO no vuelve a
+    // dispararla; el re-armado de teclas en el RESUME limpia el flag). El
+    // resto del frame se descarta: el overlay toma el control y la escena
+    // queda congelada desde el próximo step del manager.
+    if (this.pauseKey && Phaser.Input.Keyboard.JustDown(this.pauseKey)) {
+      this.pauseGame(false);
+      return;
+    }
+
+    // Fase 7 — countdown 3-2-1-GO!: el mundo está congelado (física pausada
+    // desde create(), sin scroll/spawn/puntaje) hasta terminar la cuenta.
+    if (!this.countdown.isFinished) {
+      this.updateCountdown(dt);
+      return;
+    }
+
     // ÚNICA lectura de input por frame: el estado fusionado alimenta a los
     // tres sistemas (cada uno consume su porción de flags).
     const input = this.inputSystem.getState();
@@ -504,6 +753,15 @@ export class GameScene extends Phaser.Scene {
     const turboActive = this.turboSystem.isActive;
     this.exhaustEmitter.emitting = turboActive;
     this.speedLinesEmitter.emitting = turboActive;
+
+    // Fase 7 — viñeta de velocidad: el alfa de la textura horneada persigue
+    // el estado del turbo con una interpolación exponencial suave (única
+    // operación por frame; la textura se generó una sola vez en create()).
+    if (this.vignette) {
+      const target = turboActive ? SPEED_VIGNETTE.maxAlpha : 0;
+      const alpha = this.vignette.alpha + (target - this.vignette.alpha) * Math.min(1, SPEED_VIGNETTE.lerpRate * dt);
+      this.vignette.setAlpha(alpha);
+    }
 
     // EventBus → HUD desacoplado (velocímetro, barra de turbo, chip DRS).
     this.bus.emit('speed', speed);

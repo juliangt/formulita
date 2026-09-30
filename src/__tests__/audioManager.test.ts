@@ -587,6 +587,32 @@ describe('AudioManager — dron del motor', () => {
     manager.setEngineSpeed(500);
     expect(ctx.oscillators[0].frequency.valuesOf('setTarget').length).toBe(0);
   });
+
+  it('pausa y reanudar (Fase 7) apagan y vuelven a encender el dron', () => {
+    const { ctx, bus } = makeHarness({ withBus: true });
+
+    bus.emit('game-start', undefined);
+    expect(ctx.oscillators.length).toBe(2);
+
+    // Pausa: el dron se apaga y deja de seguir la velocidad.
+    bus.emit('game-paused', undefined);
+    expect(ctx.oscillators[0].stopped.length).toBe(1);
+    const targetsWhilePaused = ctx.oscillators[0].frequency.valuesOf('setTarget').length;
+    bus.emit('speed', 600);
+    expect(ctx.oscillators[0].frequency.valuesOf('setTarget').length).toBe(targetsWhilePaused);
+
+    // Reanudar: dos osciladores NUEVOS (los viejos quedaron con stop programado).
+    bus.emit('game-resumed', undefined);
+    expect(ctx.oscillators.length).toBe(4);
+    expect(ctx.oscillators[2].started.length).toBe(1);
+    expect(ctx.oscillators[3].started.length).toBe(1);
+
+    // Abandono (MENÚ desde la pausa): corta el dron sin SFX de crash.
+    const sourcesBefore = ctx.sources.length;
+    bus.emit('game-aborted', undefined);
+    expect(ctx.oscillators[2].stopped.length).toBe(1);
+    expect(ctx.sources.length).toBe(sourcesBefore);
+  });
 });
 
 describe('AudioManager — integración por EventBus', () => {

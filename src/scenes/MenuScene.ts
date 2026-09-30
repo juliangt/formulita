@@ -33,6 +33,10 @@ const HELP_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   color: '#9aa0a8',
 };
 
+/** Etiqueta del botón fullscreen según el estado (Fase 7). */
+const FS_LABEL_WINDOWED = 'PANTALLA COMPLETA';
+const FS_LABEL_FULLSCREEN = 'VENTANA';
+
 /**
  * MenuScene — pantalla principal (Fase 5).
  *
@@ -46,12 +50,16 @@ const HELP_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
  *   HUD táctil en móvil (detección: touch real = capacidad táctil fuera de
  *   un OS desktop; los laptops con pantalla táctil reportan ambas y en
  *   desktop mandan las teclas).
+ * - Fase 7 — fullscreen opcional en desktop: botón en la esquina superior
+ *   izquierda (espejo del mute) + tecla F. La etiqueta sigue al estado real
+ *   vía los eventos ENTER/LEAVE_FULLSCREEN del ScaleManager.
  */
 export class MenuScene extends Phaser.Scene {
   static readonly KEY = 'Menu';
 
   private road!: Phaser.GameObjects.TileSprite;
   private muteButton!: MuteButton;
+  private fullscreenButton: MenuButton | null = null;
 
   constructor() {
     super(MenuScene.KEY);
@@ -122,8 +130,16 @@ export class MenuScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-ENTER', this.startGame);
     this.input.keyboard?.on('keydown-SPACE', this.startGame);
 
-    this.createControlsHelp(centerX);
+    // Ayuda de controles y extras según el dispositivo. El fullscreen (Fase
+    // 7) es OPCIONAL y solo desktop: en móvil el HUD táctil ya ocupa los
+    // pulgares y el navegador maneja la pantalla completa a su manera.
+    const device = this.game.device;
+    const isTouch = device.input.touch && !device.os.desktop;
+    this.createControlsHelp(centerX, isTouch);
     this.createMuteButton(width, bus);
+    if (!isTouch) {
+      this.createFullscreenButton(bus);
+    }
 
     // El plugin de teclado se resetea al apagar la escena; el off explícito
     // es cinturón y suspenders contra restarts. El botón de mute desuscribe
@@ -131,6 +147,9 @@ export class MenuScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.input.keyboard?.off('keydown-ENTER', this.startGame);
       this.input.keyboard?.off('keydown-SPACE', this.startGame);
+      this.input.keyboard?.off('keydown-F', this.toggleFullscreen);
+      this.scale.off(Phaser.Scale.Events.ENTER_FULLSCREEN, this.syncFullscreenLabel);
+      this.scale.off(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.syncFullscreenLabel);
       this.muteButton.destroy();
     });
   }
@@ -145,14 +164,13 @@ export class MenuScene extends Phaser.Scene {
   }
 
   /** Ayuda de controles según el dispositivo (táctil vs teclado). */
-  private createControlsHelp(centerX: number): void {
-    const device = this.game.device;
-    const isTouch = device.input.touch && !device.os.desktop;
+  private createControlsHelp(centerX: number, isTouch: boolean): void {
     const lines = isTouch
-      ? ['DOBLA CON ◀ ▶', 'GAS ACELERA · BRK FRENA', 'TURBO Y DRS EN PANTALLA']
+      ? ['DOBLA CON ◀ ▶', 'GAS ACELERA · BRK FRENA', 'TURBO Y DRS EN PANTALLA', 'BOTÓN II PAUSA']
       : [
           '←→ / A·D  DOBLAR  ·  ESPACIO  ACELERAR',
           'SHIFT  TURBO  ·  Z  FRENO  ·  X  DRS',
+          'P  PAUSA  ·  F  PANTALLA COMPLETA',
           'ENTER O ESPACIO PARA JUGAR',
         ];
 
@@ -181,5 +199,48 @@ export class MenuScene extends Phaser.Scene {
 
   private readonly startGame = (): void => {
     this.scene.start(GameScene.KEY);
+  };
+
+  /**
+   * Botón FULLSCREEN (Fase 7, solo desktop): esquina superior izquierda,
+   * espejo del botón de mute. Toggle + tecla F; la etiqueta se sincroniza
+   * con los eventos del ScaleManager (el navegador puede denegar el pedido
+   * o forzar la salida por fuera del juego).
+   */
+  private createFullscreenButton(bus: EventBus<GameEvents>): void {
+    this.fullscreenButton = new MenuButton(this, {
+      x: MENU.fullscreenMargin + MENU.fullscreenWidth / 2,
+      y: MENU.fullscreenMargin + MENU.fullscreenHeight / 2,
+      width: MENU.fullscreenWidth,
+      height: MENU.fullscreenHeight,
+      label: this.scale.isFullscreen ? FS_LABEL_FULLSCREEN : FS_LABEL_WINDOWED,
+      tint: 0x525868,
+      fontSize: MENU.fullscreenFontSize,
+      bus,
+      onPress: this.toggleFullscreen,
+    });
+
+    this.scale.on(Phaser.Scale.Events.ENTER_FULLSCREEN, this.syncFullscreenLabel);
+    this.scale.on(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.syncFullscreenLabel);
+    this.input.keyboard?.on('keydown-F', this.toggleFullscreen);
+  }
+
+  private readonly toggleFullscreen = (): void => {
+    try {
+      if (this.scale.isFullscreen) {
+        this.scale.stopFullscreen();
+      } else {
+        this.scale.startFullscreen();
+      }
+    } catch {
+      // Navegador sin soporte o permiso denegado: queda como está.
+    }
+    this.syncFullscreenLabel();
+  };
+
+  private readonly syncFullscreenLabel = (): void => {
+    this.fullscreenButton?.setLabel(
+      this.scale.isFullscreen ? FS_LABEL_FULLSCREEN : FS_LABEL_WINDOWED,
+    );
   };
 }
