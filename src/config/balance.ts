@@ -371,6 +371,37 @@ export const TOUCH_HUD = {
   labelFontSize: 30,
 } as const;
 
+/* ------------------------------------------------------------------ */
+/* Audio sintético (Fase 6)                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Parámetros del audio sintético (Web Audio pura, sin assets). El dron del
+ * motor mapea linealmente la velocidad de la carrera de `engineFreqMin` (a
+ * velocidad mínima) a `engineFreqMax` (a punta combinada turbo × DRS); con
+ * el turbo activo la frecuencia se realza además por `engineTurboBoost`.
+ */
+export const AUDIO = {
+  /** Volumen del dron del motor (ganancia pico, 0–1). */
+  engineVolume: 0.055,
+  /** Frecuencia del dron a velocidad mínima (Hz). */
+  engineFreqMin: 55,
+  /** Frecuencia del dron a velocidad punta combinada (Hz). */
+  engineFreqMax: 235,
+  /** Realce de frecuencia del dron con turbo activo (×1 = sin realce). */
+  engineTurboBoost: 1.14,
+} as const;
+
+/** Layout del botón de mute (Fase 6): menú (esquina) y carrera (abajo-centro). */
+export const MUTE_BUTTON = {
+  /** Lado del botón cuadrado (px). */
+  size: 76,
+  /** Margen desde el borde en el menú (esquina superior derecha). */
+  margin: 44,
+  /** Profundidad en GameScene: sobre el HUD, bajo el HUD táctil. */
+  gameDepth: 45,
+} as const;
+
 /**
  * Layout horizontal de la pista, de afuera hacia adentro:
  * barrera (barrierWidth) → kerb/rumble (kerbWidth) → asfalto jugable.

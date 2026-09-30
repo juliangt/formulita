@@ -14,6 +14,7 @@
  */
 
 import Phaser from 'phaser';
+import { EventBus, type GameEvents } from '../core/EventBus';
 
 /** Estilo de un botón de menú. */
 export interface MenuButtonConfig {
@@ -35,6 +36,12 @@ export interface MenuButtonConfig {
   readonly textColor?: string;
   /** Profundidad en la escena. */
   readonly depth?: number;
+  /**
+   * Bus de sesión opcional (Fase 6): si se inyecta, cada activación emitirá
+   * `ui-click` ANTES de llamar a `onPress` para que el AudioManager suene el
+   * click. El botón sigue sin conocer el audio (solo emite).
+   */
+  readonly bus?: EventBus<GameEvents>;
   /** Callback de activación. */
   readonly onPress: () => void;
 }
@@ -46,6 +53,7 @@ export class MenuButton {
   readonly container: Phaser.GameObjects.Container;
 
   private readonly onPress: () => void;
+  private readonly bus: EventBus<GameEvents> | null;
   private readonly label: Phaser.GameObjects.Text;
   private readonly textColor: string;
   private pressed = false;
@@ -61,9 +69,11 @@ export class MenuButton {
       fontSize = 40,
       textColor = '#f2f2f2',
       depth = 0,
+      bus = null,
       onPress,
     } = config;
     this.onPress = onPress;
+    this.bus = bus;
     this.textColor = textColor;
 
     this.container = scene.add.container(x, y).setDepth(depth);
@@ -110,6 +120,9 @@ export class MenuButton {
     const wasPressed = this.pressed;
     this.handleRelease();
     if (wasPressed) {
+      // Fase 6: el SFX de click viaja por el bus (si la escena lo inyectó),
+      // antes de la acción para que se escuche aunque la escena cambie.
+      this.bus?.emit('ui-click', undefined);
       this.onPress();
     }
   };

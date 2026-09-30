@@ -43,6 +43,11 @@ export const TEXTURE_KEYS = {
   hudArrowLeft: 'hud-arrow-left',
   /** Glifo pixel ▶ del botón de doblar a la derecha. */
   hudArrowRight: 'hud-arrow-right',
+  /* --- Botón de mute (Fase 6) --- */
+  /** Glifo pixel de altavoz con ondas (audio activado). */
+  hudAudioOn: 'hud-audio-on',
+  /** Glifo pixel de altavoz con X (audio silenciado). */
+  hudAudioOff: 'hud-audio-off',
 } as const;
 
 export type TextureKey = (typeof TEXTURE_KEYS)[keyof typeof TEXTURE_KEYS];
@@ -259,6 +264,53 @@ export const HUD_ARROW_RIGHT_SPRITE: PixelSprite = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Glifos del botón de mute (Fase 6)                                   */
+/* ------------------------------------------------------------------ */
+
+/** Escala en px de los glifos de audio (12×10 → 48×40). */
+const HUD_AUDIO_SCALE = 4;
+
+/**
+ * Altavoz con ondas (12×10), blanco tintable: cono apuntando a la derecha y
+ * dos arcos de sonido.
+ */
+export const HUD_AUDIO_ON_SPRITE: PixelSprite = {
+  rows: [
+    '............',
+    '.........w..',
+    '.ww.......w.',
+    '.www..w....w',
+    '.wwww..w...w',
+    '.wwww..w...w',
+    '.www..w....w',
+    '.ww.......w.',
+    '.........w..',
+    '............',
+  ],
+  palette: { w: '#f2f2f2' },
+};
+
+/**
+ * Altavoz silenciado (12×10), blanco tintable: mismo cono y una X en lugar
+ * de las ondas.
+ */
+export const HUD_AUDIO_OFF_SPRITE: PixelSprite = {
+  rows: [
+    '............',
+    '............',
+    '.ww....w...w',
+    '.www....w.w.',
+    '.wwww....w..',
+    '.wwww....w..',
+    '.www....w.w.',
+    '.ww....w...w',
+    '............',
+    '............',
+  ],
+  palette: { w: '#f2f2f2' },
+};
+
+/* ------------------------------------------------------------------ */
 /* Helpers de dibujo (puros salvo el `Graphics` receptor)               */
 /* ------------------------------------------------------------------ */
 
@@ -380,6 +432,12 @@ export class TextureFactory {
         break;
       case TEXTURE_KEYS.hudArrowRight:
         TextureFactory.bakePixelSprite(scene, key, HUD_ARROW_RIGHT_SPRITE, HUD_ARROW_SCALE);
+        break;
+      case TEXTURE_KEYS.hudAudioOn:
+        TextureFactory.bakePixelSprite(scene, key, HUD_AUDIO_ON_SPRITE, HUD_AUDIO_SCALE);
+        break;
+      case TEXTURE_KEYS.hudAudioOff:
+        TextureFactory.bakePixelSprite(scene, key, HUD_AUDIO_OFF_SPRITE, HUD_AUDIO_SCALE);
         break;
       default:
         throw new Error(`Textura desconocida: ${String(key)}`);

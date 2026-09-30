@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { DISTANCE_METERS_PER_PIXEL, GAME_OVER } from '../config/balance';
+import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { GameScene } from './GameScene';
@@ -125,6 +126,9 @@ export class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    // Botones con el bus de sesión inyectado: cada activación emite
+    // `ui-click` (SFX de click, Fase 6) antes de la acción.
+    const bus = getSessionEventBus(this.registry);
     new MenuButton(this, {
       x: centerX,
       y: GAME_OVER.retryY,
@@ -133,6 +137,7 @@ export class GameOverScene extends Phaser.Scene {
       label: 'REINTENTAR',
       tint: 0x1d8f43,
       fontSize: GAME_OVER.buttonFontSize,
+      bus,
       onPress: this.retry,
     });
     new MenuButton(this, {
@@ -143,6 +148,7 @@ export class GameOverScene extends Phaser.Scene {
       label: 'MENÚ',
       tint: 0x3c6cd6,
       fontSize: GAME_OVER.buttonFontSize,
+      bus,
       onPress: this.goToMenu,
     });
 

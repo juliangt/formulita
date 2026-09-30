@@ -1,9 +1,12 @@
 import Phaser from 'phaser';
-import { MENU, TRACK } from '../config/balance';
+import { getAudioEngine } from '../audio/AudioManager';
+import { MUTE_BUTTON, MENU, TRACK } from '../config/balance';
+import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { GameScene } from './GameScene';
 import { MenuButton } from '../ui/MenuButton';
+import { MuteButton } from '../ui/MuteButton';
 
 /** Estilos de texto de la pantalla (monospace, coherente con el resto). */
 const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
@@ -48,6 +51,7 @@ export class MenuScene extends Phaser.Scene {
   static readonly KEY = 'Menu';
 
   private road!: Phaser.GameObjects.TileSprite;
+  private muteButton!: MuteButton;
 
   constructor() {
     super(MenuScene.KEY);
@@ -56,6 +60,8 @@ export class MenuScene extends Phaser.Scene {
   create(): void {
     const { width, height } = this.scale;
     const centerX = width / 2;
+    // Bus de sesión (Fase 6): un solo canal para `ui-click` y `mute`.
+    const bus = getSessionEventBus(this.registry);
 
     this.cameras.main.setBackgroundColor('#000000');
 
@@ -100,7 +106,8 @@ export class MenuScene extends Phaser.Scene {
     // Moneda pixel junto al contador (a la izquierda del texto).
     this.add.image(coinsText.x - coinsText.width / 2 - 30, MENU.coinsY, TEXTURE_KEYS.coin);
 
-    // JUGAR: botón táctil grande + teclado (Enter / Espacio).
+    // JUGAR: botón táctil grande + teclado (Enter / Espacio). El bus de
+    // sesión inyectado hace que la activación emita `ui-click` (SFX).
     new MenuButton(this, {
       x: centerX,
       y: MENU.playY,
@@ -109,18 +116,22 @@ export class MenuScene extends Phaser.Scene {
       label: 'JUGAR',
       tint: 0x1d8f43,
       fontSize: MENU.playFontSize,
+      bus,
       onPress: this.startGame,
     });
     this.input.keyboard?.on('keydown-ENTER', this.startGame);
     this.input.keyboard?.on('keydown-SPACE', this.startGame);
 
     this.createControlsHelp(centerX);
+    this.createMuteButton(width, bus);
 
     // El plugin de teclado se resetea al apagar la escena; el off explícito
-    // es cinturón y suspenders contra restarts.
+    // es cinturón y suspenders contra restarts. El botón de mute desuscribe
+    // su handler del bus en su destroy (el bus es de sesión, no se limpia).
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.input.keyboard?.off('keydown-ENTER', this.startGame);
       this.input.keyboard?.off('keydown-SPACE', this.startGame);
+      this.muteButton.destroy();
     });
   }
 
@@ -150,6 +161,21 @@ export class MenuScene extends Phaser.Scene {
       this.add
         .text(centerX, startY + index * MENU.helpLineHeight, line, HELP_STYLE)
         .setOrigin(0.5);
+    });
+  }
+
+  /**
+   * Botón de mute (Fase 6) en la esquina superior derecha. El estado
+   * inicial sale del motor de audio resuelto del registry (la escena
+   * orquesta, la UI solo emite `mute` por el bus de sesión).
+   */
+  private createMuteButton(width: number, bus: EventBus<GameEvents>): void {
+    const y = MUTE_BUTTON.margin + MUTE_BUTTON.size / 2;
+    this.muteButton = new MuteButton(this, {
+      x: width - MUTE_BUTTON.margin - MUTE_BUTTON.size / 2,
+      y,
+      bus,
+      initiallyMuted: getAudioEngine(this.registry).isMuted,
     });
   }
 

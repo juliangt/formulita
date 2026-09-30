@@ -1,15 +1,18 @@
 import Phaser from 'phaser';
+import { getAudioEngine } from '../audio/AudioManager';
 import {
   BASE_SPEED,
   GAMEOVER_TRANSITION_MS,
+  MUTE_BUTTON,
   OIL_SLIP_SECONDS,
   PLAYER_START_Y,
   RACE_HUD,
+  TOUCH_HUD,
   TRACK,
   TURBO_MAX,
   TURBO_PICKUP_REFILL,
 } from '../config/balance';
-import { EventBus, type GameEvents } from '../core/EventBus';
+import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import type { ISaveRepository } from '../data/ISaveRepository';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { parseGameOverData } from '../data/types';
@@ -29,6 +32,7 @@ import { EnergyBar } from '../ui/EnergyBar';
 import { DrsIndicator } from '../ui/DrsIndicator';
 import { ScoreHud } from '../ui/ScoreHud';
 import { Speedometer } from '../ui/Speedometer';
+import { MuteButton } from '../ui/MuteButton';
 import { GameOverScene } from './GameOverScene';
 
 /** Widget del HUD de esta fase: se destruye en el shutdown de la escena. */
@@ -53,13 +57,17 @@ type HudWidget = { destroy(): void };
  *   5); aceite → derrape no destructivo.
  * - Efectos visuales del turbo (partículas de escape + líneas de velocidad).
  * - HUD de la fase desacoplado por `EventBus` (velocímetro, turbo, DRS,
- *   puntaje y monedas).
+ *   puntaje y monedas), más el botón de mute (Fase 6) abajo al centro.
  * - Fase 5 — puntaje y persistencia: `ScoreSystem` suma puntos por distancia
  *   (escalados con la velocidad real), bonus por velocidad sostenida y los
  *   puntos de las monedas. Al morir (o al ocultar la pestaña / perder foco)
  *   se guarda el progreso vía `ISaveRepository` (registry, inyección desde
  *   Boot) y la escena transiciona a GameOverScene con el resumen de la
  *   carrera como init data.
+ * - Fase 6 — audio: la escena NO conoce el AudioManager. El bus de sesión
+ *   (`getSessionEventBus`, resuelto del registry) es el desacoplador: acá se
+ *   emiten `game-start`/`speed`/`turbo`/`drs`/`coins`/`pickup`/`game-over` y
+ *   el AudioManager conectado en Boot los traduce a SFX y al dron del motor.
  */
 export class GameScene extends Phaser.Scene {
   static readonly KEY = 'Game';
@@ -68,7 +76,7 @@ export class GameScene extends Phaser.Scene {
   private inputSystem!: InputSystem;
   private playerCar!: PlayerCar;
 
-  /* Fase 3 — lógica pura + bus de eventos de la carrera. */
+  /* Fase 3 — lógica pura + bus (de sesión desde la Fase 6, ver create()). */
   private bus!: EventBus<GameEvents>;
   private speedSystem!: SpeedSystem;
   private turboSystem!: TurboSystem;
@@ -138,8 +146,11 @@ export class GameScene extends Phaser.Scene {
     this.playerCar = new PlayerCar(this, width / 2, PLAYER_START_Y, this.inputSystem);
 
     // Fase 3 — sistemas puros. El DRS consulta la velocidad vía proveedor
-    // inyectado (sin acoplarse al SpeedSystem).
-    this.bus = new EventBus<GameEvents>();
+    // inyectado (sin acoplarse al SpeedSystem). El bus es el DE SESIÓN
+    // (Fase 6, resuelto del registry): mismo canal para HUD, audio y UI;
+    // NADIE lo limpia (los widgets se desuscriben en su destroy y el audio
+    // vive toda la sesión).
+    this.bus = getSessionEventBus(this.registry);
     this.speedSystem = new SpeedSystem();
     this.turboSystem = new TurboSystem();
     this.drsSystem = new DrsSystem(() => this.speedSystem.speed);
@@ -154,7 +165,7 @@ export class GameScene extends Phaser.Scene {
 
     this.createTurboEffects();
     this.createCollectEffects();
-    this.createHud(width);
+    this.createHud(width, height);
 
     // Fase 5 — no perder progreso: guardar también al ocultar la pestaña o
     // al perder foco (Phaser emite HIDDEN/BLUR desde visibilitychange/blur
@@ -167,8 +178,10 @@ export class GameScene extends Phaser.Scene {
     this.bus.emit('game-start', undefined);
 
     // Al apagarse la escena (restart) nada puede quedar colgado: detach de
-    // fuentes, destrucción del HUD táctil, de los widgets (se desuscriben),
-    // de los grupos del SpawnSystem y limpieza del bus.
+    // fuentes, destrucción del HUD táctil y de los widgets (cada uno se
+    // desuscribe del bus de sesión en su destroy — el bus NO se limpia: es
+    // compartido con el audio de la sesión, Fase 6), de los grupos del
+    // SpawnSystem y de los listeners globales de guardado.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.inputSystem.detach();
       touchSource.destroy();
@@ -176,7 +189,6 @@ export class GameScene extends Phaser.Scene {
         widget.destroy();
       }
       this.hudWidgets = [];
-      this.bus.clear();
       this.exhaustEmitter.stop();
       this.speedLinesEmitter.stop();
       this.spawnSystem.destroy();
@@ -226,11 +238,14 @@ export class GameScene extends Phaser.Scene {
         this.turboSystem.refill(TURBO_PICKUP_REFILL);
         this.burstCollect(entity);
         this.spawnSystem.release(entity);
+        // Fase 6 — el AudioManager conectado al bus suena el pickup.
+        this.bus.emit('pickup', 'turbo');
         break;
       case 'collect-drs':
         this.drsSystem.resetCooldown();
         this.burstCollect(entity);
         this.spawnSystem.release(entity);
+        this.bus.emit('pickup', 'drs');
         break;
       case 'slip':
         // La mancha sigue en la pista: overlapando de nuevo refresca el derrape.
@@ -380,8 +395,8 @@ export class GameScene extends Phaser.Scene {
       .setDepth(12);
   }
 
-  /** HUD de la Fase 3: velocímetro + barra de turbo + chip DRS. */
-  private createHud(width: number): void {
+  /** HUD de la Fase 3: velocímetro + barra de turbo + chip DRS (+ mute F6). */
+  private createHud(width: number, height: number): void {
     const centerX = width / 2;
     const { depth } = RACE_HUD;
 
@@ -428,6 +443,18 @@ export class GameScene extends Phaser.Scene {
       coinsY: RACE_HUD.coinsY,
       fontSize: RACE_HUD.scoreFontSize,
       depth,
+    }));
+
+    // Fase 6 — botón de mute abajo al centro (en el hueco entre los dos
+    // clusters táctiles, mismo eje Y que sus filas). La UI solo emite
+    // `mute`/`ui-click` por el bus; el estado inicial sale del motor
+    // resuelto del registry.
+    this.hudWidgets.push(new MuteButton(this, {
+      x: centerX,
+      y: height - TOUCH_HUD.marginBottom - TOUCH_HUD.buttonSize / 2,
+      bus: this.bus,
+      initiallyMuted: getAudioEngine(this.registry).isMuted,
+      depth: MUTE_BUTTON.gameDepth,
     }));
   }
 

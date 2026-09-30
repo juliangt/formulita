@@ -34,6 +34,14 @@ export type GameEvents = {
   drs: { state: DrsStatus; cooldownRatio: number; cooldownSeconds: number };
   /** Toggle de mute del audio. */
   mute: boolean;
+  /** Click de UI (botones de menú/game over/mute): dispara el SFX de click. */
+  'ui-click': undefined;
+  /**
+   * Pickup recolectado (`'turbo' | 'drs'` según el tipo): dispara el SFX de
+   * pickup. Los eventos `turbo`/`drs` de estado no sirven para esto (se
+   * emiten por frame), por eso el contacto con el pickup emite el suyo.
+   */
+  pickup: 'turbo' | 'drs';
   /** Fin de la carrera (colisión con rival o resto). */
   'game-over': { score: number; distance: number; coins: number };
   /** Inicio de una carrera nueva. */
@@ -98,4 +106,39 @@ export class EventBus<TEvents extends object> {
   clear(): void {
     this.handlers.clear();
   }
+}
+
+/**
+ * Bus de SESIÓN (Fase 6): una única instancia de `EventBus<GameEvents>`
+ * compartida por toda la partida, resuelta del registry de Phaser igual que
+ * el repositorio de guardado. Lo consumen las escenas (para emitir y para
+ * conectar el HUD) y el AudioManager (para sonar), de modo que los eventos
+ * de gameplay (`coins`, `speed`, `game-over`…) y los de UI (`mute`,
+ * `ui-click`) tengan UN solo canal en toda la app.
+ *
+ * Ojo: por ser compartido, NADIE debe llamar `clear()` sobre él; los
+ * consumidores por-escena (widgets del HUD) se desuscriben en su
+ * `destroy()`, y los de larga vida (audio) viven mientras vive la página.
+ */
+export const EVENT_BUS_REGISTRY_KEY = 'eventBus';
+
+/** Porción del registry de Phaser que la resolución consume. */
+interface RegistrySlice {
+  get(key: string): unknown;
+  set(key: string, value: unknown): unknown;
+}
+
+/**
+ * Resuelve el bus de sesión (registry de Phaser): si otro módulo ya puso
+ * uno, se respeta esa decisión; si no, crea el default y lo cachea para que
+ * toda la sesión comparta la misma instancia.
+ */
+export function getSessionEventBus(registry: RegistrySlice): EventBus<GameEvents> {
+  const existing = registry.get(EVENT_BUS_REGISTRY_KEY);
+  if (existing instanceof EventBus) {
+    return existing;
+  }
+  const created = new EventBus<GameEvents>();
+  registry.set(EVENT_BUS_REGISTRY_KEY, created);
+  return created;
 }
