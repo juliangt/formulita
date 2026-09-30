@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH, createGameConfig } from '../config/gameConfig';
 import { BootScene } from '../scenes/BootScene';
+import { PreloadScene } from '../scenes/PreloadScene';
+import { GameScene } from '../scenes/GameScene';
 
 describe('gameConfig', () => {
   it('usa la resolución base portrait 720×1280', () => {
@@ -41,12 +43,17 @@ describe('gameConfig', () => {
     expect(arcade.debug).toBe(false);
   });
 
-  it('registra BootScene como escena inicial', () => {
+  it('registra el flujo de escenas Boot → Preload → Game en orden', () => {
     const config = createGameConfig('game');
     const scenes = config.scene as Phaser.Scene[];
 
-    // Phaser acepta clases o instancias; la config registra la clase directamente.
-    expect(Array.isArray(scenes)).toBe(true);
-    expect(scenes).toContain(BootScene);
+    // Phaser arranca la primera escena del array; el orden ES el flujo.
+    expect(scenes).toEqual([BootScene, PreloadScene, GameScene]);
+  });
+
+  it('usa claves de escena estables y coherentes con el flujo', () => {
+    expect(BootScene.KEY).toBe('Boot');
+    expect(PreloadScene.KEY).toBe('Preload');
+    expect(GameScene.KEY).toBe('Game');
   });
 });

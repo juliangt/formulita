@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { BootScene } from '../scenes/BootScene';
+import { PreloadScene } from '../scenes/PreloadScene';
+import { GameScene } from '../scenes/GameScene';
 
 /** Resolución base de diseño (portrait). */
 export const GAME_WIDTH = 720;
@@ -38,7 +40,7 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
         debug: false,
       },
     },
-    // Por ahora solo la escena placeholder; en la Fase 1 se agregan PreloadScene y GameScene.
-    scene: [BootScene],
+    // Flujo de escenas de la Fase 1: Boot → Preload (texturas + barra) → Game.
+    scene: [BootScene, PreloadScene, GameScene],
   };
 }
