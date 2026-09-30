@@ -43,6 +43,17 @@ describe('gameConfig', () => {
     expect(arcade.debug).toBe(false);
   });
 
+  it('habilita multi-touch real (varios pointers activos) para el HUD táctil', () => {
+    const config = createGameConfig('game');
+
+    const input = config.input;
+    if (typeof input !== 'object' || input === null) {
+      throw new Error('La configuración de input no es un objeto');
+    }
+    // El default de Phaser es 1: sin esto no se puede doblar + acelerar a la vez.
+    expect(input.activePointers ?? 1).toBeGreaterThan(1);
+  });
+
   it('registra el flujo de escenas Boot → Preload → Game en orden', () => {
     const config = createGameConfig('game');
     const scenes = config.scene as Phaser.Scene[];

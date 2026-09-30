@@ -99,6 +99,39 @@ export const PLAYER_START_Y = 1020;
 /* Pista (Fase 1)                                                      */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* HUD táctil (Fase 2)                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Layout y feedback visual de los botones táctiles (TouchSource).
+ * Dos clusters en el borde inferior: ◀ ▶ abajo-izquierda y GAS / BRK /
+ * TURBO / DRS en grilla 2×2 abajo-derecha (el acelerador en la esquina,
+ * donde llega el pulgar derecho).
+ */
+export const TOUCH_HUD = {
+  /** Lado de cada botón (px). */
+  buttonSize: 116,
+  /** Separación entre botones (px). */
+  gap: 20,
+  /** Margen horizontal de los clusters (px). */
+  marginX: 44,
+  /** Margen inferior de la fila de abajo (px). */
+  marginBottom: 44,
+  /** Margen extra del hit-test (px): los dedos son imprecisos. */
+  hitPadding: 12,
+  /** Profundidad del HUD (por encima del auto, depth 10). */
+  depth: 50,
+  /** Alfa en reposo (HUD translúcido). */
+  baseAlpha: 0.55,
+  /** Alfa presionado (feedback de presión). */
+  pressedAlpha: 0.95,
+  /** Escala presionada (feedback de presión). */
+  pressedScale: 0.9,
+  /** Tamaño de fuente de las etiquetas de texto (px). */
+  labelFontSize: 30,
+} as const;
+
 /**
  * Layout horizontal de la pista, de afuera hacia adentro:
  * barrera (barrierWidth) → kerb/rumble (kerbWidth) → asfalto jugable.

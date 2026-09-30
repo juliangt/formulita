@@ -79,6 +79,37 @@ describe('TEXTURE_KEYS', () => {
       TextureFactory.generate(null as unknown as Phaser.Scene, 'no-existe' as TextureKey),
     ).toThrow(/Textura desconocida/);
   });
+
+  it('generate() hornea TODAS las claves conocidas (flujo real de PreloadScene)', () => {
+    // Fake mínimo de escena: Graphics que graba generateTexture y un manager
+    // de texturas idempotente. Cubre la ruta de horneado real (switch + draw)
+    // sin runtime de render.
+    const baked: string[] = [];
+    const graphics = {
+      fillStyle: () => {},
+      fillRect: () => {},
+      generateTexture: (key: string) => {
+        baked.push(key);
+      },
+      destroy: () => {},
+    };
+    const existing = new Set<string>();
+    const scene = {
+      make: { graphics: () => graphics },
+      textures: {
+        exists: (key: string) => existing.has(key),
+        remove: (key: string) => {
+          existing.delete(key);
+        },
+      },
+    } as unknown as Phaser.Scene;
+
+    expect(() => TextureFactory.generateAll(scene)).not.toThrow();
+
+    // Cada clave se horneó exactamente una vez (incluidas las del HUD táctil).
+    expect(baked).toEqual([...ALL_TEXTURE_KEYS]);
+    expect(baked).toEqual(expect.arrayContaining(['hud-panel', 'hud-arrow-left', 'hud-arrow-right']));
+  });
 });
 
 describe('mapas de píxeles', () => {

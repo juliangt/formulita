@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TRACK } from '../config/balance';
+import { TOUCH_HUD, TRACK } from '../config/balance';
 
 /**
  * TextureFactory — generación 100% procedural de las texturas pixel-art del
@@ -36,6 +36,13 @@ export const TEXTURE_KEYS = {
   pickupDrs: 'pickup-drs',
   /** Partícula blanca 4×4 (tintable). */
   particle: 'particle',
+  /* --- HUD táctil (Fase 2) --- */
+  /** Panel de botón táctil, blanco tintable con borde horneado. */
+  hudPanel: 'hud-panel',
+  /** Glifo pixel ◀ del botón de doblar a la izquierda. */
+  hudArrowLeft: 'hud-arrow-left',
+  /** Glifo pixel ▶ del botón de doblar a la derecha. */
+  hudArrowRight: 'hud-arrow-right',
 } as const;
 
 export type TextureKey = (typeof TEXTURE_KEYS)[keyof typeof TEXTURE_KEYS];
@@ -215,6 +222,43 @@ export const DRS_PICKUP_SPRITE: PixelSprite = {
 };
 
 /* ------------------------------------------------------------------ */
+/* Glifos del HUD táctil (Fase 2)                                      */
+/* ------------------------------------------------------------------ */
+
+/** Escala en px de los glifos de flecha del HUD (7×8 → 42×48). */
+const HUD_ARROW_SCALE = 6;
+
+/** Flecha pixel ◀ (7×8), blanca tintable. */
+export const HUD_ARROW_LEFT_SPRITE: PixelSprite = {
+  rows: [
+    'ww.....',
+    'wwww...',
+    'wwwwww.',
+    'wwwwwww',
+    'wwwwwww',
+    'wwwwww.',
+    'wwww...',
+    'ww.....',
+  ],
+  palette: { w: '#f2f2f2' },
+};
+
+/** Flecha pixel ▶ (7×8), blanca tintable. */
+export const HUD_ARROW_RIGHT_SPRITE: PixelSprite = {
+  rows: [
+    '.....ww',
+    '...wwww',
+    '.wwwwww',
+    'wwwwwww',
+    'wwwwwww',
+    '.wwwwww',
+    '...wwww',
+    '.....ww',
+  ],
+  palette: { w: '#f2f2f2' },
+};
+
+/* ------------------------------------------------------------------ */
 /* Helpers de dibujo (puros salvo el `Graphics` receptor)               */
 /* ------------------------------------------------------------------ */
 
@@ -328,6 +372,15 @@ export class TextureFactory {
       case TEXTURE_KEYS.particle:
         TextureFactory.drawParticle(scene);
         break;
+      case TEXTURE_KEYS.hudPanel:
+        TextureFactory.drawHudPanel(scene);
+        break;
+      case TEXTURE_KEYS.hudArrowLeft:
+        TextureFactory.bakePixelSprite(scene, key, HUD_ARROW_LEFT_SPRITE, HUD_ARROW_SCALE);
+        break;
+      case TEXTURE_KEYS.hudArrowRight:
+        TextureFactory.bakePixelSprite(scene, key, HUD_ARROW_RIGHT_SPRITE, HUD_ARROW_SCALE);
+        break;
       default:
         throw new Error(`Textura desconocida: ${String(key)}`);
     }
@@ -404,6 +457,26 @@ export class TextureFactory {
     g.fillStyle(0xffffff, 1);
     g.fillRect(0, 0, 4, 4);
     TextureFactory.bake(g, scene, TEXTURE_KEYS.particle, 4, 4);
+  }
+
+  /* ------------------------- HUD táctil ------------------------- */
+
+  /**
+   * Panel de botón táctil (TOUCH_HUD.buttonSize × buttonSize): borde oscuro
+   * horneado + relleno casi blanco para que cada botón lo tinte a su color.
+   * Compartido por los 6 botones del TouchSource.
+   */
+  private static drawHudPanel(scene: Phaser.Scene): void {
+    const g = scene.make.graphics({ x: 0, y: 0 }, false);
+    const size = TOUCH_HUD.buttonSize;
+    const border = 4;
+
+    g.fillStyle(0x1c1c24, 1);
+    g.fillRect(0, 0, size, size);
+    g.fillStyle(0xf2f2f2, 1);
+    g.fillRect(border, border, size - border * 2, size - border * 2);
+
+    TextureFactory.bake(g, scene, TEXTURE_KEYS.hudPanel, size, size);
   }
 
   /* ------------------------- Horneado ------------------------- */
