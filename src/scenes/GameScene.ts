@@ -514,12 +514,18 @@ export class GameScene extends Phaser.Scene {
     this.scene.pause();
   };
 
-  /** RESUME (vuelve de PauseScene): estado + input re-armados. */
+  /**
+   * RESUME (vuelve de PauseScene): estado + input re-armados. También emite
+   * `game-resumed` por el bus: es la única ruta de reanudado de la carrera
+   * (PauseScene es la única escena que hace `resume(Game)`), así que acá
+   * vuelve el dron del motor que `game-paused` apagó (Fase 6).
+   */
   private readonly handleSceneResume = (): void => {
     this.pauseSystem.resume();
     this.touchSource.attach();
     // Teclas: un keydown pudo quedar "colgado" durante la congelación.
     this.input.keyboard?.resetKeys();
+    this.bus.emit('game-resumed', undefined);
   };
 
   /** HIDDEN/BLUR (pestaña oculta o ventana sin foco) → pausa automática. */
