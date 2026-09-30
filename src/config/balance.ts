@@ -113,6 +113,76 @@ export const RACE_HUD = {
   drsChipHeight: 48,
   /** Y del chip de DRS (centro). */
   drsChipY: 158,
+  /* Marcador de puntaje y contador de monedas (Fase 5): en las esquinas del
+   * borde superior, dejando el centro para velocímetro/barra/chip. */
+  /** X del puntaje (el texto ancla por su borde izquierdo). */
+  scoreX: 64,
+  /** Y del puntaje (centro del texto). */
+  scoreY: 64,
+  /** X de las monedas (el texto ancla por su borde derecho). */
+  coinsX: 656,
+  /** Y de las monedas (centro del texto). */
+  coinsY: 64,
+  /** Tamaño de fuente del marcador de puntaje y de las monedas (px). */
+  scoreFontSize: 26,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Pantallas — menú y game over (Fase 5)                               */
+/* ------------------------------------------------------------------ */
+
+/** Layout de MenuScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
+export const MENU = {
+  /** Velocidad de scroll de la pista de fondo (px/s). */
+  roadScrollSpeed: 90,
+  /** Opacidad del velo oscuro sobre la pista de fondo (0–1). */
+  veilAlpha: 0.62,
+  /** Y del título (centro). */
+  titleY: 240,
+  /** Y del subtítulo (centro). */
+  subtitleY: 335,
+  /** Y del auto decorativo (centro) y su escala. */
+  carY: 520,
+  carScale: 2.5,
+  /** Y de la línea de récord (centro). */
+  recordY: 742,
+  /** Y de la línea de monedas (centro). */
+  coinsY: 812,
+  /** Botón JUGAR: centro Y, tamaño y fuente de la etiqueta. */
+  playY: 980,
+  playWidth: 400,
+  playHeight: 120,
+  playFontSize: 52,
+  /** Y del centro del bloque de ayuda de controles. */
+  helpY: 1160,
+  /** Separación vertical entre líneas de ayuda (px). */
+  helpLineHeight: 34,
+  /** Tamaño de fuente de las líneas de récord/monedas (px). */
+  statFontSize: 34,
+} as const;
+
+/** Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
+export const GAME_OVER = {
+  /** Y del título GAME OVER (centro). */
+  titleY: 210,
+  /** Y del cartel ¡NUEVO RÉCORD! (centro). */
+  newRecordY: 318,
+  /** Y de las líneas de puntaje, distancia y monedas de la carrera. */
+  scoreY: 450,
+  distanceY: 535,
+  coinsY: 620,
+  /** Y de la línea de récord histórico (centro). */
+  recordY: 726,
+  /** Botones REINTENTAR y MENÚ: centro Y, tamaño y fuente compartida. */
+  retryY: 900,
+  menuY: 1044,
+  buttonWidth: 380,
+  buttonHeight: 104,
+  buttonFontSize: 40,
+  /** Tamaño de fuente de las líneas de estadísticas (px). */
+  statFontSize: 36,
+  /** Y de la ayuda de teclado (solo desktop). */
+  hintY: 1180,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -127,6 +197,37 @@ export const COIN_SCORE = 50;
 
 /** Puntos por segundo a velocidad base (puntaje por distancia). */
 export const SCORE_PER_SECOND_AT_BASE_SPEED = 10;
+
+/* ------------------------------------------------------------------ */
+/* Puntaje — Fase 5                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Bonus por velocidad sostenida (ScoreSystem): mientras la velocidad
+ * efectiva se mantiene sobre `SCORE_BONUS_SPEED_FRACTION × MAX_SPEED`
+ * durante al menos `SCORE_BONUS_WARMUP_SECONDS`, se suman
+ * `SCORE_BONUS_PER_SECOND` puntos por segundo, prorrateados por frame.
+ * Bajar del umbral corta la racha: hay que volver a sostener la velocidad.
+ */
+export const SCORE_BONUS_SPEED_FRACTION = 0.9;
+
+/** Segundos sostenidos sobre el umbral antes de que el bonus empiece a pagar. */
+export const SCORE_BONUS_WARMUP_SECONDS = 1;
+
+/** Puntos por segundo del bonus, una vez vencido el warmup. */
+export const SCORE_BONUS_PER_SECOND = 20;
+
+/**
+ * Conversión estética de distancia a metros para la pantalla de Game Over
+ * (10 px = 1 m).
+ */
+export const DISTANCE_METERS_PER_PIXEL = 0.1;
+
+/**
+ * Demora de la transición Game → GameOver tras el crash (ms): deja ver la
+ * explosión y el shake antes del corte a la pantalla de resultados.
+ */
+export const GAMEOVER_TRANSITION_MS = 650;
 
 /* ------------------------------------------------------------------ */
 /* Jugador (Fase 1)                                                    */

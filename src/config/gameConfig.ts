@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import { BootScene } from '../scenes/BootScene';
 import { PreloadScene } from '../scenes/PreloadScene';
+import { MenuScene } from '../scenes/MenuScene';
 import { GameScene } from '../scenes/GameScene';
+import { GameOverScene } from '../scenes/GameOverScene';
 
 /** Resolución base de diseño (portrait). */
 export const GAME_WIDTH = 720;
@@ -46,7 +48,9 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
     input: {
       activePointers: 5,
     },
-    // Flujo de escenas de la Fase 1: Boot → Preload (texturas + barra) → Game.
-    scene: [BootScene, PreloadScene, GameScene],
+    // Flujo completo (Fase 5): Boot → Preload (texturas) → Menu → Game →
+    // GameOver; REINTENTAR vuelve a Game y MENÚ a Menu. El orden del array
+    // es el flujo: Phaser arranca la primera escena.
+    scene: [BootScene, PreloadScene, MenuScene, GameScene, GameOverScene],
   };
 }

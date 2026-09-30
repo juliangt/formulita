@@ -1,0 +1,177 @@
+import Phaser from 'phaser';
+import { DISTANCE_METERS_PER_PIXEL, GAME_OVER } from '../config/balance';
+import { getSaveRepository } from '../data/LocalStorageSaveRepository';
+import { parseGameOverData, type GameOverData } from '../data/types';
+import { GameScene } from './GameScene';
+import { MenuScene } from './MenuScene';
+import { MenuButton } from '../ui/MenuButton';
+
+const TITLE_COLOR = '#d63c3c';
+const GOLD_COLOR = '#f7c531';
+const DIM_COLOR = '#c8ccd4';
+
+const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: '84px',
+  color: TITLE_COLOR,
+};
+
+const RECORD_BANNER_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: '44px',
+  color: GOLD_COLOR,
+};
+
+const HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: '24px',
+  color: DIM_COLOR,
+};
+
+/** Distancia en px → texto estético (m por debajo del km, km después). */
+function formatDistance(px: number): string {
+  const safe = Number.isFinite(px) && px > 0 ? px : 0;
+  const meters = Math.round(safe * DISTANCE_METERS_PER_PIXEL);
+  return meters >= 1000 ? `${(meters / 1000).toFixed(1)} KM` : `${meters} M`;
+}
+
+/** Puntaje con ceros a la izquierda (look arcade de 6 dígitos). */
+function formatScore(score: number): string {
+  const safe = Number.isFinite(score) && score > 0 ? Math.floor(score) : 0;
+  return String(safe).padStart(6, '0');
+}
+
+/**
+ * GameOverScene — resultados de la carrera (Fase 5).
+ *
+ * Muestra puntaje final, distancia, monedas ganadas y el récord histórico,
+ * con cartel parpadeante de ¡NUEVO RÉCORD! cuando corresponde. Botones
+ * REINTENTAR y MENÚ (táctiles + teclado: Enter/Espacio reintenta, M vuelve
+ * al menú).
+ *
+ * Cómo recibe los datos de la carrera (decisión documentada): GameScene los
+ * pasa como INIT DATA DE ESCENA (`scene.start(GameOverScene.KEY, payload)`)
+ * y esta escena los parsea de forma defensiva en `init()`. Se eligió sobre
+ * el EventBus (pensado para consumidores desacoplados del HUD, no para
+ * transporte entre escenas) y sobre el registry de Phaser (estado global que
+ * habría que invalidar en cada carrera): el init data es síncrono, tipado y
+ * por-transición. El contrato es `GameOverData` (`data/types.ts`).
+ */
+export class GameOverScene extends Phaser.Scene {
+  static readonly KEY = 'GameOver';
+
+  private raceData: GameOverData = parseGameOverData(undefined);
+
+  constructor() {
+    super(GameOverScene.KEY);
+  }
+
+  init(data: unknown): void {
+    this.raceData = parseGameOverData(data);
+  }
+
+  create(): void {
+    const centerX = this.scale.width / 2;
+    this.cameras.main.setBackgroundColor('#000000');
+
+    this.add
+      .text(centerX, GAME_OVER.titleY, 'GAME OVER', TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    // Cartel parpadeante solo cuando la carrera superó el récord previo.
+    if (this.raceData.isNewBest) {
+      const banner = this.add
+        .text(centerX, GAME_OVER.newRecordY, '¡NUEVO RÉCORD!', RECORD_BANNER_STYLE)
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 8);
+      this.tweens.add({
+        targets: banner,
+        alpha: 0.25,
+        duration: 300,
+        yoyo: true,
+        repeat: -1,
+      });
+    }
+
+    const statStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${GAME_OVER.statFontSize}px`,
+      color: '#f2f2f2',
+    };
+
+    this.add
+      .text(centerX, GAME_OVER.scoreY, `PUNTOS ${formatScore(this.raceData.score)}`, statStyle)
+      .setOrigin(0.5);
+    this.add
+      .text(centerX, GAME_OVER.distanceY, `DISTANCIA ${formatDistance(this.raceData.distance)}`, statStyle)
+      .setOrigin(0.5);
+    this.add
+      .text(centerX, GAME_OVER.coinsY, `MONEDAS +${this.raceData.coins}`, statStyle)
+      .setOrigin(0.5)
+      .setColor(GOLD_COLOR);
+
+    // Récord histórico: ya fue actualizado por GameScene al morir (guardado
+    // inmediato), así que con carrera nueva récord == puntaje de esta carrera.
+    const record = Math.max(
+      this.raceData.score,
+      getSaveRepository(this.registry).load().bestScore,
+    );
+    this.add
+      .text(centerX, GAME_OVER.recordY, `RÉCORD ${formatScore(record)}`, {
+        fontFamily: 'monospace',
+        fontSize: '28px',
+        color: DIM_COLOR,
+      })
+      .setOrigin(0.5);
+
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.retryY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'REINTENTAR',
+      tint: 0x1d8f43,
+      fontSize: GAME_OVER.buttonFontSize,
+      onPress: this.retry,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.menuY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: GAME_OVER.buttonFontSize,
+      onPress: this.goToMenu,
+    });
+
+    // Teclado: Enter/Espacio reintenta, M vuelve al menú.
+    this.input.keyboard?.on('keydown-ENTER', this.retry);
+    this.input.keyboard?.on('keydown-SPACE', this.retry);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    // Ayuda de teclado solo en desktop (en móvil mandan los botones).
+    const device = this.game.device;
+    const isTouch = device.input.touch && !device.os.desktop;
+    if (!isTouch) {
+      this.add
+        .text(centerX, GAME_OVER.hintY, 'ENTER / ESPACIO  REINTENTAR   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.retry);
+      this.input.keyboard?.off('keydown-SPACE', this.retry);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
+
+  private readonly retry = (): void => {
+    this.scene.start(GameScene.KEY);
+  };
+
+  private readonly goToMenu = (): void => {
+    this.scene.start(MenuScene.KEY);
+  };
+}

@@ -3,7 +3,9 @@ import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH, createGameConfig } from '../config/gameConfig';
 import { BootScene } from '../scenes/BootScene';
 import { PreloadScene } from '../scenes/PreloadScene';
+import { MenuScene } from '../scenes/MenuScene';
 import { GameScene } from '../scenes/GameScene';
+import { GameOverScene } from '../scenes/GameOverScene';
 
 describe('gameConfig', () => {
   it('usa la resolución base portrait 720×1280', () => {
@@ -54,17 +56,19 @@ describe('gameConfig', () => {
     expect(input.activePointers ?? 1).toBeGreaterThan(1);
   });
 
-  it('registra el flujo de escenas Boot → Preload → Game en orden', () => {
+  it('registra el flujo completo de escenas Boot → Preload → Menu → Game → GameOver', () => {
     const config = createGameConfig('game');
     const scenes = config.scene as Phaser.Scene[];
 
     // Phaser arranca la primera escena del array; el orden ES el flujo.
-    expect(scenes).toEqual([BootScene, PreloadScene, GameScene]);
+    expect(scenes).toEqual([BootScene, PreloadScene, MenuScene, GameScene, GameOverScene]);
   });
 
   it('usa claves de escena estables y coherentes con el flujo', () => {
     expect(BootScene.KEY).toBe('Boot');
     expect(PreloadScene.KEY).toBe('Preload');
+    expect(MenuScene.KEY).toBe('Menu');
     expect(GameScene.KEY).toBe('Game');
+    expect(GameOverScene.KEY).toBe('GameOver');
   });
 });

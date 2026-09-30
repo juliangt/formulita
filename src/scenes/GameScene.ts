@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import {
   BASE_SPEED,
+  GAMEOVER_TRANSITION_MS,
   OIL_SLIP_SECONDS,
   PLAYER_START_Y,
   RACE_HUD,
@@ -9,12 +10,16 @@ import {
   TURBO_PICKUP_REFILL,
 } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
+import type { ISaveRepository } from '../data/ISaveRepository';
+import { getSaveRepository } from '../data/LocalStorageSaveRepository';
+import { parseGameOverData } from '../data/types';
 import { PlayerCar } from '../entities/PlayerCar';
 import { TrackEntity } from '../entities/TrackEntity';
 import { DifficultySystem } from '../systems/DifficultySystem';
 import { InputSystem } from '../systems/InputSystem';
 import { KeyboardSource } from '../systems/KeyboardSource';
 import { TouchSource } from '../systems/TouchSource';
+import { ScoreSystem } from '../systems/ScoreSystem';
 import { SpawnSystem } from '../systems/SpawnSystem';
 import { SpeedSystem, composeEffectiveSpeed } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
@@ -22,7 +27,9 @@ import { DrsSystem } from '../systems/DrsSystem';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { EnergyBar } from '../ui/EnergyBar';
 import { DrsIndicator } from '../ui/DrsIndicator';
+import { ScoreHud } from '../ui/ScoreHud';
 import { Speedometer } from '../ui/Speedometer';
+import { GameOverScene } from './GameOverScene';
 
 /** Widget del HUD de esta fase: se destruye en el shutdown de la escena. */
 type HudWidget = { destroy(): void };
@@ -42,11 +49,17 @@ type HudWidget = { destroy(): void };
  *   entidades (rivales, monedas, hazards, pickups) nacen fuera de pantalla
  *   desde pools con límite.
  * - Colisiones por Arcade overlap: monedas/pickups → efecto + evento del
- *   bus; rival/resto → explosión, shake y game-over (escena congelada; el
- *   flujo a GameOverScene es Fase 5); aceite → derrape no destructivo.
+ *   bus; rival/resto → explosión, shake y transición a GameOverScene (Fase
+ *   5); aceite → derrape no destructivo.
  * - Efectos visuales del turbo (partículas de escape + líneas de velocidad).
- * - HUD de la fase desacoplado por `EventBus`. El puntaje completo es Fase
- *   5: por ahora se acumulan monedas/puntos y se emiten por el bus.
+ * - HUD de la fase desacoplado por `EventBus` (velocímetro, turbo, DRS,
+ *   puntaje y monedas).
+ * - Fase 5 — puntaje y persistencia: `ScoreSystem` suma puntos por distancia
+ *   (escalados con la velocidad real), bonus por velocidad sostenida y los
+ *   puntos de las monedas. Al morir (o al ocultar la pestaña / perder foco)
+ *   se guarda el progreso vía `ISaveRepository` (registry, inyección desde
+ *   Boot) y la escena transiciona a GameOverScene con el resumen de la
+ *   carrera como init data.
  */
 export class GameScene extends Phaser.Scene {
   static readonly KEY = 'Game';
@@ -65,11 +78,20 @@ export class GameScene extends Phaser.Scene {
   private difficulty!: DifficultySystem;
   private spawnSystem!: SpawnSystem;
 
-  /* Estado de la carrera (puntaje completo = Fase 5). */
+  /* Estado de la carrera. */
   private currentSpeed = BASE_SPEED;
   private coins = 0;
-  private score = 0;
   private gameOver = false;
+
+  /* Fase 5 — puntaje y persistencia. */
+  private scoreSystem!: ScoreSystem;
+  private saveRepository!: ISaveRepository;
+  /** Récord de puntaje al arrancar la carrera (para el "¡NUEVO RÉCORD!"). */
+  private bestScoreAtStart = 0;
+  /** Monedas ya persistidas en guardados intermedios (hidden/blur). */
+  private bankedCoins = 0;
+  /** Último puntaje entero emitido por el bus (evita emitir de más). */
+  private lastEmittedScore = -1;
 
   /* Efectos visuales (turbo Fase 3; recolección/crash Fase 4). */
   private exhaustEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
@@ -95,8 +117,15 @@ export class GameScene extends Phaser.Scene {
     // Estado de la carrera fresco (el restart reusa la instancia de escena).
     this.currentSpeed = BASE_SPEED;
     this.coins = 0;
-    this.score = 0;
     this.gameOver = false;
+
+    // Fase 5 — puntaje y persistencia frescos. El repositorio se resuelve
+    // del registry (inyectado en Boot; aquí solo se consume la interfaz).
+    this.scoreSystem = new ScoreSystem();
+    this.saveRepository = getSaveRepository(this.registry);
+    this.bestScoreAtStart = this.saveRepository.load().bestScore;
+    this.bankedCoins = 0;
+    this.lastEmittedScore = -1;
 
     // Fase 2 — fuentes de entrada fusionadas en un único IInputState.
     // Agregar/quitar fuentes (gamepad, demo IA…) = editar esta lista.
@@ -127,6 +156,16 @@ export class GameScene extends Phaser.Scene {
     this.createCollectEffects();
     this.createHud(width);
 
+    // Fase 5 — no perder progreso: guardar también al ocultar la pestaña o
+    // al perder foco (Phaser emite HIDDEN/BLUR desde visibilitychange/blur
+    // del document). El listener vive en game.events (global): se baja en el
+    // shutdown para no duplicar tras un restart.
+    this.game.events.on(Phaser.Core.Events.HIDDEN, this.persistProgress);
+    this.game.events.on(Phaser.Core.Events.BLUR, this.persistProgress);
+
+    // Notificación de inicio de carrera (consumidores desacoplados del bus).
+    this.bus.emit('game-start', undefined);
+
     // Al apagarse la escena (restart) nada puede quedar colgado: detach de
     // fuentes, destrucción del HUD táctil, de los widgets (se desuscriben),
     // de los grupos del SpawnSystem y limpieza del bus.
@@ -141,6 +180,8 @@ export class GameScene extends Phaser.Scene {
       this.exhaustEmitter.stop();
       this.speedLinesEmitter.stop();
       this.spawnSystem.destroy();
+      this.game.events.off(Phaser.Core.Events.HIDDEN, this.persistProgress);
+      this.game.events.off(Phaser.Core.Events.BLUR, this.persistProgress);
     });
   }
 
@@ -172,12 +213,14 @@ export class GameScene extends Phaser.Scene {
 
     switch (entity.def.effect) {
       case 'collect-coin':
+        // Fase 5 — las monedas suman monedas (economía aparte) y puntos
+        // planos al ScoreSystem (COIN_SCORE), separados de la distancia.
         this.coins += entity.def.coins;
-        this.score += entity.def.points;
+        this.scoreSystem.addPoints(entity.def.points);
         this.burstCollect(entity);
         this.spawnSystem.release(entity);
         this.bus.emit('coins', this.coins);
-        this.bus.emit('score', this.score);
+        this.emitScore();
         break;
       case 'collect-turbo':
         this.turboSystem.refill(TURBO_PICKUP_REFILL);
@@ -205,9 +248,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Choque destructivo (rival o resto): explosión + shake + evento del bus.
-   * La escena queda congelada (mundo pausado, sin spawn); el flujo a
-   * GameOverScene con su UI es Fase 5.
+   * Choque destructivo (rival o resto): explosión + shake + guardado
+   * inmediato del progreso (Fase 5) + transición a GameOverScene con el
+   * resumen de la carrera como init data (tras una pequeña pausa para que
+   * se lea la explosión y el shake).
    */
   private crash(): void {
     if (this.gameOver) {
@@ -225,11 +269,50 @@ export class GameScene extends Phaser.Scene {
     this.exhaustEmitter.stop();
     this.speedLinesEmitter.stop();
 
-    this.bus.emit('game-over', {
-      score: this.score,
-      distance: this.difficulty.distance,
+    // Resumen de la carrera (puntaje y distancia salen del ScoreSystem).
+    const summary = {
+      score: this.scoreSystem.score,
+      distance: this.scoreSystem.distance,
       coins: this.coins,
+    };
+    // El récord se compara contra el best de ANTES de esta carrera (los
+    // guardados intermedios de hidden/blur no lo alteran).
+    const isNewBest = summary.score > this.bestScoreAtStart;
+    this.persistProgress();
+
+    this.bus.emit('game-over', summary);
+
+    // Pausa para leer el crash y cambio de escena con el payload tipado.
+    this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
+      this.scene.start(GameOverScene.KEY, parseGameOverData({ ...summary, isNewBest }));
     });
+  }
+
+  /**
+   * Guarda el progreso en el repositorio (guardado inmediato al morir y en
+   * hidden/blur). Idempotente por carrera: solo "banca" las monedas aún no
+   * guardadas — hidden/blur puede dispararse varias veces — y los récords
+   * toman el máximo (el puntaje de una carrera nunca decrece, así que
+   * bancarlos anticipadamente no cambia el resultado final).
+   */
+  private readonly persistProgress = (): void => {
+    const current = this.saveRepository.load();
+    const unbankedCoins = Math.max(0, this.coins - this.bankedCoins);
+    this.saveRepository.save({
+      totalCoins: current.totalCoins + unbankedCoins,
+      bestScore: Math.max(current.bestScore, this.scoreSystem.score),
+      bestDistance: Math.max(current.bestDistance, this.scoreSystem.distance),
+    });
+    this.bankedCoins = this.coins;
+  };
+
+  /** Emite el puntaje por el bus solo cuando cambia el entero mostrado. */
+  private emitScore(): void {
+    const value = this.scoreSystem.score;
+    if (value !== this.lastEmittedScore) {
+      this.lastEmittedScore = value;
+      this.bus.emit('score', value);
+    }
   }
 
   /** Partículas de escape + líneas de velocidad (efecto del turbo). */
@@ -336,12 +419,23 @@ export class GameScene extends Phaser.Scene {
       height: RACE_HUD.drsChipHeight,
       depth,
     }));
+
+    // Fase 5 — puntaje y monedas en las esquinas del borde superior.
+    this.hudWidgets.push(new ScoreHud(this, this.bus, {
+      scoreX: RACE_HUD.scoreX,
+      scoreY: RACE_HUD.scoreY,
+      coinsX: RACE_HUD.coinsX,
+      coinsY: RACE_HUD.coinsY,
+      fontSize: RACE_HUD.scoreFontSize,
+      depth,
+    }));
   }
 
   override update(_time: number, delta: number): void {
     const dt = delta / 1000;
 
-    // Escena congelada tras el crash: la cámara termina el shake solo.
+    // Escena terminada: solo queda la cola del shake y el delayedCall que
+    // dispara la transición al Game Over (crash()).
     if (this.gameOver) {
       return;
     }
@@ -366,6 +460,11 @@ export class GameScene extends Phaser.Scene {
     // oleadas (líneas de monedas, slaloms, obstáculos) fuera de pantalla.
     this.difficulty.update(dt, speed);
     this.spawnSystem.update(dt);
+
+    // Fase 5 — puntaje: distancia (escalada con la velocidad real) + bonus
+    // de velocidad sostenida. dt inyectado; la emisión al HUD va por el bus.
+    this.scoreSystem.update(dt, speed);
+    this.emitScore();
 
     // Scroll = velocidad compuesta (px/s). tilePositionY decrece → la textura
     // avanza hacia abajo, hacia el auto: sensación de avance. Wrap con el alto

@@ -5,7 +5,7 @@ import {
   TOTAL_TEXTURE_COUNT,
   type TextureKey,
 } from '../systems/TextureFactory';
-import { GameScene } from './GameScene';
+import { MenuScene } from './MenuScene';
 
 /** Medidas de la barra de progreso. */
 const BAR_WIDTH = 460;
@@ -17,7 +17,7 @@ const BAR_HEIGHT = 30;
  * No hay assets externos: la carga ES la generación de texturas
  * procedurales. Para que el progreso sea real (y visible), se hornea UNA
  * textura por frame en `update()` y la barra refleja texturas generadas /
- * total. Al terminar, arranca GameScene.
+ * total. Al terminar, arranca el menú (Fase 5).
  */
 export class PreloadScene extends Phaser.Scene {
   static readonly KEY = 'Preload';
@@ -78,8 +78,8 @@ export class PreloadScene extends Phaser.Scene {
     const key = this.pendingKeys.shift();
 
     if (key === undefined) {
-      // Todas las texturas generadas: al juego.
-      this.scene.start(GameScene.KEY);
+      // Todas las texturas generadas: al menú.
+      this.scene.start(MenuScene.KEY);
       return;
     }
 
