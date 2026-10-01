@@ -28,7 +28,9 @@ import { pickRoomWord } from '../../net/roomWords';
 import type { NetClient } from '../../net/NetClient';
 import {
   isValidRoomWord,
+  makeChatPayload,
   sanitizePlayerName,
+  type ChatPayload,
   type EliminatedPayload,
   type MatchOverPayload,
   type PeerMeta,
@@ -49,6 +51,7 @@ type HandlerMap = {
   peerState: Set<(peerId: string, payload: StatePayload) => void>;
   eliminated: Set<(peerId: string, payload: EliminatedPayload) => void>;
   matchOver: Set<(peerId: string, payload: MatchOverPayload) => void>;
+  chat: Set<(peerId: string, payload: ChatPayload) => void>;
   roomFull: Set<() => void>;
   error: Set<(message: string) => void>;
 };
@@ -160,6 +163,7 @@ export class FakeNetClient implements NetClient {
     peerState: new Set(),
     eliminated: new Set(),
     matchOver: new Set(),
+    chat: new Set(),
     roomFull: new Set(),
     error: new Set(),
   };
@@ -241,6 +245,11 @@ export class FakeNetClient implements NetClient {
     this.send('match-over', payload, null);
   }
 
+  /** Broadcast `chat {text}` (C1): viaja YA sanitizado (`makeChatPayload`). */
+  sendChat(text: string): void {
+    this.send('chat', makeChatPayload(text), null);
+  }
+
   leave(): void {
     if (this.word) {
       this.hub.disconnect(this, this.word);
@@ -296,6 +305,11 @@ export class FakeNetClient implements NetClient {
   onMatchOver(handler: (peerId: string, payload: MatchOverPayload) => void): () => void {
     this.handlers.matchOver.add(handler);
     return () => this.handlers.matchOver.delete(handler);
+  }
+
+  onChat(handler: (peerId: string, payload: ChatPayload) => void): () => void {
+    this.handlers.chat.add(handler);
+    return () => this.handlers.chat.delete(handler);
   }
 
   onRoomFull(handler: () => void): () => void {
@@ -378,6 +392,11 @@ export class FakeNetClient implements NetClient {
       case 'match-over':
         for (const handler of this.handlers.matchOver) {
           handler(message.from, message.payload as MatchOverPayload);
+        }
+        break;
+      case 'chat':
+        for (const handler of this.handlers.chat) {
+          handler(message.from, message.payload as ChatPayload);
         }
         break;
     }

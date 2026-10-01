@@ -525,6 +525,19 @@ export const LOBBY = {
   inputWidth: 480,
   inputHeight: 84,
   inputFontSize: 44,
+  /* C1 (issue #2) — botón CHAT: esquina superior derecha, encima del título
+   * (el título arranca en y≈98 y el botón termina en y≈96: no se tocan). Solo
+   * existe DENTRO de la sala (la carrera activa no tiene chat, decisión del
+   * issue #2). */
+  /** Centro X del botón CHAT. */
+  chatButtonX: 600,
+  /** Centro Y del botón CHAT. */
+  chatButtonY: 64,
+  /** Tamaño del botón CHAT. */
+  chatButtonWidth: 160,
+  chatButtonHeight: 64,
+  /** Tamaño de fuente de la etiqueta CHAT (px). */
+  chatButtonFontSize: 30,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -717,9 +730,67 @@ export const PRESENCE_HEARTBEAT_MS = 5000;
  * Staleness de presencia (ms, C2): un peer de la sala pública que lleva más
  * de 20 s (≈4 heartbeats perdidos) sin hacer ping se considera DESCONECTADO:
  * su hilo de DM se marca como desconectado y sale de la lista de disponibles.
- * Cubre pestañas muertas y desconexiones que no dispararon `onPeerLeave`.
+ * Cubre pestañas muertas y desconexiones que no dispararon onPeerLeave.
  */
 export const PRESENCE_STALE_MS = 20000;
+
+/**
+ * Layout del overlay de chat (C1, issue #2) sobre el lienzo 720×1280, de
+ * arriba hacia abajo: título CHAT, tab SALA (en C2 se agrega PÚBLICO), lista
+ * de mensajes (anclada abajo, los últimos visibles), input DOM + ENVIAR y
+ * CERRAR. El overlay SE LANZA encima del lobby (patrón PauseScene) sin
+ * pausarlo: el velo interactivo corta los taps atravesados.
+ */
+export const CHAT = {
+  /** Opacidad del velo oscuro sobre el lobby (0–1). */
+  veilAlpha: 0.86,
+  /** Y del título CHAT (centro). */
+  titleY: 140,
+  /** Tamaño de fuente del título (px). */
+  titleFontSize: 64,
+  /** Y del tab activo (chip SALA; PÚBLICO llega en C2). */
+  tabY: 236,
+  /** Tamaño del chip de tab. */
+  tabWidth: 220,
+  tabHeight: 60,
+  /** Tamaño de fuente de la etiqueta del tab (px). */
+  tabFontSize: 30,
+  /** Borde superior/inferior del panel de mensajes (Y de cada borde). */
+  listTopY: 300,
+  listBottomY: 856,
+  /** Ancho del panel de mensajes. */
+  listWidth: 640,
+  /** Padding interno del panel de mensajes (px). */
+  listPadding: 20,
+  /** Separación vertical entre mensajes (px). */
+  messageGap: 10,
+  /** Tamaño de fuente de los mensajes (px). */
+  messageFontSize: 26,
+  /** Máximo de mensajes renderizados (siempre los ÚLTIMOS). */
+  visibleMessages: 24,
+  /* Input DOM + ENVIAR: el input ancho (el pulgar escribe) y el botón
+   * grande debajo (táctil primero). */
+  /** Y del input DOM (centro). */
+  inputY: 948,
+  /** Tamaño del input DOM. */
+  inputWidth: 560,
+  inputHeight: 84,
+  inputFontSize: 34,
+  /** Y del botón ENVIAR (centro). */
+  sendY: 1076,
+  /** Tamaño del botón ENVIAR. */
+  sendWidth: 320,
+  sendHeight: 96,
+  sendFontSize: 38,
+  /** Y del botón CERRAR (centro). */
+  closeY: 1196,
+  /** Tamaño del botón CERRAR. */
+  closeWidth: 300,
+  closeHeight: 92,
+  closeFontSize: 34,
+  /** Color CSS de los mensajes propios (destacados, amarillo del repo). */
+  selfColor: '#f7c531',
+} as const;
 
 /* ------------------------------------------------------------------ */
 /* Countdown, pausa y viñeta (Fase 7)                                  */

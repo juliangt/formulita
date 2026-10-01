@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
+import { CHAT_MAX_LEN, JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
 import { mulberry32 } from '../net/roomRng';
 import { ROOM_WORDS } from '../net/roomWords';
 import {
@@ -10,7 +10,7 @@ import {
   type TrysteroAction,
   type TrysteroRoom,
 } from '../net/TrysteroNetClient';
-import type { PeerMeta, StartPayload } from '../net/protocol';
+import type { ChatPayload, PeerMeta, StartPayload } from '../net/protocol';
 
 /**
  * Tests del TrysteroNetClient (M1) con roomFactory FAKE: un doble
@@ -517,6 +517,76 @@ describe('TrysteroNetClient — start', () => {
     net.room().receive<StartPayload>('start', payload, 'host-remoto');
 
     expect(onStart).toHaveBeenCalledWith(payload);
+  });
+});
+
+describe('TrysteroNetClient — chat de sala (C1)', () => {
+  it('sendChat difunde la acción chat con el payload YA sanitizado', () => {
+    const net = createClientFixture('self');
+    net.client.create({ appId: 'app', name: 'Ana' });
+
+    net.client.sendChat('  hola\n  sala   de   juego  ');
+
+    expect(net.room().recorded<ChatPayload>('chat').sends).toEqual([
+      { data: { text: 'hola sala de juego' }, options: undefined },
+    ]);
+  });
+
+  it('sendChat recorta a CHAT_MAX_LEN antes de viajar (wire acotado)', () => {
+    const net = createClientFixture('self');
+    net.client.create({ appId: 'app', name: 'Ana' });
+
+    net.client.sendChat('y'.repeat(CHAT_MAX_LEN + 500));
+
+    const sends = net.room().recorded<ChatPayload>('chat').sends;
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.data.text.length).toBe(CHAT_MAX_LEN);
+  });
+
+  it('sendChat sin sala activa → error visible y sin envío', () => {
+    const client = new TrysteroNetClient({
+      roomFactory: () => {
+        throw new Error('no debería llamarse');
+      },
+      selfIdProvider: () => 'self',
+    });
+    const onError = vi.fn();
+    client.onError(onError);
+
+    client.sendChat('hola');
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(String(onError.mock.calls[0][0])).toContain('No hay sala activa');
+  });
+
+  it('onChat cablea el listener de la acción chat (mismo patrón que las demás)', () => {
+    const net = createClientFixture('self');
+    net.client.create({ appId: 'app', name: 'Ana' });
+    const onChat = vi.fn();
+    net.client.onChat(onChat);
+
+    net.room().receive<ChatPayload>('chat', { text: 'llegó' }, 'peer-9');
+
+    expect(onChat).toHaveBeenCalledTimes(1);
+    expect(onChat).toHaveBeenCalledWith('peer-9', { text: 'llegó' });
+  });
+
+  it('desuscripción y leave: el chat muere con la sala (acciones limpias)', () => {
+    const net = createClientFixture('self');
+    const client = net.client;
+    client.create({ appId: 'app', name: 'Ana' });
+    const onChat = vi.fn();
+    const unsubscribe = client.onChat(onChat);
+
+    unsubscribe();
+    net.room().receive<ChatPayload>('chat', { text: 'x' }, 'peer-9');
+    expect(onChat).not.toHaveBeenCalled();
+
+    client.leave();
+    const onError = vi.fn();
+    client.onError(onError);
+    client.sendChat('tras leave');
+    expect(onError).toHaveBeenCalledTimes(1); // no hay acción viva tras leave
   });
 });
 
