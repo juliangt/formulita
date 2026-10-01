@@ -32,6 +32,18 @@ export type GameEvents = {
    * restantes de cooldown (`cooldownSeconds`).
    */
   drs: { state: DrsStatus; cooldownRatio: number; cooldownSeconds: number };
+  /**
+   * Salud del vehículo (issue #10, H2): HP actual (entero, 0 = muerto) y
+   * fracción de vida (0–1) para la barra del HUD. Se emite con el estado
+   * inicial en create() y tras cada cambio de HP (impactos y roce continuo).
+   */
+  health: { hp: number; ratio: number };
+  /**
+   * Impacto puntual APLICADO (no i-frames): dispara el SFX de golpe. Es un
+   * evento aparte de `health` porque el roce con pared drena HP por frame y
+   * emitiría el sonido en cada tick; acá solo viajan los golpes secos.
+   */
+  damage: undefined;
   /** Toggle de mute del audio. */
   mute: boolean;
   /** Click de UI (botones de menú/game over/mute): dispara el SFX de click. */

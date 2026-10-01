@@ -6,6 +6,7 @@ import {
   FIXED_VIRTUAL_STEP,
   GAMEOVER_TRANSITION_MS,
   GHOST_INTERPOLATION_MS,
+  HEALTH,
   MATCH_OVER_GRACE_MS,
   MUTE_BUTTON,
   OIL_SLIP_SECONDS,
@@ -56,6 +57,7 @@ import { SpawnSystem } from '../systems/SpawnSystem';
 import { SpeedSystem, composeEffectiveSpeed } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
 import { DrsSystem } from '../systems/DrsSystem';
+import { HealthSystem, type DamageResult } from '../systems/HealthSystem';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { VirtualClock } from '../systems/VirtualClock';
 import { EnergyBar } from '../ui/EnergyBar';
@@ -130,6 +132,11 @@ export class GameScene extends Phaser.Scene {
   private speedSystem!: SpeedSystem;
   private turboSystem!: TurboSystem;
   private drsSystem!: DrsSystem;
+
+  /* Issue #10 (H2) — salud del vehículo: daño gradual, i-frames y roce. */
+  private healthSystem!: HealthSystem;
+  /** Último HP emitido por el bus (evita re-emitir el mismo estado). */
+  private lastEmittedHp = -1;
 
   /* Fase 4 — generación procedural + dificultad. */
   private difficulty!: DifficultySystem;
@@ -281,6 +288,9 @@ export class GameScene extends Phaser.Scene {
     this.speedSystem = new SpeedSystem();
     this.turboSystem = new TurboSystem();
     this.drsSystem = new DrsSystem(() => this.speedSystem.speed);
+    // Issue #10 (H2) — salud fresca (el restart reusa la escena).
+    this.healthSystem = new HealthSystem();
+    this.lastEmittedHp = -1;
 
     // Fase 4 — dificultad por distancia + generación procedural con pools.
     // M1 — por modo (buildRaceSystems): solo = exactamente como siempre;
@@ -321,6 +331,7 @@ export class GameScene extends Phaser.Scene {
     this.bus.emit('speed', this.currentSpeed);
     this.bus.emit('turbo', { level: TURBO_MAX, active: false });
     this.bus.emit('drs', { state: 'off', cooldownRatio: 0, cooldownSeconds: 0 });
+    this.emitHealth();
 
     // Fase 5 — no perder progreso: guardar también al ocultar la pestaña o
     // al perder foco (Phaser emite HIDDEN/BLUR desde visibilitychange/blur
@@ -402,7 +413,8 @@ export class GameScene extends Phaser.Scene {
    * Contacto jugador ↔ entidad (data-driven por `CollisionEffect`):
    * - collect-coin/turbo/drs → efecto + reciclaje al pool.
    * - slip (aceite) → derrape breve; la mancha permanece en la pista.
-   * - crash (rival/resto) → explosión + shake + game-over (escena congelada).
+   * - crash (rival/resto) → daño gradual al chasis (issue #10, H2); con HP 0
+   *   deriva en crash() (explosión + shake + game-over / eliminación multi).
    */
   private handleTrackContact: Phaser.Types.Physics.Arcade.ArcadePhysicsCallback = (
     _playerObj,
@@ -445,10 +457,56 @@ export class GameScene extends Phaser.Scene {
         this.playerCar.slip(OIL_SLIP_SECONDS);
         break;
       case 'crash':
-        this.crash();
+        this.applyImpact(entity);
         break;
     }
   };
+
+  /**
+   * Contacto destructivo con daño gradual (issue #10, H2): el efecto `crash`
+   * ya NO mata al instante — consulta el daño por familia
+   * (`HEALTH.impactDamage`) contra el HealthSystem:
+   * - i-frames activos → golpe ignorado: sin efecto (el rival permanece en
+   *   pista y vuelve a doler cuando expiran: castigo estándar).
+   * - HP restante → feedback de golpe (flash/shake más chicos que el de
+   *   muerte, penalización de velocidad, tinte y SFX vía bus).
+   * - HP 0 → `crash()` tal cual (mismo destino que siempre, solo o multi).
+   *
+   * La piedra se recicla SIEMPRE al contacto (el choque físico ocurrió, con
+   * o sin i-frames); el rival NUNCA se libera.
+   */
+  private applyImpact(entity: TrackEntity): void {
+    if (entity.def.family === 'hazard') {
+      this.spawnSystem.release(entity);
+    }
+    const amount =
+      entity.def.family === 'rival' ? HEALTH.impactDamage.rival : HEALTH.impactDamage.debris;
+    const result: DamageResult = this.healthSystem.damage(amount);
+    if (result === 'ignored') {
+      return;
+    }
+    if (result === 'dead') {
+      this.emitHealth();
+      this.crash();
+      return;
+    }
+    this.cameras.main.flash(120, 255, 120, 90);
+    this.cameras.main.shake(180, 0.006);
+    this.speedSystem.penalize(HEALTH.impactSpeedLoss);
+    this.playerCar.flashDamage();
+    this.bus.emit('damage', undefined);
+    this.emitHealth();
+  }
+
+  /** Emite el estado de salud por el bus (solo cuando el HP mostrado cambia). */
+  private emitHealth(): void {
+    const hp = this.healthSystem.hp;
+    if (hp === this.lastEmittedHp) {
+      return;
+    }
+    this.lastEmittedHp = hp;
+    this.bus.emit('health', { hp, ratio: this.healthSystem.ratio });
+  }
 
   /** Destello de recolección (monedas y pickups). */
   private burstCollect(entity: TrackEntity): void {
@@ -1256,6 +1314,30 @@ export class GameScene extends Phaser.Scene {
       depth,
     }));
 
+    // Issue #10 (H2) — barra de salud del chasis, debajo del chip DRS. Verde
+    // (sano) → amarillo → rojo, invertidos respecto al turbo (acá el nivel
+    // ALTO es bueno). Visible también en multi (el HP propio es el que corre).
+    const healthBar = new EnergyBar(this, {
+      x: centerX,
+      y: RACE_HUD.healthBarY,
+      width: RACE_HUD.healthBarWidth,
+      height: RACE_HUD.healthBarHeight,
+      label: 'CHASIS',
+      colorStops: [
+        { minRatio: 0, color: 0xd63c3c },
+        { minRatio: 0.25, color: 0xd8a72c },
+        { minRatio: 0.6, color: 0x3c9e52 },
+      ],
+      depth,
+    });
+    this.hudWidgets.push(healthBar);
+    // Conexión por EventBus (sin referencia directa al HealthSystem).
+    this.hudWidgets.push({
+      destroy: this.bus.on('health', ({ ratio }) => {
+        healthBar.setRatio(ratio);
+      }),
+    });
+
     // Fase 5 — puntaje y monedas en las esquinas del borde superior.
     this.hudWidgets.push(new ScoreHud(this, this.bus, {
       scoreX: RACE_HUD.scoreX,
@@ -1319,6 +1401,20 @@ export class GameScene extends Phaser.Scene {
     this.speedSystem.update(dt, input);
     this.turboSystem.update(dt, input.turbo);
     this.drsSystem.update(dt, input.drs);
+
+    // Issue #10 (H2) — salud: el tictac de i-frames y el roce con pared
+    // corren SOLO con la física viva (el gate de countdown/pausa ya descartó
+    // el frame; gameOver/selfEliminated retornaron antes). Al morir por
+    // scrape, `crash()` con el mismo destino que cualquier choque.
+    this.healthSystem.update(dt);
+    if (this.playerCar.scrapingWall) {
+      if (this.healthSystem.scrape(dt) === 'dead') {
+        this.emitHealth();
+        this.crash();
+        return;
+      }
+      this.emitHealth();
+    }
 
     // Velocidad final = SpeedSystem × turbo (si activo) × DRS (si activo),
     // con clamps defensivos: nunca NaN ni aceleraciones infinitas.

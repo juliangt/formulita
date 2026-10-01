@@ -27,6 +27,9 @@ function defaultTrackBounds(): TrackBounds {
   return { left: TRACK.roadLeft, right: TRACK.roadRight };
 }
 
+/** Duración default del tinte rojo tras un impacto (s). */
+const DAMAGE_FLASH_SECONDS = 0.14;
+
 /**
  * Steering durante el derrape de aceite (puro): la dirección pedida se
  * INVIERTE (el auto no obedece) y, si el jugador no está doblando, zigzaguea
@@ -63,6 +66,10 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
   /* Derrape por aceite (Fase 4): steering invertido/aleatorio breve. */
   private slipSeconds = 0;
   private slipElapsed = 0;
+
+  /* Salud (issue #10, H2): contacto con el tope de pista + flash de daño. */
+  private wallContact = false;
+  private damageFlashSeconds = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -106,6 +113,25 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
   }
 
   /**
+   * `true` mientras el clamp esté tocando el tope de pista (frame a frame):
+   * GameScene lo consume para drenar salud por roce (issue #10, H2).
+   */
+  get scrapingWall(): boolean {
+    return this.wallContact;
+  }
+
+  /**
+   * Pisó el tope de pista: pérdida de salud continua mientras dure el roce.
+   * Duración inválida (NaN/≤0) es un no-op.
+   */
+  flashDamage(duration: number = DAMAGE_FLASH_SECONDS): void {
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return;
+    }
+    this.damageFlashSeconds = Math.max(this.damageFlashSeconds, duration);
+  }
+
+  /**
    * Pisó aceite: pérdida de control lateral breve (no destructiva). Si se
    * pisa de nuevo mientras derrapa, refresca la duración. Duración inválida
    * (NaN/≤0) es un no-op.
@@ -135,6 +161,10 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
 
     this.setAccelerationX(steer * PLAYER_LATERAL_ACCELERATION);
 
+    if (this.damageFlashSeconds > 0) {
+      this.damageFlashSeconds = Math.max(0, this.damageFlashSeconds - dt);
+    }
+
     this.clampToTrack();
     this.applyTilt();
     this.applySlipVisual();
@@ -149,9 +179,13 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
     if (this.x < minX) {
       this.setX(minX);
       this.physicsBody.setVelocityX(0);
+      this.wallContact = true;
     } else if (this.x > maxX) {
       this.setX(maxX);
       this.physicsBody.setVelocityX(0);
+      this.wallContact = true;
+    } else {
+      this.wallContact = false;
     }
   }
 
@@ -170,10 +204,12 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
     this.setAngle(angle);
   }
 
-  /** Feedback visual del derrape: tinte cálido mientras no obedece. */
+  /** Feedback visual del derrape y del daño: el tinte se decide por frame. */
   private applySlipVisual(): void {
     if (this.slipSeconds > 0) {
       this.setTint(0xff8a5a);
+    } else if (this.damageFlashSeconds > 0) {
+      this.setTint(0xff5a4a);
     } else {
       this.clearTint();
     }
