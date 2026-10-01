@@ -126,6 +126,50 @@ describe('SpeedSystem — coast hacia la base', () => {
   });
 });
 
+describe('SpeedSystem — penalize (impactos, issue #10 H2)', () => {
+  it('resta la penalización instantáneamente y clampea a MIN_SPEED', () => {
+    const system = new SpeedSystem();
+
+    system.penalize(50);
+
+    expect(system.speed).toBe(BASE_SPEED - 50);
+    system.penalize(9999);
+    expect(system.speed).toBe(MIN_SPEED); // nunca por debajo del piso
+  });
+
+  it('desde MAX_SPEED la penalización deja la velocidad en el rango', () => {
+    const system = new SpeedSystem();
+    tick(system, 5, THROTTLE);
+    expect(system.speed).toBe(MAX_SPEED);
+
+    system.penalize(150);
+
+    expect(system.speed).toBe(MAX_SPEED - 150);
+  });
+
+  it('amount no finito o ≤ 0 es un no-op', () => {
+    const system = new SpeedSystem();
+    tick(system, 2, THROTTLE);
+    const before = system.speed;
+
+    system.penalize(Number.NaN);
+    system.penalize(0);
+    system.penalize(-30);
+    system.penalize(Number.POSITIVE_INFINITY);
+
+    expect(system.speed).toBe(before);
+  });
+
+  it('la velocidad penalizada se recupera sola por el coast hacia la base', () => {
+    const system = new SpeedSystem();
+
+    system.penalize(150);
+    tick(system, 3, IDLE);
+
+    expect(system.speed).toBe(BASE_SPEED); // el drag la devuelve a la base
+  });
+});
+
 describe('SpeedSystem — reset y defensas de dt', () => {
   it('reset vuelve a la base desde cualquier estado', () => {
     const system = new SpeedSystem();

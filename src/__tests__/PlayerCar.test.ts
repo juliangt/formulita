@@ -1,19 +1,66 @@
 import { describe, expect, it } from 'vitest';
-import { slipSteer } from '../entities/PlayerCar';
+import { HEALTH } from '../config/balance';
+import {
+  INVULNERABLE_BLINK_HALF_PERIOD_SECONDS,
+  blinkVisible,
+  slipSteer,
+} from '../entities/PlayerCar';
 
 /**
- * Tests de la lógica PURA de PlayerCar (Fase 4): el steering durante el
- * derrape de aceite. La clase en sí (sprite arcade, body, clamp a pista,
- * inclinación) es render/física de Phaser y se verifica manualmente corriendo
- * el juego (QA checklist del README); la decisión de dirección por frame es
- * una función pura exportada y se testea acá.
+ * Tests de la lógica PURA de PlayerCar (Fase 4 + issue #10 H4): el steering
+ * durante el derrape de aceite y la fase del parpadeo de i-frames. La clase
+ * en sí (sprite arcade, body, clamp a pista, inclinación, opacidad) es
+ * render/física de Phaser y se verifica manualmente corriendo el juego (QA
+ * checklist del README); las decisiones por frame son funciones puras
+ * exportadas y se testean acá.
  *
  * Contrato de `slipSteer(steer, slipElapsed)`:
  * - Si el jugador DOBLA, la dirección pedida se INVIERTE (el auto no obedece).
  * - Si el jugador NO dobla, el auto zigzaguea solo: signo de
  *   `sin(slipElapsed * 16)` (cambia de lado solo, con periodicidad fija).
  * - Durante el derrape NUNCA hay neutral: siempre devuelve -1 o 1.
+ *
+ * Contrato de `blinkVisible(elapsed)` (issue #10, H4):
+ * - `true` = auto VISIBLE en ese instante del titileo de i-frames.
+ * - Visible el primer medio periodo, oculto el siguiente, periódico.
+ * - Entradas raras (NaN/negativas, periodo inválido) → visible (defensivo).
  */
+
+describe('blinkVisible — fase del parpadeo de i-frames (issue #10, H4)', () => {
+  it('arranca VISIBLE (cada i-frame nuevo arranca sin desaparecer el auto)', () => {
+    expect(blinkVisible(0)).toBe(true);
+  });
+
+  it('visible el primer medio periodo, oculto el segundo, periódico', () => {
+    const half = INVULNERABLE_BLINK_HALF_PERIOD_SECONDS;
+    // Muestras al CENTRO de cada tramo (los cruces son épsilon de float).
+    expect(blinkVisible(half / 2)).toBe(true); // 1er ciclo: visible
+    expect(blinkVisible(half * 1.5)).toBe(false); // 1er ciclo: oculto
+    expect(blinkVisible(half * 2.5)).toBe(true); // 2do ciclo: visible
+    expect(blinkVisible(half * 3.5)).toBe(false); // 2do ciclo: oculto
+  });
+
+  it('el periodo es estable: elapsed + ciclo completo da la misma fase', () => {
+    const cycle = INVULNERABLE_BLINK_HALF_PERIOD_SECONDS * 2;
+    for (let elapsed = 0; elapsed < cycle; elapsed += 0.005) {
+      expect(blinkVisible(elapsed)).toBe(blinkVisible(elapsed + cycle));
+    }
+  });
+
+  it('el medio periodo default titila 2 ciclos en los 0,6 s de i-frames', () => {
+    // 0.6 s / (2 × 0.15 s) = 2 parpadeos completos: legible y no estroboscópico.
+    expect(
+      HEALTH.invulnerabilitySeconds / (INVULNERABLE_BLINK_HALF_PERIOD_SECONDS * 2),
+    ).toBe(2);
+  });
+
+  it('entradas raras dejan el auto VISIBLE (defensivo: nunca desaparece)', () => {
+    expect(blinkVisible(Number.NaN)).toBe(true);
+    expect(blinkVisible(-1)).toBe(true);
+    expect(blinkVisible(0.1, 0)).toBe(true); // periodo inválido
+    expect(blinkVisible(0.1, Number.NaN)).toBe(true);
+  });
+});
 
 describe('slipSteer — inversión del input durante el derrape', () => {
   it('doblar a la derecha (1) se invierte a izquierda (-1)', () => {

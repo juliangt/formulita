@@ -27,6 +27,8 @@ export type SfxName =
   | 'turbo'
   /** DRS activado (hiss de ruido agudo). */
   | 'drs'
+  /** Golpe no letal (rival/piedra): thump grave y corto (issue #10, H2). */
+  | 'damage'
   /** Choque destructivo (ruido + caída de tono). */
   | 'crash';
 

@@ -32,16 +32,28 @@ export type GameEvents = {
    * restantes de cooldown (`cooldownSeconds`).
    */
   drs: { state: DrsStatus; cooldownRatio: number; cooldownSeconds: number };
+  /**
+   * Salud del vehículo (issue #10, H2): HP actual (entero, 0 = muerto) y
+   * fracción de vida (0–1) para la barra del HUD. Se emite con el estado
+   * inicial en create() y tras cada cambio de HP (impactos y roce continuo).
+   */
+  health: { hp: number; ratio: number };
+  /**
+   * Impacto puntual APLICADO (no i-frames): dispara el SFX de golpe. Es un
+   * evento aparte de `health` porque el roce con pared drena HP por frame y
+   * emitiría el sonido en cada tick; acá solo viajan los golpes secos.
+   */
+  damage: undefined;
   /** Toggle de mute del audio. */
   mute: boolean;
   /** Click de UI (botones de menú/game over/mute): dispara el SFX de click. */
   'ui-click': undefined;
   /**
-   * Pickup recolectado (`'turbo' | 'drs'` según el tipo): dispara el SFX de
-   * pickup. Los eventos `turbo`/`drs` de estado no sirven para esto (se
-   * emiten por frame), por eso el contacto con el pickup emite el suyo.
+   * Pickup recolectado (`'turbo' | 'drs' | 'repair'` según el tipo): dispara
+   * el SFX de pickup. Los eventos `turbo`/`drs` de estado no sirven para esto
+   * (se emiten por frame), por eso el contacto con el pickup emite el suyo.
    */
-  pickup: 'turbo' | 'drs';
+  pickup: 'turbo' | 'drs' | 'repair';
   /** Fin de la carrera (colisión con rival o resto). */
   'game-over': { score: number; distance: number; coins: number };
   /** Inicio de una carrera nueva. */

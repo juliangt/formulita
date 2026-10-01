@@ -7,6 +7,7 @@ import {
   DEBRIS_SPRITE,
   DRS_PICKUP_SPRITE,
   OIL_STAIN_SPRITE,
+  REPAIR_PICKUP_SPRITE,
   TEXTURE_KEYS,
   TextureFactory,
   TURBO_PICKUP_SPRITE,
@@ -58,6 +59,7 @@ describe('TEXTURE_KEYS', () => {
         'oil-stain',
         'pickup-turbo',
         'pickup-drs',
+        'pickup-repair',
         'particle',
       ]),
     );
@@ -127,6 +129,7 @@ describe('mapas de píxeles', () => {
       [OIL_STAIN_SPRITE, 'oil-stain'],
       [TURBO_PICKUP_SPRITE, 'pickup-turbo'],
       [DRS_PICKUP_SPRITE, 'pickup-drs'],
+      [REPAIR_PICKUP_SPRITE, 'pickup-repair'],
     ];
     for (const [sprite, label] of sprites) {
       expectValidPixelSprite(sprite, label);
@@ -159,6 +162,8 @@ describe('mapas de píxeles', () => {
       width: 48,
       height: 76,
     });
+    // Botiquín: mapa 10×10 con escala 4 → 40×40 (la hitbox exacta del kind).
+    expect(pixelSpriteSize(REPAIR_PICKUP_SPRITE, 4)).toEqual({ width: 40, height: 40 });
   });
 
   it('la mancha de aceite es semitransparente (hazard no bloquea la visión)', () => {

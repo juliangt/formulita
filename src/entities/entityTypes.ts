@@ -37,7 +37,8 @@ export type EntityKind =
   | 'debris'
   | 'oil'
   | 'turbo'
-  | 'drs';
+  | 'drs'
+  | 'repair';
 
 /**
  * Efecto del contacto con el jugador. GameScene lo interpreta (Arcade
@@ -53,7 +54,9 @@ export type CollisionEffect =
   /** Recolección: recarga el medidor de turbo. */
   | 'collect-turbo'
   /** Recolección: resetea el cooldown del DRS. */
-  | 'collect-drs';
+  | 'collect-drs'
+  /** Recolección: sana el chasis (botiquín), con clamp al tope. */
+  | 'collect-repair';
 
 /** Hitbox arcade (px), algo menor que el sprite (perdón visual). */
 export interface EntityHitbox {
@@ -187,6 +190,18 @@ export const ENTITY_DEFINITIONS = {
     points: 0,
     laneChanges: false,
   },
+  repair: {
+    kind: 'repair',
+    family: 'pickup',
+    textureKey: TEXTURE_KEYS.pickupRepair,
+    hitbox: { width: 40, height: 40 },
+    spawnWeight: 3,
+    forwardSpeed: 0,
+    effect: 'collect-repair',
+    coins: 0,
+    points: 0,
+    laneChanges: false,
+  },
 } as const satisfies Readonly<Record<EntityKind, EntityDefinition>>;
 
 /** Kinds que componen cada familia (el orden define el desempate por peso). */
@@ -194,7 +209,7 @@ export const ENTITY_KINDS_BY_FAMILY: Readonly<Record<EntityFamily, readonly Enti
   rival: ['rivalBlue', 'rivalGreen', 'rivalYellow'],
   coin: ['coin'],
   hazard: ['debris', 'oil'],
-  pickup: ['turbo', 'drs'],
+  pickup: ['turbo', 'drs', 'repair'],
 };
 
 /* ------------------------------------------------------------------ */

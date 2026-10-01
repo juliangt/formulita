@@ -66,20 +66,36 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 - **Entidades de pista**: líneas y zigzags de monedas, rivales con cambio de carril, restos (crash) y aceite (derrape no destructivo), pickups. Generación procedural con **garantía de pasabilidad** (siempre queda un carril libre).
 - **Puntaje**: distancia (escalada por velocidad real) + bonus por velocidad sostenida + 50 pts por moneda. Las monedas son economía aparte.
 - **Dificultad**: rampa por distancia (rivales más rápidos, oleadas más densas, más variedad de patrones).
-- Muerte por choque (rival/resto): explosión, flash, shake y pantalla de Game Over con resumen y récord.
+- **Muerte por daño acumulado**: los choques no matan de un golpe — la barra CHASIS baja y al llegar a 0 viene el crash de siempre (explosión, flash, shake y Game Over con resumen y récord). Detalles abajo.
+
+### Salud del vehículo (barra CHASIS)
+
+El auto tiene **100 HP de chasis**, visibles en la barra **CHASIS** del HUD (verde → amarillo → rojo, debajo del chip DRS). Al llegar a 0 se produce el crash de siempre: explosión + shake + Game Over con resumen/récord en solo, o eliminación + modo espectador en multi.
+
+| Fuente de daño / reparación | Efecto |
+| --- | --- |
+| Choque contra un rival | −35 HP (y penalización de velocidad) |
+| Impacto contra una piedra | −20 HP |
+| Rozar la pared | −15 HP por segundo (daño continuo, sin i-frames) |
+| Botiquín (pickup de cruz) | +35 HP, con tope en 100 |
+| I-frames tras un impacto aplicado | 0,6 s de invulnerabilidad (el golpe repetido se ignora) |
+
+- **Estado crítico (≤ 25% de vida)**: la barra CHASIS parpadea y el auto echa **humo gris** continuo — la señal de buscar botiquín o manejar limpio.
+- **Feedback del daño**: flash + shake en cada golpe, **parpadeo** rítmico del auto durante los i-frames y **chispas** en el borde del auto mientras roza la pared.
+- **Determinismo multi**: la familia de pickups pasó de pesar 9 a **12** (entró el botiquín con peso 3), así que la misma seed de sala genera una **pista distinta a la de builds previas** — pero idéntica entre todos los clientes de esta build.
 
 ---
 
 ## Multijugador (battle royale por monedas)
 
-**Battle royale de 2 a 10 jugadores por monedas, P2P sin servidor.** Todos corren la MISMA pista — la **palabra de sala** es la clave que la define — y gana el que **más monedas juntó** al cierre: sobrevivir solo da más tiempo para juntar, no la corona (desempate por kilómetros y luego por puntaje). Si chocás quedás **eliminado como espectador**: seguís viendo la carrera de los demás hasta que queda un solo vivo, y entonces todos ven el **leaderboard final** — idéntico en todos los dispositivos, mismo orden y mismo ganador.
+**Battle royale de 2 a 10 jugadores por monedas, P2P sin servidor.** Todos corren la MISMA pista — la **palabra de sala** es la clave que la define — y gana el que **más monedas juntó** al cierre: sobrevivir solo da más tiempo para juntar, no la corona (desempate por kilómetros y luego por puntaje). Si tu chasis llega a 0 quedás **eliminado como espectador**: seguís viendo la carrera de los demás hasta que queda un solo vivo, y entonces todos ven el **leaderboard final** — idéntico en todos los dispositivos, mismo orden y mismo ganador.
 
 ### Cómo se juega
 
 1. Menú → **MULTIJUGADOR** → crear sala (el juego te da una **palabra de sala** de 5–9 letras, pronunciable por teléfono) o **unirse** con la palabra que te pasó el anfitrión.
 2. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna solo en función del roster (determinista e idéntico para todos).
 3. Con 2 o más en sala, el **anfitrión** aprieta **INICIAR**: se difunde la semilla de la pista y el countdown 3-2-1-GO! arranca en todos.
-4. Corré, esquivá y juntá monedas. Cada choque te elimina (pasás a espectador); la partida termina al quedar 1 vivo.
+4. Corré, esquivá y juntá monedas. Si tu chasis llega a 0 quedás **eliminado** (pasás a espectador); la partida termina al quedar 1 vivo.
 5. Leaderboard final: **monedas DESC → km DESC → puntaje DESC**. ¡GANASTE! si tu fila es la 1.
 
 ### Arquitectura (una línea)
@@ -238,6 +254,9 @@ Criterio de aceptación global: **sesión de 10 minutos sin errores de consola**
 - [ ] Perder el foco de la ventana (click afuera, cambiar de pestaña) pausa solo con overlay de PAUSA AUTOMÁTICA; al volver, la carrera sigue exactamente donde estaba.
 - [ ] MENÚ desde la pausa corta el motor y vuelve al menú sin errores ni sonido colgado.
 - [ ] Choque: explosión, flash rojo, screen shake y Game Over con puntaje/distancia/monedas; ¡NUEVO RÉCORD! parpadea si corresponde.
+- [ ] Salud del vehículo (issue #10): un choque NO mata al instante — la barra CHASIS baja, hay flash/shake más chicos que el de muerte y el auto parpadea ~0,6 s (i-frames, el golpe repetido inmediato no vuelve a doler).
+- [ ] Roce con pared: chispas en el borde del auto, la CHASIS drena continuamente (la pared no respeta i-frames) y sostener el roce llega a muerte.
+- [ ] Estado crítico (≤ 25%): el auto echa humo gris continuo y la barra CHASIS parpadea; el botiquín (+35) la recompone y humo/parpadeo de barra se apagan.
 - [ ] Aceite: derrape breve con control invertido, sin muerte; el auto no pierde vida por eso.
 - [ ] Récord y monedas persisten tras recargar la página (F5); el mute también persiste.
 - [ ] Botón PANTALLA COMPLETA (y tecla F) del menú: entra/sale y la etiqueta cambia a VENTANA; el canvas sigue nítido (pixel art sin blur).

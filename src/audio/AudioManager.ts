@@ -556,6 +556,9 @@ export class AudioManager implements ISfxEngine {
         case 'drs':
           this.playDrs(ctx, master);
           break;
+        case 'damage':
+          this.playDamage(ctx, master);
+          break;
         case 'crash':
           this.playCrash(ctx, master);
           break;
@@ -713,6 +716,50 @@ export class AudioManager implements ISfxEngine {
     oscGain.connect(master);
     osc.start(t);
     osc.stop(t + 0.5);
+  }
+
+  /**
+   * Golpe no letal (issue #10, H2): "golpe seco" grave y corto — thump de
+   * sawtooth con caída de tono + ráfaga de ruido lowpass, muy por debajo del
+   * crash (menos ganancia y cola mínima: los impactos pueden encadenarse).
+   */
+  private playDamage(ctx: AudioContextLike, master: GainNodeLike): void {
+    const t = ctx.currentTime + 0.01;
+
+    // Ráfaga grave de impacto (el "golpe" del chasis).
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.getNoiseBuffer(ctx);
+    const low = ctx.createBiquadFilter();
+    low.type = 'lowpass';
+    low.frequency.setValueAtTime(900, t);
+    low.frequency.exponentialRampToValueAtTime(160, t + 0.14);
+
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(ALMOST_ZERO, t);
+    noiseGain.gain.linearRampToValueAtTime(0.28, t + 0.008);
+    noiseGain.gain.exponentialRampToValueAtTime(ALMOST_ZERO, t + 0.16);
+
+    noise.connect(low);
+    low.connect(noiseGain);
+    noiseGain.connect(master);
+    noise.start(t);
+    noise.stop(t + 0.18);
+
+    // Thump tonal que cae rápido (el "duro" metálico).
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(130, t);
+    osc.frequency.exponentialRampToValueAtTime(48, t + 0.12);
+
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(ALMOST_ZERO, t);
+    oscGain.gain.linearRampToValueAtTime(0.2, t + 0.008);
+    oscGain.gain.exponentialRampToValueAtTime(ALMOST_ZERO, t + 0.14);
+
+    osc.connect(oscGain);
+    oscGain.connect(master);
+    osc.start(t);
+    osc.stop(t + 0.16);
   }
 
   /* ---------------------------------------------------------------- */
@@ -1051,6 +1098,9 @@ export class AudioManager implements ISfxEngine {
    * - `turbo`/`drs` en estado `active` con borde ascendente → whoosh/hiss
    *   (son eventos por-frame: el SFX solo en la transición a activo).
    * - `coins` → SFX de moneda; `pickup` → SFX de pickup.
+   * - `damage` (issue #10, H2) → SFX de golpe no letal. Evento aparte de
+   *   `health`: el roce con pared drena HP por frame y ese evento no sirve
+   *   para sonar (solo viajan acá los impactos puntuales aplicados).
    * - `game-over` → SFX de crash + apaga el dron.
    * - `game-paused` / `game-resumed` (Fase 7) → apaga y re-arranca el dron
    *   (la carrera está congelada: el motor no sigue sonando en pausa).
@@ -1084,6 +1134,7 @@ export class AudioManager implements ISfxEngine {
       }),
       bus.on('coins', () => this.play('coin')),
       bus.on('pickup', () => this.play('pickup')),
+      bus.on('damage', () => this.play('damage')),
       bus.on('game-over', () => {
         this.play('crash');
         this.stopEngine();

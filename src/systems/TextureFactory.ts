@@ -34,6 +34,8 @@ export const TEXTURE_KEYS = {
   pickupTurbo: 'pickup-turbo',
   /** Pickup de DRS: alerón sobre insignia verde. */
   pickupDrs: 'pickup-drs',
+  /** Pickup de botiquín: cruz roja sobre caja blanca. */
+  pickupRepair: 'pickup-repair',
   /** Partícula blanca 4×4 (tintable). */
   particle: 'particle',
   /* --- HUD táctil (Fase 2) --- */
@@ -240,6 +242,27 @@ export const DRS_PICKUP_SPRITE: PixelSprite = {
   },
 };
 
+/** Pickup de botiquín: cruz roja sobre caja blanca 10×10 (40×40, escala 4). */
+export const REPAIR_PICKUP_SPRITE: PixelSprite = {
+  rows: [
+    'BBBBBBBBBB',
+    'BwwwwwwwwB',
+    'BwwwrrwwwB',
+    'BwwwrrwwwB',
+    'BwwrrrrwwB',
+    'BwwrrrrwwB',
+    'BwwwrrwwwB',
+    'BwwwrrwwwB',
+    'BwwwwwwwwB',
+    'BBBBBBBBBB',
+  ],
+  palette: {
+    B: '#e0e0e6', // borde de la caja
+    w: '#f2f2f2', // caja blanca
+    r: '#d63c3c', // cruz roja (rojo F1 del jugador)
+  },
+};
+
 /* ------------------------------------------------------------------ */
 /* Glifos del HUD táctil (Fase 2)                                      */
 /* ------------------------------------------------------------------ */
@@ -434,6 +457,9 @@ export class TextureFactory {
         break;
       case TEXTURE_KEYS.pickupDrs:
         TextureFactory.bakePixelSprite(scene, key, DRS_PICKUP_SPRITE, 4);
+        break;
+      case TEXTURE_KEYS.pickupRepair:
+        TextureFactory.bakePixelSprite(scene, key, REPAIR_PICKUP_SPRITE, 4);
         break;
       case TEXTURE_KEYS.particle:
         TextureFactory.drawParticle(scene);

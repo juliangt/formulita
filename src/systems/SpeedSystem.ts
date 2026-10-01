@@ -106,6 +106,18 @@ export class SpeedSystem {
   }
 
   /**
+   * Penalización instantánea por un impacto (issue #10, H2): resta `amount`
+   * de velocidad con clamp a `MIN_SPEED`. Un `amount` no finito o ≤ 0 es un
+   * no-op estricto (defensa igual que en `update`).
+   */
+  penalize(amount: number): void {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return;
+    }
+    this.currentSpeed = clampSpeed(this.currentSpeed - amount);
+  }
+
+  /**
    * Avanza la simulación un paso de `dt` segundos según el input.
    * `dt` no finito o no positivo es un no-op (defensa contra NaN).
    */

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BASE_SPEED,
   COIN_SCORE,
   COIN_VALUE,
   DRS_MULTIPLIER,
+  HEALTH,
   MAX_SPEED,
   TURBO_MAX,
   TURBO_MULTIPLIER,
@@ -10,21 +12,27 @@ import {
 } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
 import { applyRaceResult } from '../data/types';
+import { blinkVisible } from '../entities/PlayerCar';
 import { ENTITY_DEFINITIONS, type EntityKind } from '../entities/entityTypes';
 import { DrsSystem } from '../systems/DrsSystem';
+import { HealthSystem } from '../systems/HealthSystem';
 import { ScoreSystem } from '../systems/ScoreSystem';
+import { SpeedSystem } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
 
 /**
- * Integración Fases 4/5 — el flujo de puntos de las colisiones SIN Phaser.
+ * Integración Fases 4/5 + issue #10 (H2/H4) — el flujo de puntos y de daño
+ * de las colisiones SIN Phaser.
  *
  * Es la composición que GameScene ejecuta en `handleTrackContact`: el efecto
  * declarado en `entityTypes` (data-driven, `CollisionEffect`) se despacha
  * sobre los sistemas puros — ScoreSystem (puntos de monedas), TurboSystem
- * (recarga), DrsSystem (reset de cooldown) — y se anuncia por el bus (`coins`,
- * `pickup`, `game-over`). El despacho de acá es un espejo fiel del switch de
- * GameScene; lo que se verifica es el CONTRATO entre definiciones, sistemas y
- * bus (las partículas, el shake y los sprites son QA manual del README).
+ * (recarga), DrsSystem (reset de cooldown), HealthSystem + SpeedSystem
+ * (daño gradual por choques y roce) — y se anuncia por el bus (`coins`,
+ * `pickup`, `health`, `damage`, `game-over`). El despacho de acá es un espejo
+ * fiel del switch de GameScene (`applyImpact` incluido); lo que se verifica
+ * es el CONTRATO entre definiciones, sistemas y bus (las partículas, el
+ * shake y los sprites son QA manual del README).
  */
 
 const DT = 1 / 60;
@@ -35,26 +43,50 @@ const ALWAYS_ABOVE_DRS = MAX_SPEED * 2 * TURBO_MULTIPLIER * DRS_MULTIPLIER;
 /** Registro de lo emitido por el bus durante la carrera. */
 type Emission =
   | { event: 'coins'; coins: number }
-  | { event: 'pickup'; kind: 'turbo' | 'drs' }
+  | { event: 'pickup'; kind: 'turbo' | 'drs' | 'repair' }
+  | { event: 'health'; hp: number; ratio: number }
+  | { event: 'damage' }
   | { event: 'game-over'; summary: GameEvents['game-over'] };
 
 /**
  * Estado de carrera mínimo + el despacho de efectos de GameScene. La lógica
- * de contacto es una réplica exacta de `GameScene.handleTrackContact`.
+ * de contacto es una réplica exacta de `GameScene.handleTrackContact` y de
+ * su `applyImpact` (issue #10, H2).
  */
 class RaceCollisions {
   readonly bus = new EventBus<GameEvents>();
   readonly score = new ScoreSystem();
   readonly turbo = new TurboSystem();
   readonly drs = new DrsSystem(() => ALWAYS_ABOVE_DRS);
+  readonly health = new HealthSystem();
+  readonly speed = new SpeedSystem();
 
   coins = 0;
   gameOver = false;
+  /** Piedras recicladas al pool (`spawnSystem.release` en GameScene). */
+  debrisReleased = 0;
+  /** Pickups reciclados al pool (`spawnSystem.release` en GameScene). */
+  pickupsReleased = 0;
   readonly emissions: Emission[] = [];
+
+  /* Issue #10 (H4) — espejos del bloque de efectos de daño de GameScene
+   * (`setBlinking` + `updateDamageEffects`): flags derivados del estado de
+   * salud y del scraping, en el mismo orden en que la escena los computa. */
+  /** Espejo de `playerCar.setBlinking(healthSystem.isInvulnerable)`. */
+  carBlinking = false;
+  /** Espejo de `smokeEmitter.emitting` (crítico con el auto vivo). */
+  smokeEmitting = false;
+  /** Espejo de `sparkEmitter.emitting` (roce con pared con el auto vivo). */
+  sparkEmitting = false;
+
+  /** Espejo del guard `lastEmittedHp` de `GameScene.emitHealth`. */
+  private lastEmittedHp: number = HEALTH.max;
 
   constructor() {
     this.bus.on('coins', (coins) => this.emissions.push({ event: 'coins', coins }));
     this.bus.on('pickup', (kind) => this.emissions.push({ event: 'pickup', kind }));
+    this.bus.on('health', (payload) => this.emissions.push({ event: 'health', ...payload }));
+    this.bus.on('damage', () => this.emissions.push({ event: 'damage' }));
     this.bus.on('game-over', (summary) =>
       this.emissions.push({ event: 'game-over', summary }),
     );
@@ -74,31 +106,137 @@ class RaceCollisions {
         break;
       case 'collect-turbo':
         this.turbo.refill(TURBO_PICKUP_REFILL);
+        this.pickupsReleased += 1;
         this.bus.emit('pickup', 'turbo');
         break;
       case 'collect-drs':
         this.drs.resetCooldown();
+        this.pickupsReleased += 1;
         this.bus.emit('pickup', 'drs');
+        break;
+      case 'collect-repair':
+        this.health.heal(HEALTH.repairAmount);
+        this.pickupsReleased += 1;
+        this.bus.emit('pickup', 'repair');
+        this.emitHealth();
         break;
       case 'slip':
         // playerCar.slip(OIL_SLIP_SECONDS): el derrape no toca el puntaje.
         break;
       case 'crash':
+        this.applyImpact(def.kind);
+        break;
+    }
+    // Espejo del `updateDamageEffects` + `setBlinking` del próximo frame de
+    // GameScene: los flags de efectos se derivan del estado POST-contacto.
+    this.syncDamageEffects();
+  }
+
+  /**
+   * `GameScene.applyImpact` (issue #10, H2): daño por familia contra el
+   * HealthSystem; la piedra se libera SIEMPRE, el rival nunca.
+   */
+  private applyImpact(kind: EntityKind): void {
+    const def = ENTITY_DEFINITIONS[kind];
+    if (def.family === 'hazard') {
+      this.debrisReleased += 1;
+    }
+    const amount =
+      def.family === 'rival' ? HEALTH.impactDamage.rival : HEALTH.impactDamage.debris;
+    const result = this.health.damage(amount);
+    if (result === 'ignored') {
+      return;
+    }
+    if (result === 'dead') {
+      this.emitHealth();
+      this.gameOver = true;
+      this.stopDamageEffects(); // crash() apaga humo/chispas/blink
+      this.bus.emit('game-over', {
+        score: this.score.score,
+        distance: this.score.distance,
+        coins: this.coins,
+      });
+      return;
+    }
+    this.speed.penalize(HEALTH.impactSpeedLoss);
+    this.bus.emit('damage', undefined);
+    this.emitHealth();
+  }
+
+  /**
+   * Espejo del bloque de efectos de daño de `GameScene.update` (issue #10,
+   * H4): blink de i-frames, humo solo en crítico con el auto vivo y chispas
+   * solo rozando la pared con el auto vivo.
+   */
+  private syncDamageEffects(scrapingWall = false): void {
+    this.carBlinking = this.health.isInvulnerable;
+    this.smokeEmitting = this.health.isAlive && this.health.isCritical;
+    this.sparkEmitting = scrapingWall && this.health.isAlive;
+  }
+
+  /** Espejo del crash() de GameScene: el auto explota y los efectos mueren. */
+  private stopDamageEffects(): void {
+    this.carBlinking = false;
+    this.smokeEmitting = false;
+    this.sparkEmitting = false;
+  }
+
+  /** `GameScene.emitHealth`: emite el estado de salud cuando el HP cambia. */
+  private emitHealth(): void {
+    if (this.health.hp === this.lastEmittedHp) {
+      return; // mismo guard que GameScene: a vida llena el botiquín no emite
+    }
+    this.lastEmittedHp = this.health.hp;
+    this.bus.emit('health', { hp: this.health.hp, ratio: this.health.ratio });
+  }
+
+  /**
+   * Hace tictac la salud sin contacto (expiran i-frames), igual que
+   * `healthSystem.update(dt)` en el gate de física de GameScene.
+   */
+  tick(seconds: number): void {
+    for (let i = 0; i < Math.round(seconds / DT); i += 1) {
+      this.health.update(DT);
+    }
+    this.syncDamageEffects();
+  }
+
+  /**
+   * `GameScene.update` con `playerCar.scrapingWall` en true: tictac de
+   * i-frames + drenaje continuo de `scrape(dt)`; HP 0 → crash.
+   */
+  scrapeAgainstWall(seconds: number): void {
+    for (let i = 0; i < Math.round(seconds / DT); i += 1) {
+      if (this.gameOver) {
+        return;
+      }
+      this.health.update(DT);
+      const hpBefore = this.health.hp;
+      if (this.health.scrape(DT) === 'dead') {
+        this.emitHealth();
         this.gameOver = true;
+        this.stopDamageEffects(); // crash() apaga humo/chispas/blink
         this.bus.emit('game-over', {
           score: this.score.score,
           distance: this.score.distance,
           coins: this.coins,
         });
-        break;
+        return;
+      }
+      if (this.health.hp !== hpBefore) {
+        this.emitHealth();
+      }
     }
+    this.syncDamageEffects(true);
   }
 
   /** Avanza el puntaje por distancia (scroll de la carrera) a la velocidad dada. */
   race(seconds: number, speed: number): void {
     for (let i = 0; i < Math.round(seconds / DT); i += 1) {
       this.score.update(DT, speed);
+      this.health.update(DT);
     }
+    this.syncDamageEffects();
   }
 }
 
@@ -187,41 +325,51 @@ describe('integración colisiones → sistemas — pickups data-driven', () => {
 });
 
 describe('integración colisiones → fin de carrera — el resumen que viaja', () => {
-  it('el crash congela la carrera y emite el resumen completo por el bus', () => {
+  it('el HP 0 dispara el flujo de crash y emite el resumen completo por el bus', () => {
     const race = new RaceCollisions();
     race.race(10, 420); // 10 s a punta
     race.contact('coin');
     race.contact('coin');
-    race.contact('debris');
+    // 5 piedras (20 de daño cada una, con i-frames entre impactos) = 100 HP.
+    for (let i = 0; i < 5; i += 1) {
+      race.contact('debris');
+      race.tick(HEALTH.invulnerabilitySeconds + DT);
+    }
 
     expect(race.gameOver).toBe(true);
-    expect(race.emissions).toHaveLength(3); // 2 monedas + game-over
-    const summary = race.emissions[2];
-    expect(summary.event).toBe('game-over');
-    if (summary.event !== 'game-over') {
+    expect(race.health.hp).toBe(0);
+    const gameOverEvent = race.emissions.find((e) => e.event === 'game-over');
+    expect(gameOverEvent).toBeDefined();
+    if (!gameOverEvent || gameOverEvent.event !== 'game-over') {
       throw new Error('informativo para el tipado');
     }
-    expect(summary.summary.coins).toBe(2 * COIN_VALUE);
-    expect(summary.summary.score).toBe(race.score.score);
-    expect(summary.summary.distance).toBe(race.score.distance);
-    expect(summary.summary.score).toBeGreaterThan(0);
+    expect(gameOverEvent.summary.coins).toBe(2 * COIN_VALUE);
+    expect(gameOverEvent.summary.score).toBe(race.score.score);
+    expect(gameOverEvent.summary.distance).toBe(race.score.distance);
+    expect(gameOverEvent.summary.score).toBeGreaterThan(0);
   });
 
   it('tras el crash los contactos siguientes se ignoran (guard de GameScene)', () => {
     const race = new RaceCollisions();
     race.race(3, 300);
-    race.contact('rivalBlue');
+    // 3 rivales (35 de daño cada uno) con i-frames entre impactos = muerte.
+    for (let i = 0; i < 3; i += 1) {
+      race.contact('rivalBlue');
+      race.tick(HEALTH.invulnerabilitySeconds + DT);
+    }
+    expect(race.gameOver).toBe(true);
 
     const emissionsAfterCrash = race.emissions.length;
     race.contact('coin');
     race.contact('coin');
     race.contact('oil');
+    race.contact('debris');
 
     expect(race.coins).toBe(0);
     expect(race.emissions.length).toBe(emissionsAfterCrash);
   });
 
-  it('cadena completa: carrera con monedas → crash → resumen → guardado → recarga', () => {
+  it('cadena completa: carrera con monedas → crash (HP 0) → resumen → guardado → recarga', () => {
     const race = new RaceCollisions();
 
     race.race(20, 380);
@@ -229,7 +377,11 @@ describe('integración colisiones → fin de carrera — el resumen que viaja', 
     race.contact('coin');
     race.contact('coin');
     race.contact('coin');
-    race.contact('rivalYellow'); // crash
+    // 3 rivales con i-frames entre impactos: 3 × 35 = 105 ≥ 100 HP.
+    for (let i = 0; i < 3; i += 1) {
+      race.contact('rivalYellow');
+      race.tick(HEALTH.invulnerabilitySeconds + DT);
+    }
 
     const gameOverEvent = race.emissions.find((e) => e.event === 'game-over');
     if (!gameOverEvent || gameOverEvent.event !== 'game-over') {
@@ -245,5 +397,239 @@ describe('integración colisiones → fin de carrera — el resumen que viaja', 
     expect(result.save.bestScore).toBe(summary.score);
     // La distancia fraccional se trunca a entero al persistir.
     expect(result.save.bestDistance).toBe(Math.floor(summary.distance));
+  });
+});
+
+describe('integración colisiones → salud gradual (issue #10, H2)', () => {
+  it('un impacto no letal acumula HP perdido, penaliza la velocidad y anuncia por el bus', () => {
+    const race = new RaceCollisions();
+    race.race(2, 400); // el ScoreSystem corre
+
+    race.contact('rivalBlue');
+
+    expect(race.health.hp).toBe(HEALTH.max - HEALTH.impactDamage.rival);
+    expect(race.speed.speed).toBe(BASE_SPEED - HEALTH.impactSpeedLoss); // penalize
+    expect(race.gameOver).toBe(false);
+    expect(race.emissions).toEqual([
+      { event: 'damage' },
+      { event: 'health', hp: HEALTH.max - HEALTH.impactDamage.rival, ratio: 0.65 },
+    ]);
+  });
+
+  it('la piedra hace MENOS daño que el rival (20 vs 35) y se recicla al impacto', () => {
+    const race = new RaceCollisions();
+
+    race.contact('debris');
+
+    expect(race.health.hp).toBe(HEALTH.max - HEALTH.impactDamage.debris);
+    expect(race.debrisReleased).toBe(1);
+    expect(race.gameOver).toBe(false);
+  });
+
+  it('los i-frames ignoran el segundo golpe inmediato (y la piedra igual se rompe)', () => {
+    const race = new RaceCollisions();
+
+    race.contact('rivalBlue'); // golpe aplicado: arma i-frames
+    const emissionsAfterFirst = race.emissions.length;
+    race.contact('rivalBlue'); // dentro de i-frames: ignorado
+
+    expect(race.health.hp).toBe(HEALTH.max - HEALTH.impactDamage.rival);
+    expect(race.emissions.length).toBe(emissionsAfterFirst);
+
+    race.contact('debris'); // piedra en i-frames: sin daño, pero SE ROMPE
+    expect(race.health.hp).toBe(HEALTH.max - HEALTH.impactDamage.rival);
+    expect(race.debrisReleased).toBe(1);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT); // expiran los i-frames
+    race.contact('rivalBlue'); // vuelve a doler: castigo estándar
+
+    expect(race.health.hp).toBe(HEALTH.max - 2 * HEALTH.impactDamage.rival);
+  });
+
+  it('el aceite (slip) NO hace daño al chasis', () => {
+    const race = new RaceCollisions();
+
+    race.contact('oil');
+
+    expect(race.health.hp).toBe(HEALTH.max);
+    expect(race.gameOver).toBe(false);
+    expect(race.emissions).toEqual([]);
+  });
+
+  it('3 choques de rival (o 5 piedras) alcanzan para matar — el DoD del issue', () => {
+    const porRivales = new RaceCollisions();
+    for (let i = 0; i < 3; i += 1) {
+      porRivales.contact('rivalGreen');
+      porRivales.tick(HEALTH.invulnerabilitySeconds + DT);
+    }
+    expect(porRivales.gameOver).toBe(true);
+    expect(porRivales.health.hp).toBe(0);
+
+    const porPiedras = new RaceCollisions();
+    for (let i = 0; i < 5; i += 1) {
+      porPiedras.contact('debris');
+      porPiedras.tick(HEALTH.invulnerabilitySeconds + DT);
+    }
+    expect(porPiedras.gameOver).toBe(true);
+    expect(porPiedras.health.hp).toBe(0);
+  });
+});
+
+describe('integración colisiones → roce con pared (issue #10, H2)', () => {
+  it('el roce drena HEALTH.scrapePerSecond HP/s (sin i-frames, daño continuo)', () => {
+    const race = new RaceCollisions();
+
+    race.scrapeAgainstWall(1);
+
+    expect(race.health.hp).toBe(HEALTH.max - HEALTH.scrapePerSecond);
+    expect(race.gameOver).toBe(false);
+    // El drenaje continuo NO suena el SFX de golpe (solo impactos puntuales).
+    expect(race.emissions.some((e) => e.event === 'damage')).toBe(false);
+  });
+
+  it('el roce con i-frames activos igual drena (la pared no respeta i-frames)', () => {
+    const race = new RaceCollisions();
+    race.contact('rivalBlue'); // arma i-frames
+
+    race.scrapeAgainstWall(0.5);
+
+    // El HP vive en enteros: 7.5 HP pendientes → se aplican 7 (residuo 0.5).
+    expect(race.health.hp).toBe(
+      HEALTH.max - HEALTH.impactDamage.rival - Math.floor(HEALTH.scrapePerSecond * 0.5),
+    );
+  });
+
+  it('mantener el roce ~7 s llega a HP 0 y dispara el flujo de crash', () => {
+    const race = new RaceCollisions();
+
+    race.scrapeAgainstWall(7); // 100 HP / 15 HP/s ≈ 6.67 s
+
+    expect(race.gameOver).toBe(true);
+    expect(race.health.hp).toBe(0);
+    const gameOverEvent = race.emissions.find((e) => e.event === 'game-over');
+    expect(gameOverEvent).toBeDefined();
+    // La barra recibió el estado final en 0 antes del game-over.
+    const lastHealth = [...race.emissions]
+      .reverse()
+      .find((e) => e.event === 'health');
+    expect(lastHealth).toEqual({ event: 'health', hp: 0, ratio: 0 });
+  });
+});
+
+describe('integración colisiones → botiquín (issue #10, H3)', () => {
+  it('el botiquín cura +35 con anuncio por el bus y el pickup se libera', () => {
+    const race = new RaceCollisions();
+    race.contact('rivalBlue'); // 100 → 65
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('debris'); // 65 → 45
+    race.emissions.length = 0;
+
+    race.contact('repair');
+
+    expect(race.health.hp).toBe(45 + HEALTH.repairAmount);
+    expect(race.pickupsReleased).toBe(1);
+    expect(race.emissions).toEqual([
+      { event: 'pickup', kind: 'repair' },
+      { event: 'health', hp: 45 + HEALTH.repairAmount, ratio: 0.8 },
+    ]);
+  });
+
+  it('dos botiquines segundan curan parcial y luego al tope: 45 → 80 → 100 (clamp)', () => {
+    const race = new RaceCollisions();
+    race.contact('rivalBlue'); // 100 → 65
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('debris'); // 65 → 45
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.emissions.length = 0;
+
+    race.contact('repair');
+    expect(race.health.hp).toBe(45 + HEALTH.repairAmount); // 80
+
+    race.contact('repair');
+    expect(race.health.hp).toBe(HEALTH.max); // 80 + 35 = 115 → clamp al tope
+    expect(race.pickupsReleased).toBe(2);
+    const healthEvents = race.emissions.filter((e) => e.event === 'health');
+    expect(healthEvents).toEqual([
+      { event: 'health', hp: 45 + HEALTH.repairAmount, ratio: 0.8 },
+      { event: 'health', hp: HEALTH.max, ratio: 1 },
+    ]);
+  });
+
+  it('a vida llena es un no-op de curación (cura 0) pero se consume y anuncia pickup', () => {
+    const race = new RaceCollisions();
+
+    race.contact('repair');
+
+    expect(race.health.hp).toBe(HEALTH.max);
+    expect(race.pickupsReleased).toBe(1); // el pickup igual se consume
+    // SFX (por `pickup`) y burst ocurren en GameScene; el bus NO emite
+    // `health` (guard de emitHealth: el HP mostrado no cambió).
+    expect(race.emissions).toEqual([{ event: 'pickup', kind: 'repair' }]);
+  });
+});
+
+describe('integración colisiones → feedback visual del daño (issue #10, H4)', () => {
+  it('la colisión arma el parpadeo de i-frames y el auto reaparece al expirar', () => {
+    const race = new RaceCollisions();
+    expect(race.carBlinking).toBe(false);
+
+    race.contact('rivalBlue'); // golpe aplicado → i-frames → blink ON
+    expect(race.health.isInvulnerable).toBe(true);
+    expect(race.carBlinking).toBe(true);
+    // El blink es la capa de opacidad: la fase pura alterna visible/oculto
+    // (PlayerCar pinta alpha 1/0 según `blinkVisible(blinkElapsed)`).
+    expect(blinkVisible(0)).toBe(true);
+    expect(blinkVisible(0.2)).toBe(false);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT); // expiran los i-frames
+    expect(race.health.isInvulnerable).toBe(false);
+    expect(race.carBlinking).toBe(false);
+  });
+
+  it('el roce con pared NO arma el blink (la pared no usa i-frames)', () => {
+    const race = new RaceCollisions();
+
+    race.scrapeAgainstWall(0.5);
+
+    expect(race.health.hp).toBeLessThan(HEALTH.max); // sí drenó
+    expect(race.health.isInvulnerable).toBe(false); // sin i-frames
+    expect(race.carBlinking).toBe(false); // y por lo tanto sin blink
+  });
+
+  it('el humo se emite SOLO en estado crítico (isCritical) y se apaga al reparar', () => {
+    const race = new RaceCollisions();
+
+    race.contact('rivalBlue'); // 100 → 65: lejos del umbral
+    expect(race.smokeEmitting).toBe(false);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('debris'); // 65 → 45: todavía no es crítico
+    expect(race.smokeEmitting).toBe(false);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('rivalBlue'); // 45 → 10: por debajo del 25% → humo ON
+    expect(race.health.isCritical).toBe(true);
+    expect(race.smokeEmitting).toBe(true);
+
+    race.contact('repair'); // 10 → 45: fuera del umbral → humo OFF
+    expect(race.health.isCritical).toBe(false);
+    expect(race.smokeEmitting).toBe(false);
+  });
+
+  it('las chispas se emiten mientras se roza la pared viva y mueren con el crash', () => {
+    const race = new RaceCollisions();
+
+    race.scrapeAgainstWall(0.5);
+
+    expect(race.health.hp).toBe(HEALTH.max - Math.floor(HEALTH.scrapePerSecond * 0.5));
+    expect(race.sparkEmitting).toBe(true);
+    expect(race.smokeEmitting).toBe(false); // ~93 HP: no crítico
+
+    race.scrapeAgainstWall(7); // drena el resto hasta HP 0 → crash
+    expect(race.gameOver).toBe(true);
+    // El crash apaga TODOS los efectos del auto (humo, chispas y blink).
+    expect(race.sparkEmitting).toBe(false);
+    expect(race.smokeEmitting).toBe(false);
+    expect(race.carBlinking).toBe(false);
   });
 });
