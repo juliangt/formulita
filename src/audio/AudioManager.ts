@@ -467,25 +467,34 @@ export class AudioManager implements ISfxEngine {
 
   /**
    * Desbloquea el audio (política de autoplay móvil): crea el contexto si
-   * falta, hace `resume()` si no está operativo (suspendido, o interrumpido
-   * — estado `'interrupted'` de Safari tras una llamada) y, la primera vez,
-   * sirve un buffer silencioso: iOS Safari deja los nodos sintéticos mudos
-   * hasta que UN buffer suena dentro de un gesto, aunque el contexto esté
-   * `running`. Idempotente: llamarlo en cada gesto es barato y seguro.
+   * falta, hace `resume()` solo si no está operativo (suspendido, o
+   * interrumpido — estado `'interrupted'` de Safari tras una llamada) y, en
+   * el PRIMER gesto, sirve un buffer silencioso SIEMPRE, independiente del
+   * estado reportado: iOS Safari puede crear el contexto ya `running` y aun
+   * así dejar los nodos sintéticos mudos hasta que UN buffer suena dentro
+   * del gesto (por eso el primer no puede quedar detrás del guard de
+   * estado). Idempotente: llamarlo en cada gesto es barato y seguro.
    */
   unlock(): void {
     const ctx = this.ensureContext();
-    if (!ctx || ctx.state === 'running' || ctx.state === 'closed') {
+    if (!ctx) {
+      return;
+    }
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+      try {
+        void ctx.resume().catch(() => {
+          // El resume puede rechazar (pestaña oculta, política estricta): no importa.
+        });
+      } catch {
+        // Resume lanzó sincrónico: el primer de abajo igual se sirve.
+      }
+    }
+    if (this.primedContext) {
       return;
     }
     try {
-      void ctx.resume().catch(() => {
-        // El resume puede rechazar (pestaña oculta, política estricta): no importa.
-      });
-      if (!this.primedContext) {
-        this.playUnlockPrimer(ctx);
-        this.primedContext = true;
-      }
+      this.playUnlockPrimer(ctx);
+      this.primedContext = true;
     } catch {
       // Degradación: el juego sigue sin sonido.
     }

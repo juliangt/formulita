@@ -406,6 +406,44 @@ describe('AudioManager — unlock (política de autoplay)', () => {
     expect(ctx.resumeCount).toBe(0);
   });
 
+  it('resume se dispara también con el estado `interrupted` de Safari', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'interrupted';
+
+    manager.unlock();
+
+    expect(ctx.resumeCount).toBe(1);
+  });
+
+  it('iOS que reporta `running` desde la creación: el primer gesto igual sirve el primer', () => {
+    const { manager, ctx } = makeHarness();
+    // iOS Safari puede crear el contexto YA `running` y aun así dejar mudos
+    // los nodos sintéticos: el primer no puede depender del guard de estado.
+    ctx.state = 'running';
+
+    manager.unlock();
+
+    expect(ctx.resumeCount).toBe(0); // sin estado suspendido no hay resume
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].connections.length).toBeGreaterThan(0);
+    expect(ctx.sources[0].started.length).toBe(1);
+  });
+
+  it('gestos subsiguientes no reproducen el primer de nuevo (aunque siga `running`)', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+
+    manager.unlock();
+    manager.unlock();
+    manager.unlock();
+
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].started.length).toBe(1);
+    expect(ctx.resumeCount).toBe(0);
+  });
+
   it('unlock tolera el contexto que lanza en resume', () => {
     const { manager, ctx } = makeHarness();
     ctx.resume = () => {
