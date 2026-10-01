@@ -434,7 +434,18 @@ export const TOUCH_HUD = {
  * Parámetros del audio sintético (Web Audio pura, sin assets). El dron del
  * motor mapea linealmente la velocidad de la carrera de `engineFreqMin` (a
  * velocidad mínima) a `engineFreqMax` (a punta combinada turbo × DRS); con
- * el turbo activo la frecuencia se realza además por `engineTurboBoost`.
+ * el turbo activo la frecuencia se realza además por `engineTurboBoost` y
+ * el lowpass se abre a `engineFilterTurboHz`.
+ *
+ * Perfil móvil (issue #4, H4): los parlantes de un celular apenas reproducen
+ * por debajo de ~400 Hz, así que el dron desktop (55–235 Hz) puede ser
+ * FÍSICAMENTE inaudible en móvil aunque todo el pipeline de audio funcione
+ * (en desktop con auriculares/parlantes grandes sí se oye: el síntoma
+ * reportado). El perfil móvil sube el dron una octava (entra en la banda que
+ * los parlantes chicos sí reproducen), abre el lowpass para dejar pasar los
+ * armónicos nuevos y compensa la baja eficiencia del parlante con más
+ * ganancia. El mapeo velocidad→frecuencia y el turbo son idénticos en
+ * proporción: solo cambia la banda base.
  */
 export const AUDIO = {
   /** Volumen del dron del motor (ganancia pico, 0–1). */
@@ -445,6 +456,22 @@ export const AUDIO = {
   engineFreqMax: 235,
   /** Realce de frecuencia del dron con turbo activo (×1 = sin realce). */
   engineTurboBoost: 1.14,
+  /** Corte del lowpass del dron (Hz); con turbo: `engineFilterTurboHz`. */
+  engineFilterHz: 1100,
+  /** Corte del lowpass del dron con turbo activo (Hz). */
+  engineFilterTurboHz: 2200,
+
+  /* --- Perfil móvil (issue #4, H4) --- */
+  /** Volumen del dron en móvil (el parlante chico rinde menos). */
+  engineVolumeMobile: 0.085,
+  /** Frecuencia del dron en móvil a velocidad mínima (Hz): octava arriba. */
+  engineFreqMinMobile: 110,
+  /** Frecuencia del dron en móvil a velocidad punta combinada (Hz). */
+  engineFreqMaxMobile: 470,
+  /** Corte del lowpass del dron en móvil (deja pasar los armónicos nuevos). */
+  engineFilterHzMobile: 2200,
+  /** Corte del lowpass del dron en móvil con turbo activo (Hz). */
+  engineFilterTurboHzMobile: 3600,
 } as const;
 
 /** Layout del botón de mute (Fase 6): menú (esquina) y carrera (abajo-centro). */

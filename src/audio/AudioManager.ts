@@ -19,6 +19,33 @@
  * - **Degradación total.** Si Web Audio no existe, la factory falla o un
  *   nodo lanza, todo queda en no-op silencioso: el juego nunca depende del
  *   sonido (todos los accesos van envueltos en try/catch).
+ * - **Interruptor Ring/Silent del iPhone (Fase 2, issue #4).** Safari en iOS
+ *   silencia TODA la Web Audio con el switch físico en silencio, aunque el
+ *   contexto esté desbloqueado y `running`; no hay API para detectarlo ni
+ *   bypasearlo. Dos redes, ambas sin assets: en el primer gesto se arranca
+ *   un `<audio>` con un WAV silencioso en data URI (loop, volumen casi 0)
+ *   que mantiene la sesión de audio en modo playback — en varias versiones
+ *   de iOS hace que la Web Audio posterior ignore el switch — y, si el
+ *   contexto igualmente no queda `running`, se dispara `onAudioBlocked`
+ *   (default: overlay DOM con un hint discreto, una sola vez por sesión).
+ * - **Recuperación tras interrupción (Fase 3, issue #4).** Tras una llamada,
+ *   Siri o el bloqueo de pantalla, Safari pasa el contexto a `interrupted`
+ *   (o `suspended`) y el audio queda mudo hasta el próximo gesto. Con
+ *   `onstatechange` del contexto y `visibilitychange` del documento se
+ *   reintenta `resume()` automáticamente, SOLO si el documento está visible
+ *   (iOS deniega el resume en background) y solo si ya hubo desbloqueo por
+ *   gesto (la política de autoplay no se fuerza). El handler es idempotente
+ *   (solo actúa en estados problemáticos: el propio `resume()` re-dispara
+ *   `onstatechange` en `running`) y los listeners tienen cleanup en
+ *   `dispose()`.
+ * - **Perfil del dron para móvil (Fase 4, issue #4).** Los parlantes de un
+ *   celular apenas reproducen por debajo de ~400 Hz: el dron desktop
+ *   (55–235 Hz) puede ser físicamente inaudible en móvil aunque todo el
+ *   pipeline funcione. El manager elige el perfil del dron al construirse
+ *   (autodetección por user agent vía `isMobileLikeDevice`, inyectable como
+ *   `mobileProfile` para los tests): en móvil el dron suena una octava
+ *   arriba, con el lowpass más abierto y más ganancia (números en
+ *   `AUDIO`, bloque de perfil móvil en `balance.ts`).
  * - **Mute persistido en clave PROPIA versionada** (`formulita.audio.v1`,
  *   decisión documentada): es un ajuste de dispositivo, no progreso de
  *   carrera, así no se mezcla con `SaveData` ni depende del flujo de
@@ -38,7 +65,9 @@ import {
   TURBO_MULTIPLIER,
 } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
+import { isMobileLikeDevice } from '../core/device';
 import { AUDIO_ENGINE_REGISTRY_KEY, type ISfxEngine, type SfxName } from './ISfxEngine';
+import { showAudioBlockedHint } from './AudioBlockedHint';
 
 /* ------------------------------------------------------------------ */
 /* Abstracción mínima de Web Audio (inyectable / testeable)            */
@@ -89,15 +118,35 @@ export interface AudioBufferSourceNodeLike extends AudioNodeLike {
   stop(when?: number): void;
 }
 
+/**
+ * Porción de `HTMLMediaElement` que el workaround Ring/Silent usa (el real
+ * la satisface; inyectable para testear sin DOM real).
+ */
+export interface MediaElementLike {
+  loop: boolean;
+  volume: number;
+  play(): Promise<void>;
+  pause(): void;
+}
+
+/** Factory del media element silencioso: `null` = desactiva el workaround. */
+export type MediaElementFactory = () => MediaElementLike | null;
+
 /** Igual que `AudioContextState` del DOM (`'interrupted'` existe en Safari). */
 export type AudioContextStateLike = 'running' | 'suspended' | 'closed' | 'interrupted';
 
-/** Porción del `AudioContext` que el manager usa (el real la satisface). */
+/**
+ * Porción del `AudioContext` que el manager usa (el real la satisface).
+ * `onstatechange` usa la firma DOM (`event: Event`) para que el contexto
+ * real sea estructuralmente asignable; el manager solo lo ASIGNA, jamás lo
+ * dispara.
+ */
 export interface AudioContextLike {
   readonly currentTime: number;
   readonly sampleRate: number;
   readonly state: AudioContextStateLike;
   readonly destination: AudioDestinationNodeLike;
+  onstatechange: ((event: Event) => unknown) | null;
   resume(): Promise<void>;
   close(): Promise<void>;
   createOscillator(): OscillatorNodeLike;
@@ -120,6 +169,20 @@ export interface UnlockEventTarget {
     type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown',
     handler: () => void,
   ): void;
+}
+
+/** Estados de visibilidad del documento que importan acá (el DOM los tiene). */
+export type DocumentVisibilityStateLike = 'visible' | 'hidden';
+
+/**
+ * Objetivo de listeners de visibilidad para la recuperación tras
+ * interrupción (el `document` del navegador lo satisface; inyectable para
+ * testear sin DOM real).
+ */
+export interface VisibilityEventTarget {
+  readonly visibilityState: DocumentVisibilityStateLike;
+  addEventListener(type: 'visibilitychange', handler: () => void): void;
+  removeEventListener(type: 'visibilitychange', handler: () => void): void;
 }
 
 interface WindowWithWebAudio {
@@ -154,6 +217,90 @@ function defaultSettingsStorage(): Storage | null {
 export const AUDIO_SETTINGS_STORAGE_KEY = 'formulita.audio.v1';
 
 /* ------------------------------------------------------------------ */
+/* Workaround Ring/Silent: WAV silencioso en data URI                  */
+/* ------------------------------------------------------------------ */
+
+const SILENT_WAV_SAMPLE_RATE = 8000;
+/** Duración del WAV (s): es silencio en loop, no necesita durar. */
+const SILENT_WAV_SECONDS = 0.1;
+/** Volumen del media element: "audible" para iOS, inaudible para humanos. */
+const SILENT_MEDIA_VOLUME = 0.001;
+
+/** Data URI del WAV silencioso, memoizado (es constante de la sesión). */
+let silentWavDataUri: string | null = null;
+
+/**
+ * Construye el data URI de un WAV PCM 16-bit mono con todas las muestras en
+ * cero (44 bytes de header + datos). Generado en código — cero assets: es el
+ * "keep-alive" que mantiene la sesión de audio de iOS en modo playback para
+ * esquivar el switch Ring/Silent. Los datos nunca se tocan: nacen en cero.
+ */
+export function buildSilentWavDataUri(): string {
+  if (silentWavDataUri) {
+    return silentWavDataUri;
+  }
+  const samples = Math.max(1, Math.floor(SILENT_WAV_SAMPLE_RATE * SILENT_WAV_SECONDS));
+  const bytes = new Uint8Array(44 + samples * 2);
+  const view = new DataView(bytes.buffer);
+  const writeAscii = (offset: number, text: string): void => {
+    for (let i = 0; i < text.length; i += 1) {
+      bytes[offset + i] = text.charCodeAt(i);
+    }
+  };
+  writeAscii(0, 'RIFF');
+  view.setUint32(4, 36 + samples * 2, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  view.setUint32(16, 16, true); // tamaño del chunk fmt (PCM sin extra)
+  view.setUint16(20, 1, true); // formato PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, SILENT_WAV_SAMPLE_RATE, true);
+  view.setUint32(28, SILENT_WAV_SAMPLE_RATE * 2, true); // byteRate (16-bit)
+  view.setUint16(32, 2, true); // blockAlign (un frame = 2 bytes)
+  view.setUint16(34, 16, true); // bits por muestra
+  writeAscii(36, 'data');
+  view.setUint32(40, samples * 2, true);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  silentWavDataUri = `data:audio/wav;base64,${btoa(binary)}`;
+  return silentWavDataUri;
+}
+
+/** Factory default del media element: `<audio>` inline, sin agregar al DOM. */
+function defaultMediaElementFactory(): MediaElementLike | null {
+  try {
+    if (typeof document === 'undefined') {
+      return null;
+    }
+    const el = document.createElement('audio');
+    el.setAttribute('playsinline', '');
+    el.setAttribute('preload', 'auto');
+    el.src = buildSilentWavDataUri();
+    return el;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decisión PURA del hint de audio bloqueado (issue #4, testeable): mostrar
+ * solo si hay contexto, este NO terminó en `running` tras el gesto y el hint
+ * no salió ya en esta sesión. Sin contexto (Web Audio ausente) no hay hint:
+ * ahí el switch del teléfono no es ni la causa ni la solución.
+ */
+export function shouldShowAudioBlockedHint(
+  state: AudioContextStateLike | null,
+  alreadyShown: boolean,
+): boolean {
+  if (alreadyShown || state === null) {
+    return false;
+  }
+  return state !== 'running';
+}
+
+/* ------------------------------------------------------------------ */
 /* Constantes de síntesis                                              */
 /* ------------------------------------------------------------------ */
 
@@ -163,9 +310,8 @@ const MASTER_VOLUME = 0.9;
 const MUTE_RAMP_SECONDS = 0.05;
 const ENGINE_ATTACK_SECONDS = 0.3;
 const ENGINE_RELEASE_SECONDS = 0.25;
-/** Filtro del dron: corte base (Hz) y corte con turbo (Hz). */
-const ENGINE_FILTER_HZ = 1100;
-const ENGINE_FILTER_TURBO_HZ = 2200;
+// (El corte del lowpass del dron vive en `AUDIO`: `engineFilterHz` desktop y
+// `engineFilterHzMobile` móvil, issue #4 H4.)
 /** Umbral de reprogramación de frecuencia del dron (Hz, anti-spam de eventos). */
 const ENGINE_FREQ_EPSILON = 0.75;
 /** Duración del buffer de ruido blanco compartido (s). */
@@ -180,14 +326,23 @@ const ALMOST_ZERO = 0.0001;
  * `AUDIO.engineFreqMin` (a velocidad mínima) y `AUDIO.engineFreqMax` (a la
  * punta combinada turbo × DRS, mismo techo que `composeEffectiveSpeed`).
  * Monótona creciente; con turbo se realza por `AUDIO.engineTurboBoost`
- * (además del suba que ya trae la velocidad efectiva). Defensiva: NaN y
- * fuera de rango se clampean; siempre devuelve un número finito > 0.
+ * (además del suba que ya trae la velocidad efectiva). Con `mobileProfile`
+ * se usan las frecuencias del perfil móvil (`engineFreqMinMobile` /
+ * `engineFreqMaxMobile`, una octava arriba: los parlantes de un celular
+ * apenas reproducen < ~400 Hz — issue #4 H4). Defensiva: NaN y fuera de
+ * rango se clampean; siempre devuelve un número finito > 0.
  */
-export function engineFrequencyForSpeed(speed: number, turboActive = false): number {
+export function engineFrequencyForSpeed(
+  speed: number,
+  turboActive = false,
+  mobileProfile = false,
+): number {
+  const freqMin = mobileProfile ? AUDIO.engineFreqMinMobile : AUDIO.engineFreqMin;
+  const freqMax = mobileProfile ? AUDIO.engineFreqMaxMobile : AUDIO.engineFreqMax;
   const ceiling = MAX_SPEED * Math.max(1, TURBO_MULTIPLIER) * Math.max(1, DRS_MULTIPLIER);
   const clamped = Number.isFinite(speed) ? Math.min(Math.max(speed, MIN_SPEED), ceiling) : MIN_SPEED;
   const t = (clamped - MIN_SPEED) / (ceiling - MIN_SPEED);
-  const base = AUDIO.engineFreqMin + (AUDIO.engineFreqMax - AUDIO.engineFreqMin) * t;
+  const base = freqMin + (freqMax - freqMin) * t;
   return base * (turboActive ? Math.max(1, AUDIO.engineTurboBoost) : 1);
 }
 
@@ -200,6 +355,31 @@ export interface AudioManagerOptions {
   readonly contextFactory?: AudioContextFactory;
   /** Storage para persistir el mute (default: localStorage; null = no persistir). */
   readonly storage?: Storage | null;
+  /**
+   * Factory del media element silencioso del workaround Ring/Silent
+   * (default: `<audio>` con WAV en data URI; `null` = desactivarlo).
+   */
+  readonly mediaElementFactory?: MediaElementFactory | null;
+  /**
+   * Aviso de audio bloqueado: se dispara UNA vez por sesión si tras el gesto
+   * el contexto no queda `running` (default: overlay DOM discreto).
+   */
+  readonly onAudioBlocked?: () => void;
+  /**
+   * Objetivo de listeners de visibilidad para la recuperación tras
+   * interrupción (default: el `document`; `null` = sin red de visibilidad,
+   * se asume visible).
+   */
+  readonly visibilityTarget?: VisibilityEventTarget | null;
+  /**
+   * Perfil del dron del motor para móvil (issue #4, H4): frecuencias una
+   * octava arriba, lowpass más abierto y más ganancia — los parlantes de un
+   * celular apenas reproducen < ~400 Hz, el perfil desktop puede ser
+   * físicamente inaudible ahí. `undefined` = autodetectar vía `core/device`
+   * (user agent); pasar `true`/`false` lo fija (los tests fijan `false` para
+   * el perfil desktop, el default estable).
+   */
+  readonly mobileProfile?: boolean;
 }
 
 export class AudioManager implements ISfxEngine {
@@ -208,6 +388,18 @@ export class AudioManager implements ISfxEngine {
 
   /** Storage del mute (puede ser null: entonces no persiste). */
   private readonly storage: Storage | null;
+
+  /** Factory del media element del workaround Ring/Silent (null = off). */
+  private readonly mediaElementFactory: MediaElementFactory | null;
+
+  /** Aviso de audio bloqueado (default: overlay DOM). */
+  private readonly onAudioBlocked: () => void;
+
+  /** Target de visibilidad para la recuperación (null = se asume visible). */
+  private readonly visibilityTarget: VisibilityEventTarget | null;
+
+  /** true si el dron usa el perfil móvil (parlantes chicos, issue #4 H4). */
+  private readonly mobileProfile: boolean;
 
   /** Contexto creado lazy (primer unlock / primer play). */
   private context: AudioContextLike | null = null;
@@ -247,6 +439,17 @@ export class AudioManager implements ISfxEngine {
   /* --- Listeners de desbloqueo --- */
   private unlockTarget: UnlockEventTarget | null = null;
 
+  /* --- Recuperación tras interrupción (Fase 3, issue #4) --- */
+  /**
+   * El desbloqueo por gesto ya ocurrió al menos una vez: es el permiso de la
+   * política de autoplay para los re-resume automáticos (sin gesto previo,
+   * el contexto NO se despierta solo).
+   */
+  private unlockedOnce = false;
+
+  /** Los listeners de recuperación ya están instalados (una vez por contexto). */
+  private recoveryAttached = false;
+
   /**
    * El primer buffer silencioso ya se sirvió para el contexto vigente. iOS
    * Safari necesita UNA reproducción de buffer dentro de un gesto para abrir
@@ -256,14 +459,65 @@ export class AudioManager implements ISfxEngine {
    */
   private primedContext = false;
 
+  /**
+   * Media element silencioso del workaround Ring/Silent, si ya se creó. El
+   * elemento se deja sonando (loop, volumen casi 0) toda la sesión.
+   */
+  private mediaElement: MediaElementLike | null = null;
+
+  /**
+   * El arranque del media element ya se INTENTÓ una vez: no se reintenta en
+   * cada gesto, ni siquiera si el `play()` rechazó (el elemento queda creado
+   * y en uso; reintentar solo acumularía promesas rechazadas).
+   */
+  private mediaElementAttempted = false;
+
+  /** El hint de audio bloqueado ya se mostró en esta sesión (flag en memoria). */
+  private blockedHintShown = false;
+
   private readonly handleGestureUnlock = (): void => {
     this.unlock();
+  };
+
+  /** Cambio de estado del contexto (llamada/Siri/bloqueo → recuperación). */
+  private readonly handleContextStateChange = (): void => {
+    this.tryAutoResume();
+  };
+
+  /** La pestaña volvió a visible (reintenta si el contexto quedó mudo). */
+  private readonly handleVisibilityChange = (): void => {
+    this.tryAutoResume();
   };
 
   constructor(options: AudioManagerOptions = {}) {
     this.contextFactory = options.contextFactory ?? defaultAudioContextFactory;
     this.storage = options.storage === undefined ? defaultSettingsStorage() : options.storage;
+    this.mediaElementFactory =
+      options.mediaElementFactory === undefined
+        ? defaultMediaElementFactory
+        : options.mediaElementFactory;
+    this.onAudioBlocked = options.onAudioBlocked ?? showAudioBlockedHint;
+    this.visibilityTarget =
+      options.visibilityTarget === undefined ? defaultVisibilityTarget() : options.visibilityTarget;
+    this.mobileProfile = options.mobileProfile ?? defaultIsMobileProfile();
     this.muted = this.loadMuted();
+  }
+
+  /**
+   * Volumen, corte del lowpass y corte con turbo según el perfil vigente
+   * (desktop o móvil): seleccionados una sola vez por el flag, cero números
+   * mágicos afuera de `balance.ts`.
+   */
+  private get engineVolumeProfile(): number {
+    return this.mobileProfile ? AUDIO.engineVolumeMobile : AUDIO.engineVolume;
+  }
+
+  private get engineFilterProfile(): number {
+    return this.mobileProfile ? AUDIO.engineFilterHzMobile : AUDIO.engineFilterHz;
+  }
+
+  private get engineFilterTurboProfile(): number {
+    return this.mobileProfile ? AUDIO.engineFilterTurboHzMobile : AUDIO.engineFilterTurboHz;
   }
 
   /** Estado de silencio actual (refleja lo persistido + toggles de la sesión). */
@@ -467,27 +721,91 @@ export class AudioManager implements ISfxEngine {
 
   /**
    * Desbloquea el audio (política de autoplay móvil): crea el contexto si
-   * falta, hace `resume()` si no está operativo (suspendido, o interrumpido
-   * — estado `'interrupted'` de Safari tras una llamada) y, la primera vez,
-   * sirve un buffer silencioso: iOS Safari deja los nodos sintéticos mudos
-   * hasta que UN buffer suena dentro de un gesto, aunque el contexto esté
-   * `running`. Idempotente: llamarlo en cada gesto es barato y seguro.
+   * falta, hace `resume()` solo si no está operativo (suspendido, o
+   * interrumpido — estado `'interrupted'` de Safari tras una llamada) y, en
+   * el PRIMER gesto, sirve un buffer silencioso SIEMPRE, independiente del
+   * estado reportado: iOS Safari puede crear el contexto ya `running` y aun
+   * así dejar los nodos sintéticos mudos hasta que UN buffer suena dentro
+   * del gesto (por eso el primer no puede quedar detrás del guard de
+   * estado). Idempotente: llamarlo en cada gesto es barato y seguro.
    */
   unlock(): void {
     const ctx = this.ensureContext();
-    if (!ctx || ctx.state === 'running' || ctx.state === 'closed') {
+    if (!ctx) {
+      return;
+    }
+    // Hubo gesto: a partir de acá los re-resume automáticos están permitidos.
+    this.unlockedOnce = true;
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+      try {
+        // El veredicto del hint es POST-resume: el estado del contexto se
+        // actualiza asincrónico, un chequeo sincrónico daría falsos positivos.
+        void ctx.resume().then(
+          () => this.notifyAudioBlockedHint(),
+          () => this.notifyAudioBlockedHint(),
+        );
+      } catch {
+        this.notifyAudioBlockedHint(); // resume lanzó sincrónico
+      }
+    }
+    if (this.primedContext) {
+      return;
+    }
+    this.primeMediaElement();
+    try {
+      this.playUnlockPrimer(ctx);
+      this.primedContext = true;
+    } catch {
+      // Degradación: el juego sigue sin sonido.
+    }
+  }
+
+  /**
+   * Arranca UNA vez el media element silencioso (workaround Ring/Silent, ver
+   * header): un `<audio>` en loop con volumen casi 0 mantiene la sesión de
+   * audio de iOS en modo playback, lo que en varias versiones hace que la
+   * Web Audio posterior ignore el switch físico. Best-effort total: un
+   * `play()` rechazado (u otras rarezas) se traga sin romper el unlock.
+   */
+  private primeMediaElement(): void {
+    if (this.mediaElementAttempted) {
+      return;
+    }
+    this.mediaElementAttempted = true;
+    const factory = this.mediaElementFactory;
+    if (!factory) {
       return;
     }
     try {
-      void ctx.resume().catch(() => {
-        // El resume puede rechazar (pestaña oculta, política estricta): no importa.
-      });
-      if (!this.primedContext) {
-        this.playUnlockPrimer(ctx);
-        this.primedContext = true;
+      const el = factory();
+      if (!el) {
+        return;
+      }
+      el.loop = true;
+      el.volume = SILENT_MEDIA_VOLUME;
+      this.mediaElement = el;
+      const played = el.play();
+      if (played && typeof played.catch === 'function') {
+        played.catch(() => {
+          // Sin gesto válido (o switch en mods estrictos): no se reintenta.
+        });
       }
     } catch {
-      // Degradación: el juego sigue sin sonido.
+      // El workaround es una red extra: su fallo no toca el ritual Web Audio.
+    }
+  }
+
+  /** Evalúa y dispara (una vez por sesión) el aviso de audio bloqueado. */
+  private notifyAudioBlockedHint(): void {
+    const state = this.context?.state ?? null;
+    if (!shouldShowAudioBlockedHint(state, this.blockedHintShown)) {
+      return;
+    }
+    this.blockedHintShown = true;
+    try {
+      this.onAudioBlocked();
+    } catch {
+      // El hint es cosmético: su callback no puede romper el audio.
     }
   }
 
@@ -533,9 +851,10 @@ export class AudioManager implements ISfxEngine {
     }
   }
 
-  /** Libera listeners, dron y contexto. No usar el manager después. */
+  /** Libera listeners, dron, media element y contexto. No usar después. */
   dispose(): void {
     this.detachUnlockListeners();
+    this.detachRecoveryListeners();
     this.stopEngine();
     const ctx = this.context;
     this.context = null;
@@ -543,6 +862,18 @@ export class AudioManager implements ISfxEngine {
     this.noiseBuffer = null;
     this.contextFailed = false;
     this.primedContext = false;
+    this.mediaElementAttempted = false;
+    this.blockedHintShown = false;
+    this.unlockedOnce = false;
+    const media = this.mediaElement;
+    this.mediaElement = null;
+    if (media) {
+      try {
+        media.pause();
+      } catch {
+        // Ya no hay dueño: si el pause falla, el volumen ~0 lo hace inofensivo.
+      }
+    }
     if (ctx) {
       try {
         void ctx.close().catch(() => {
@@ -577,18 +908,22 @@ export class AudioManager implements ISfxEngine {
       const t = ctx.currentTime;
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.value = ENGINE_FILTER_HZ;
+      filter.frequency.value = this.engineFilterProfile;
       filter.Q.value = 0.9;
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(ALMOST_ZERO, t);
-      gain.gain.exponentialRampToValueAtTime(AUDIO.engineVolume, t + ENGINE_ATTACK_SECONDS);
+      gain.gain.exponentialRampToValueAtTime(this.engineVolumeProfile, t + ENGINE_ATTACK_SECONDS);
 
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
       const sub = ctx.createOscillator();
       sub.type = 'sine';
-      this.scheduledEngineFreq = engineFrequencyForSpeed(this.latestSpeed, this.turboActive);
+      this.scheduledEngineFreq = engineFrequencyForSpeed(
+        this.latestSpeed,
+        this.turboActive,
+        this.mobileProfile,
+      );
       osc.frequency.value = this.scheduledEngineFreq;
       sub.frequency.value = this.scheduledEngineFreq / 2;
 
@@ -606,7 +941,9 @@ export class AudioManager implements ISfxEngine {
 
       // El filtro arranca en el brillo que corresponda al turbo vigente (y el
       // estado queda sincronizado para el guard de flancos de setTurboActive).
-      filter.frequency.value = this.turboActive ? ENGINE_FILTER_TURBO_HZ : ENGINE_FILTER_HZ;
+      filter.frequency.value = this.turboActive
+        ? this.engineFilterTurboProfile
+        : this.engineFilterProfile;
       this.filterTurboActive = this.turboActive;
     } catch {
       this.engineOsc = null;
@@ -668,7 +1005,7 @@ export class AudioManager implements ISfxEngine {
     try {
       if (this.engineFilter && this.context) {
         this.engineFilter.frequency.setTargetAtTime(
-          active ? ENGINE_FILTER_TURBO_HZ : ENGINE_FILTER_HZ,
+          active ? this.engineFilterTurboProfile : this.engineFilterProfile,
           this.context.currentTime,
           0.08,
         );
@@ -685,7 +1022,7 @@ export class AudioManager implements ISfxEngine {
     if (!engineOsc || !engineSub || !context) {
       return;
     }
-    const target = engineFrequencyForSpeed(this.latestSpeed, this.turboActive);
+    const target = engineFrequencyForSpeed(this.latestSpeed, this.turboActive, this.mobileProfile);
     if (Math.abs(target - this.scheduledEngineFreq) < ENGINE_FREQ_EPSILON) {
       return;
     }
@@ -810,6 +1147,93 @@ export class AudioManager implements ISfxEngine {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Recuperación tras interrupción (Fase 3, issue #4)                 */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Instala los listeners de recuperación: `onstatechange` del contexto y
+   * `visibilitychange` del documento. Se llama UNA vez, al crear el contexto
+   * (que puede existir antes del primer gesto si un `play()` lo creó): el
+   * handler decide con el estado vigente, así que instalarlo temprano no
+   * viola la política de autoplay.
+   */
+  private attachRecoveryListeners(ctx: AudioContextLike): void {
+    if (this.recoveryAttached) {
+      return;
+    }
+    try {
+      ctx.onstatechange = this.handleContextStateChange;
+    } catch {
+      // Sin onstatechange queda la red de visibilitychange y los gestos.
+    }
+    const visibility = this.visibilityTarget;
+    if (visibility) {
+      try {
+        visibility.addEventListener('visibilitychange', this.handleVisibilityChange);
+      } catch {
+        // Idem: el desbloqueo por gesto sigue disponible igualmente.
+      }
+    }
+    this.recoveryAttached = true;
+  }
+
+  /** Quita los listeners instalados por `attachRecoveryListeners` (si hay). */
+  private detachRecoveryListeners(): void {
+    const ctx = this.context;
+    if (ctx) {
+      try {
+        ctx.onstatechange = null;
+      } catch {
+        // El contexto ya no es nuestro: nada que hacer.
+      }
+    }
+    const visibility = this.visibilityTarget;
+    if (visibility) {
+      try {
+        visibility.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      } catch {
+        // Idem.
+      }
+    }
+    this.recoveryAttached = false;
+  }
+
+  /**
+   * Reintenta `resume()` sin nuevo gesto. Guards, en orden: contexto creado,
+   * desbloqueo previo (política de autoplay: sin gesto no se despierta),
+   * estado problemático (idempotencia: el propio `resume()` re-dispara
+   * `onstatechange` en `running` y corta acá, sin loops) y documento visible
+   * (iOS deniega el resume con la pestaña oculta).
+   */
+  private tryAutoResume(): void {
+    const ctx = this.context;
+    if (!ctx || !this.unlockedOnce) {
+      return;
+    }
+    if (ctx.state !== 'suspended' && ctx.state !== 'interrupted') {
+      return;
+    }
+    if (!this.isDocumentVisible()) {
+      return;
+    }
+    try {
+      // Veredicto del hint POST-resume, igual que en unlock() (fase 2): el
+      // estado se actualiza asincrónico y en `running` el hint no corresponde.
+      void ctx.resume().then(
+        () => this.notifyAudioBlockedHint(),
+        () => this.notifyAudioBlockedHint(),
+      );
+    } catch {
+      this.notifyAudioBlockedHint(); // resume lanzó sincrónico
+    }
+  }
+
+  /** false solo con documento OCULTO (sin target inyectado se asume visible). */
+  private isDocumentVisible(): boolean {
+    return this.visibilityTarget?.visibilityState !== 'hidden';
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Internos                                                          */
   /* ---------------------------------------------------------------- */
 
@@ -828,7 +1252,9 @@ export class AudioManager implements ISfxEngine {
     }
     if (!this.context) {
       this.contextFailed = true;
+      return null;
     }
+    this.attachRecoveryListeners(this.context);
     return this.context;
   }
 
@@ -920,6 +1346,31 @@ function defaultUnlockTarget(): UnlockEventTarget | null {
     return typeof window === 'undefined' ? null : window;
   } catch {
     return null;
+  }
+}
+
+/** Target default de visibilidad: el document del navegador (o null). */
+function defaultVisibilityTarget(): VisibilityEventTarget | null {
+  try {
+    return typeof document === 'undefined' ? null : document;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Perfil default del dron (issue #4, H4): móvil si el user agent lo dice
+ * (`isMobileLikeDevice`, pura en `core/device`), desktop en cualquier otro
+ * caso (tests de Node, navegadores sin `navigator`, errores).
+ */
+function defaultIsMobileProfile(): boolean {
+  try {
+    if (typeof navigator === 'undefined') {
+      return false;
+    }
+    return isMobileLikeDevice(navigator);
+  } catch {
+    return false;
   }
 }
 

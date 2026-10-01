@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AUDIO_SETTINGS_STORAGE_KEY,
   AudioManager,
+  buildSilentWavDataUri,
   engineFrequencyForSpeed,
   getAudioEngine,
+  shouldShowAudioBlockedHint,
   type AudioBufferLike,
   type AudioBufferSourceNodeLike,
   type AudioContextFactory,
@@ -13,10 +15,14 @@ import {
   type AudioNodeLike,
   type AudioParamLike,
   type BiquadFilterNodeLike,
+  type DocumentVisibilityStateLike,
   type GainNodeLike,
+  type MediaElementLike,
   type OscillatorNodeLike,
   type UnlockEventTarget,
+  type VisibilityEventTarget,
 } from '../audio/AudioManager';
+import { showAudioBlockedHint } from '../audio/AudioBlockedHint';
 import { AUDIO_ENGINE_REGISTRY_KEY } from '../audio/ISfxEngine';
 import { AUDIO, DRS_MULTIPLIER, MAX_SPEED, TURBO_MULTIPLIER } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
@@ -144,11 +150,59 @@ class FakeBuffer implements AudioBufferLike {
   }
 }
 
+class FakeMediaElement implements MediaElementLike {
+  loop = false;
+  volume = 1;
+  playCalls = 0;
+  paused = 0;
+  /** Si se asigna, `play()` devuelve esta promesa (para simular rechazo). */
+  playResult: Promise<void> | null = null;
+  /** Si true, `play()` lanza sincrónico (rarezas de WebViews viejos). */
+  throwOnPlay = false;
+
+  play(): Promise<void> {
+    this.playCalls += 1;
+    if (this.throwOnPlay) {
+      throw new Error('play lanzó sincrónico (fake)');
+    }
+    return this.playResult ?? Promise.resolve();
+  }
+
+  pause(): void {
+    this.paused += 1;
+  }
+}
+
+class FakeVisibilityTarget implements VisibilityEventTarget {
+  visibilityState: DocumentVisibilityStateLike = 'visible';
+  removed = 0;
+  private listener: (() => void) | null = null;
+
+  addEventListener(_type: 'visibilitychange', handler: () => void): void {
+    this.listener = handler;
+  }
+
+  removeEventListener(_type: 'visibilitychange', handler: () => void): void {
+    if (this.listener === handler) {
+      this.listener = null;
+    }
+    this.removed += 1;
+  }
+
+  /** Simula el cambio de visibilidad del documento (dispara el listener). */
+  change(state: DocumentVisibilityStateLike): void {
+    this.visibilityState = state;
+    this.listener?.();
+  }
+}
+
 class FakeAudioContext implements AudioContextLike {
   currentTime = 0;
   readonly sampleRate = 48000;
   state: AudioContextStateLike = 'suspended';
   readonly destination: AudioDestinationNodeLike = new FakeNode();
+  /** Handler de cambio de estado (el real lo dispara en cada paso de estado). */
+  onstatechange: (() => void) | null = null;
 
   resumeCount = 0;
   closeCount = 0;
@@ -161,6 +215,7 @@ class FakeAudioContext implements AudioContextLike {
   resume(): Promise<void> {
     this.resumeCount += 1;
     this.state = 'running';
+    this.onstatechange?.(); // el real también dispara statechange al recuperar
     return Promise.resolve();
   }
 
@@ -168,6 +223,12 @@ class FakeAudioContext implements AudioContextLike {
     this.closeCount += 1;
     this.state = 'closed';
     return Promise.resolve();
+  }
+
+  /** Simula el paso de estado del navegador (dispara `onstatechange`). */
+  simulateStateChange(state: AudioContextStateLike): void {
+    this.state = state;
+    this.onstatechange?.();
   }
 
   createOscillator(): OscillatorNodeLike {
@@ -208,6 +269,12 @@ class FakeAudioContext implements AudioContextLike {
 interface Harness {
   manager: AudioManager;
   ctx: FakeAudioContext;
+  /** Media element silencioso fake (lo que el workaround reproduce). */
+  media: FakeMediaElement;
+  /** Target de visibilidad fake (para simular `visibilitychange`). */
+  visibility: FakeVisibilityTarget;
+  /** Cantidad de veces que el manager disparó el aviso de audio bloqueado. */
+  hintCalls: () => number;
   factoryCalls: () => number;
   bus: EventBus<GameEvents>;
 }
@@ -217,9 +284,20 @@ function makeHarness(options?: {
   throws?: boolean;
   storage?: Storage | null;
   withBus?: boolean;
+  /** `null` = factory de media element que devuelve null (workaround off). */
+  mediaElement?: FakeMediaElement | null;
+  /**
+   * Perfil del dron (issue #4 H4): `true` = móvil. Por default se fija
+   * `false` (desktop) de forma EXPLÍCITA para que las 65 expectativas
+   * existentes no dependan del `navigator` del entorno de tests.
+   */
+  mobile?: boolean;
 }): Harness {
   let calls = 0;
+  let hints = 0;
   const ctx = new FakeAudioContext();
+  const media = new FakeMediaElement();
+  const visibility = new FakeVisibilityTarget();
   const factory: AudioContextFactory = () => {
     calls += 1;
     if (options?.throws) {
@@ -230,12 +308,29 @@ function makeHarness(options?: {
   const manager = new AudioManager({
     contextFactory: factory,
     storage: options?.storage === undefined ? new FakeStorage() : options.storage,
+    mediaElementFactory: options?.mediaElement === null ? () => null : () => media,
+    // El default real es el document: acá se usa el fake, para no tocar DOM.
+    visibilityTarget: visibility,
+    // El default real es el overlay DOM: acá se cuenta, para no tocar DOM.
+    onAudioBlocked: () => {
+      hints += 1;
+    },
+    // El default real autodetecta vía user agent: acá se fija el perfil.
+    mobileProfile: options?.mobile ?? false,
   });
   const bus = new EventBus<GameEvents>();
   if (options?.withBus) {
     manager.attachBus(bus);
   }
-  return { manager, ctx, factoryCalls: () => calls, bus };
+  return {
+    manager,
+    ctx,
+    media,
+    visibility,
+    hintCalls: () => hints,
+    factoryCalls: () => calls,
+    bus,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -281,6 +376,28 @@ describe('engineFrequencyForSpeed — mapeo velocidad → frecuencia', () => {
 
   it('mapea la punta combinada al máximo configurado', () => {
     expect(engineFrequencyForSpeed(CEILING)).toBeCloseTo(AUDIO.engineFreqMax, 5);
+  });
+
+  it('perfil móvil (issue #4 H4): una octava arriba, monótona y con turbo', () => {
+    // Los extremos caen en la banda móvil (parlante de celular: ~110 Hz sí
+    // se reproduce, a diferencia de los 55 Hz del perfil desktop).
+    expect(engineFrequencyForSpeed(0, false, true)).toBe(AUDIO.engineFreqMinMobile);
+    expect(engineFrequencyForSpeed(CEILING, false, true)).toBeCloseTo(AUDIO.engineFreqMaxMobile, 5);
+    expect(engineFrequencyForSpeed(0, false, true)).toBe(
+      engineFrequencyForSpeed(0, false) * 2,
+    );
+    expect(engineFrequencyForSpeed(CEILING, false, true)).toBe(
+      engineFrequencyForSpeed(CEILING, false) * 2,
+    );
+
+    // Misma forma lineal que el desktop: monótona creciente, turbo ≥ base.
+    let prev = engineFrequencyForSpeed(0, false, true);
+    for (let speed = 10; speed <= 900; speed += 10) {
+      const next = engineFrequencyForSpeed(speed, false, true);
+      expect(next).toBeGreaterThanOrEqual(prev);
+      expect(engineFrequencyForSpeed(speed, true, true)).toBeGreaterThanOrEqual(next);
+      prev = next;
+    }
   });
 });
 
@@ -406,6 +523,44 @@ describe('AudioManager — unlock (política de autoplay)', () => {
     expect(ctx.resumeCount).toBe(0);
   });
 
+  it('resume se dispara también con el estado `interrupted` de Safari', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'interrupted';
+
+    manager.unlock();
+
+    expect(ctx.resumeCount).toBe(1);
+  });
+
+  it('iOS que reporta `running` desde la creación: el primer gesto igual sirve el primer', () => {
+    const { manager, ctx } = makeHarness();
+    // iOS Safari puede crear el contexto YA `running` y aun así dejar mudos
+    // los nodos sintéticos: el primer no puede depender del guard de estado.
+    ctx.state = 'running';
+
+    manager.unlock();
+
+    expect(ctx.resumeCount).toBe(0); // sin estado suspendido no hay resume
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].connections.length).toBeGreaterThan(0);
+    expect(ctx.sources[0].started.length).toBe(1);
+  });
+
+  it('gestos subsiguientes no reproducen el primer de nuevo (aunque siga `running`)', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+
+    manager.unlock();
+    manager.unlock();
+    manager.unlock();
+
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].started.length).toBe(1);
+    expect(ctx.resumeCount).toBe(0);
+  });
+
   it('unlock tolera el contexto que lanza en resume', () => {
     const { manager, ctx } = makeHarness();
     ctx.resume = () => {
@@ -413,6 +568,330 @@ describe('AudioManager — unlock (política de autoplay)', () => {
     };
 
     expect(() => manager.unlock()).not.toThrow();
+  });
+});
+
+describe('AudioManager — workaround Ring/Silent (media element silencioso)', () => {
+  it('el primer gesto reproduce el media element UNA vez (loop, volumen casi 0)', () => {
+    const { manager, media } = makeHarness();
+
+    manager.unlock();
+    expect(media.playCalls).toBe(1);
+    expect(media.loop).toBe(true);
+    expect(media.volume).toBeGreaterThan(0); // no mudo del todo: iOS lo exige
+    expect(media.volume).toBeLessThan(0.01); // pero inaudible para humanos
+
+    // Gestos subsiguientes: ni re-create ni re-play.
+    manager.unlock();
+    manager.unlock();
+    expect(media.playCalls).toBe(1);
+  });
+
+  it('el media element se pausa en dispose', () => {
+    const { manager, media } = makeHarness();
+
+    manager.unlock();
+    manager.dispose();
+
+    expect(media.paused).toBe(1);
+  });
+
+  it('factory de media element null: el unlock sigue funcionando sin workaround', () => {
+    const { manager, ctx, media } = makeHarness({ mediaElement: null });
+
+    expect(() => manager.unlock()).not.toThrow();
+    // El resto del ritual (primer silencioso) se sirvió igual.
+    expect(ctx.buffers.length).toBe(1);
+    expect(media.playCalls).toBe(0);
+  });
+
+  it('si play() del media element rechaza, no lanza ni rompe el resto del unlock', async () => {
+    const { manager, ctx, media } = makeHarness();
+    media.playResult = Promise.reject(new Error('play bloqueado (fake)'));
+
+    expect(() => manager.unlock()).not.toThrow();
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].started.length).toBe(1);
+
+    await Promise.resolve(); // deja correr el catch de la promesa rechazada
+    expect(media.playCalls).toBe(1);
+  });
+
+  it('si play() lanza sincrónico también se tolera (misma degradación)', () => {
+    const { manager, ctx, media } = makeHarness();
+    media.throwOnPlay = true;
+
+    expect(() => manager.unlock()).not.toThrow();
+    expect(ctx.buffers.length).toBe(1);
+    expect(media.playCalls).toBe(1);
+  });
+});
+
+describe('AudioManager — hint de audio bloqueado (una vez por sesión)', () => {
+  /** Dos ticks de microtask: alcanzan para que el veredicto post-resume corra. */
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('resume rechazado (contexto sigue suspended) señala el hint UNA vez', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.resume = () => Promise.reject(new Error('resume bloqueado (fake)'));
+
+    manager.unlock();
+    await flushMicrotasks();
+    expect(hintCalls()).toBe(1);
+
+    manager.unlock(); // segundo gesto: el hint ya se mostró en esta sesión
+    await flushMicrotasks();
+    expect(hintCalls()).toBe(1);
+  });
+
+  it('resume resuelve pero el contexto queda suspendido igual → hint', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.resume = () => {
+      ctx.resumeCount += 1;
+      return Promise.resolve(); // sin pasar a running (Safari terco)
+    };
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(1);
+  });
+
+  it('resume exitoso (contexto running) → sin hint', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(ctx.state).toBe('running');
+    expect(hintCalls()).toBe(0);
+  });
+
+  it('contexto ya running desde la creación → sin hint', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.state = 'running';
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(0);
+  });
+
+  it('el flag de sesión del hint vive solo en memoria: nunca toca el storage', async () => {
+    const storage = new FakeStorage();
+    const { manager, ctx, hintCalls } = makeHarness({ storage });
+    ctx.resume = () => Promise.reject(new Error('resume bloqueado (fake)'));
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(1);
+    // El flag "ya mostrado" es estado de sesión en memoria: el storage solo
+    // guarda el mute (formulita.audio.v1), jamás el flag del hint.
+    expect(storage.length).toBe(0);
+  });
+
+  it('sin contexto (Web Audio ausente) → sin hint', async () => {
+    let hints = 0;
+    const manager = new AudioManager({
+      contextFactory: () => null,
+      storage: new FakeStorage(),
+      mediaElementFactory: () => null,
+      onAudioBlocked: () => {
+        hints += 1;
+      },
+    });
+
+    manager.unlock();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(hints).toBe(0);
+  });
+});
+
+describe('AudioManager — recuperación tras interrupción (Fase 3, issue #4)', () => {
+  /** Dos ticks de microtask: alcanzan para el veredicto post-resume. */
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('estado → `interrupted` con documento visible reanuda SIN nuevo gesto', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock(); // desbloqueo inicial (sin resume: ya running)
+
+    ctx.simulateStateChange('interrupted'); // llamada/Siri/bloqueo de pantalla
+
+    expect(ctx.resumeCount).toBe(1); // recuperación automática
+    expect(ctx.state).toBe('running');
+  });
+
+  it('`suspended` también se recupera automáticamente tras el desbloqueo', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    ctx.simulateStateChange('suspended');
+
+    expect(ctx.resumeCount).toBe(1);
+    expect(ctx.state).toBe('running');
+  });
+
+  it('con documento oculto NO reintenta; al volver a visible sí', () => {
+    const { manager, ctx, visibility } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    visibility.change('hidden');
+    ctx.simulateStateChange('suspended');
+    expect(ctx.resumeCount).toBe(0); // iOS deniega el resume en background
+
+    visibility.change('visible'); // vuelve la pestaña: reintenta
+    expect(ctx.resumeCount).toBe(1);
+    expect(ctx.state).toBe('running');
+  });
+
+  it('sin desbloqueo previo NO se fuerza resume (política de autoplay)', () => {
+    const { manager, ctx } = makeHarness();
+    manager.play('coin'); // crea el contexto SIN gesto (sin unlock)
+
+    ctx.simulateStateChange('suspended');
+    ctx.simulateStateChange('interrupted');
+
+    expect(ctx.resumeCount).toBe(0);
+  });
+
+  it('el handler es idempotente: volver a `running` no dispara nada (sin loops)', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    ctx.simulateStateChange('running'); // estado sano: no-op
+    expect(ctx.resumeCount).toBe(0);
+
+    ctx.simulateStateChange('interrupted'); // interrupción → auto-resume
+    // El propio resume dispara onstatechange (fake) con `running`: si el
+    // handler no fuera idempotente, acá entraría en loop.
+    expect(ctx.resumeCount).toBe(1);
+    expect(ctx.state).toBe('running');
+
+    ctx.simulateStateChange('running');
+    expect(ctx.resumeCount).toBe(1);
+  });
+
+  it('dispose remueve los listeners: el handler post-dispose no reanuda', () => {
+    const { manager, ctx, visibility } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    manager.dispose();
+    expect(ctx.onstatechange).toBeNull();
+    expect(visibility.removed).toBe(1);
+
+    ctx.simulateStateChange('interrupted');
+    visibility.change('visible');
+    expect(ctx.resumeCount).toBe(0);
+  });
+
+  it('tras la recuperación a `running` NO se muestra el hint de audio bloqueado', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    ctx.simulateStateChange('interrupted');
+    await flushMicrotasks(); // deja correr el veredicto post-resume
+
+    expect(ctx.state).toBe('running');
+    expect(hintCalls()).toBe(0);
+  });
+
+  it('auto-resume que falla (sigue suspended) evalúa el hint como el unlock (fase 2)', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+    ctx.resume = () => {
+      ctx.resumeCount += 1;
+      return Promise.resolve(); // Safari terco: no pasa a running
+    };
+
+    ctx.simulateStateChange('interrupted');
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(1);
+  });
+});
+
+describe('shouldShowAudioBlockedHint — decisión pura del hint', () => {
+  it('solo muestra con contexto no-running y sin repeticiones de sesión', () => {
+    expect(shouldShowAudioBlockedHint('suspended', false)).toBe(true);
+    expect(shouldShowAudioBlockedHint('interrupted', false)).toBe(true);
+    expect(shouldShowAudioBlockedHint('closed', false)).toBe(true);
+    expect(shouldShowAudioBlockedHint('running', false)).toBe(false);
+    expect(shouldShowAudioBlockedHint('suspended', true)).toBe(false);
+    expect(shouldShowAudioBlockedHint(null, false)).toBe(false); // sin contexto
+  });
+});
+
+describe('buildSilentWavDataUri — WAV silencioso inline (cero assets)', () => {
+  it('genera un WAV PCM 16-bit mono con header válido y muestras en cero', () => {
+    const uri = buildSilentWavDataUri();
+    expect(uri.startsWith('data:audio/wav;base64,')).toBe(true);
+
+    const bytes = Buffer.from(uri.slice('data:audio/wav;base64,'.length), 'base64');
+    expect(bytes.length).toBeGreaterThan(44);
+    expect(bytes.toString('ascii', 0, 4)).toBe('RIFF');
+    expect(bytes.toString('ascii', 8, 12)).toBe('WAVE');
+    expect(bytes.toString('ascii', 12, 16)).toBe('fmt ');
+    expect(bytes.readUint32LE(16)).toBe(16); // chunk fmt estándar
+    expect(bytes.readUint16LE(20)).toBe(1); // PCM
+    expect(bytes.readUint16LE(22)).toBe(1); // mono
+    expect(bytes.readUint32LE(24)).toBe(8000); // sample rate
+    expect(bytes.readUint16LE(34)).toBe(16); // bits por muestra
+    expect(bytes.toString('ascii', 36, 40)).toBe('data');
+    expect(bytes.readUint32LE(40)).toBe(bytes.length - 44);
+    for (let i = 44; i < bytes.length; i += 1) {
+      if (bytes[i] !== 0) {
+        expect.unreachable(`byte ${i} no es silencio`);
+      }
+    }
+  });
+
+  it('es memoizado: misma constante para toda la sesión', () => {
+    expect(buildSilentWavDataUri()).toBe(buildSilentWavDataUri());
+  });
+});
+
+describe('showAudioBlockedHint — overlay DOM (thin)', () => {
+  const HINT_MARK = 'volumen y el silencio';
+
+  const hintNodes = (): Element[] =>
+    [...document.body.querySelectorAll('div[role="status"]')].filter((n) =>
+      n.textContent?.includes(HINT_MARK),
+    );
+
+  it('aparece una sola vez (dedupe) y se auto-remueve a los ~4 s', () => {
+    vi.useFakeTimers();
+    try {
+      showAudioBlockedHint();
+      expect(hintNodes().length).toBe(1);
+
+      showAudioBlockedHint(); // segunda llamada: reinicia, no duplica
+      expect(hintNodes().length).toBe(1);
+
+      vi.advanceTimersByTime(4500);
+      expect(hintNodes().length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      for (const node of hintNodes()) {
+        node.remove();
+      }
+    }
   });
 });
 
@@ -573,6 +1052,54 @@ describe('AudioManager — dron del motor', () => {
     // Idempotente: un segundo start no duplica osciladores.
     manager.startEngine();
     expect(ctx.oscillators.length).toBe(2);
+  });
+
+  it('perfil desktop (default del harness): banda, lowpass y ganancia clásicos', () => {
+    const { manager, ctx } = makeHarness();
+
+    manager.startEngine();
+
+    // A velocidad 0 el dron arranca en la frecuencia mínima del perfil, con
+    // el corte del lowpass y el volumen desktop EXACTOS (issue #4 H4: el
+    // perfil clásico no cambia).
+    expect(ctx.oscillators[0].frequency.value).toBe(AUDIO.engineFreqMin);
+    expect(ctx.filters[0].frequency.value).toBe(AUDIO.engineFilterHz);
+    expect(ctx.gains[1].gain.valuesOf('exponentialRamp')).toEqual([AUDIO.engineVolume]);
+  });
+
+  it('perfil móvil: el dron arranca una octava arriba, lowpass abierto y más ganancia', () => {
+    const { manager, ctx } = makeHarness({ mobile: true });
+
+    manager.startEngine();
+
+    expect(ctx.oscillators.length).toBe(2);
+    // Fundamental y sub según el perfil móvil (los parlantes de un celular
+    // apenas reproducen < ~400 Hz: la banda desktop quedaba inaudible).
+    expect(ctx.oscillators[0].frequency.value).toBe(AUDIO.engineFreqMinMobile);
+    expect(ctx.oscillators[1].frequency.value).toBe(AUDIO.engineFreqMinMobile / 2);
+    // El lowpass se abre para dejar pasar los armónicos de la nueva banda.
+    expect(ctx.filters[0].frequency.value).toBe(AUDIO.engineFilterHzMobile);
+    // El parlante chico rinde menos: más ganancia pico que el desktop.
+    expect(ctx.gains[1].gain.valuesOf('exponentialRamp')).toEqual([AUDIO.engineVolumeMobile]);
+  });
+
+  it('perfil móvil: sigue la velocidad y el turbo con el mapeo móvil', () => {
+    const { manager, ctx } = makeHarness({ mobile: true });
+    manager.startEngine();
+    const sawFreq = ctx.oscillators[0].frequency;
+    const lastTarget = (): number => {
+      const values = sawFreq.valuesOf('setTarget');
+      return values[values.length - 1];
+    };
+
+    manager.setEngineSpeed(300);
+    expect(lastTarget()).toBe(engineFrequencyForSpeed(300, false, true));
+
+    manager.setTurboActive(true);
+    expect(lastTarget()).toBe(engineFrequencyForSpeed(300, true, true));
+    // Y el lowpass se abre al corte móvil con turbo (flanco del turbo).
+    const filterTargets = ctx.filters[0].frequency.valuesOf('setTarget');
+    expect(filterTargets[filterTargets.length - 1]).toBe(AUDIO.engineFilterTurboHzMobile);
   });
 
   it('programa la frecuencia según la velocidad con umbral anti-spam', () => {
