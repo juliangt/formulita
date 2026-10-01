@@ -16,8 +16,6 @@
 name: Deploy a GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +23,7 @@ permissions:
   pages: write
   id-token: write
 
-# Un deploy a la vez; los push nuevos esperan (no cancelan un deploy en curso).
+# Un deploy a la vez; las ejecuciones nuevas esperan (no cancelan un deploy en curso).
 concurrency:
   group: pages
   cancel-in-progress: false

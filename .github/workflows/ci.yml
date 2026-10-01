@@ -1,4 +1,4 @@
-# CI — verificación de cada PR a main (M3).
+# CI — verificación manual (M3).
 #
 # Corre la suite completa y el build de producción SIN VITE_TRYSTERO_APP_ID:
 # el appId es un requisito de RUNTIME (fail-fast al abrir el multijugador,
@@ -8,8 +8,6 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
