@@ -559,6 +559,27 @@ export interface SpawnSystemDeps {
   readonly difficulty: { readonly params: DifficultyParams };
 }
 
+/**
+ * Fuente de rng por entidad (M0, multijugador): devuelve el stream sembrado
+ * para la entidad (`family`, `spawnIndex`). El índice es el contador GLOBAL
+ * de pedidos despachados, función pura de la salida del scheduler, así que
+ * la semilla no depende del estado local de los pools (determinista).
+ */
+export type EntityRngSource = (family: EntityFamily, spawnIndex: number) => Rng;
+
+/**
+ * Opciones inyectables del SpawnSystem (M0, multijugador). Ambas opcionales
+ * y con defaults EXACTAMENTE iguales al comportamiento de siempre: sin
+ * opciones, el sistema crea su propio `SpawnScheduler` (rng = Math.random)
+ * y no asigna rng a las entidades — el modo solo no cambia en nada.
+ */
+export interface SpawnSystemOptions {
+  /** Scheduler propio de la sala (p. ej. alimentado por VirtualClock). */
+  readonly scheduler?: SpawnScheduler;
+  /** Semillas por entidad (rivales con cambio de carril determinista). */
+  readonly entityRng?: EntityRngSource;
+}
+
 const FAMILY_KEYS: readonly EntityFamily[] = ['rival', 'coin', 'hazard', 'pickup'];
 
 /**
@@ -573,11 +594,17 @@ export class SpawnSystem {
 
   private readonly deps: SpawnSystemDeps;
   private readonly pools: Record<EntityFamily, ObjectPool<TrackEntity>>;
-  private readonly scheduler = new SpawnScheduler();
+  private readonly entityRng: EntityRngSource | undefined;
+  /** Scheduler de oleadas (público: el mismo de la sala, espiable en tests). */
+  readonly scheduler: SpawnScheduler;
+  /** Contador global de pedidos despachados (semilla por entidad; se resetea con la carrera). */
+  private spawnIndex = 0;
   private running = true;
 
-  constructor(scene: Phaser.Scene, deps: SpawnSystemDeps) {
+  constructor(scene: Phaser.Scene, deps: SpawnSystemDeps, options: SpawnSystemOptions = {}) {
     this.deps = deps;
+    this.scheduler = options.scheduler ?? new SpawnScheduler();
+    this.entityRng = options.entityRng;
 
     // Un grupo arcade por familia: los overlaps de GameScene se registran
     // una sola vez por grupo y los bodies deshabilitados no colisionan.
@@ -649,6 +676,7 @@ export class SpawnSystem {
   /** Vacia pools y oleadas (arranque de una carrera nueva). */
   reset(): void {
     this.scheduler.reset();
+    this.spawnIndex = 0;
     for (const family of FAMILY_KEYS) {
       const pool = this.pools[family];
       pool.forEachActive((entity) => entity.recycle());
@@ -666,12 +694,23 @@ export class SpawnSystem {
 
   /* --------------------- internos --------------------- */
 
-  /** Instancia un pedido: pool por familia; si está al tope, se descarta. */
+  /**
+   * Instancia un pedido: pool por familia; si está al tope, se descarta.
+   * Multijugador: los pedidos de familia rival reciben (antes de `spawn()`)
+   * su rng sembrado por `entityRng(family, spawnIndex)`. El índice avanza
+   * por PEDIDO (no por adquisición exitosa) para que la semilla sea función
+   * pura de la salida del scheduler y no del estado local de los pools.
+   */
   private dispatch(request: SpawnRequest): void {
     const definition: EntityDefinition = ENTITY_DEFINITIONS[request.kind];
+    const spawnIndex = this.spawnIndex;
+    this.spawnIndex += 1;
     const entity = this.pools[definition.family].acquire();
     if (!entity) {
       return;
+    }
+    if (this.entityRng && entity instanceof RivalCar) {
+      entity.setRng(this.entityRng('rival', spawnIndex));
     }
     entity.spawn(request.x, request.y, definition);
   }
