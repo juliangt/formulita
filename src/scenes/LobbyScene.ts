@@ -566,7 +566,8 @@ export class LobbyScene extends Phaser.Scene {
    * pausar nada). La escena NO está en el array de `gameConfig.ts` — se
    * registra on-demand la primera vez y queda disponible para la sesión. El
    * envío viaja como callback: el overlay nunca toca el NetClient, así que
-   * cerrar el chat no rompe la sala.
+   * cerrar el chat no rompe la sala. C2: se pide la tab SALA explícita
+   * (PÚBLICO también vive acá, pero el lobby abre por default en SALA).
    */
   private openChatOverlay(): void {
     if (!this.chatStore) {
@@ -577,6 +578,7 @@ export class LobbyScene extends Phaser.Scene {
     }
     this.scene.launch(ChatScene.KEY, {
       thread: ROOM_THREAD_ID,
+      tab: 'room',
       sendChat: (text: string) => this.client?.sendChat(text),
     });
   }

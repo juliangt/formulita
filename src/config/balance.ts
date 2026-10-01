@@ -180,8 +180,19 @@ export const MENU = {
   multiHeight: 118,
   /** Tamaño de fuente de la etiqueta MULTIJUGADOR (px). */
   multiFontSize: 40,
+  /* C2 (issue #2) — botón CHAT: debajo de MULTIJUGADOR, mismo ancho; abre el
+   * overlay con la tab PÚBLICO (el chat social vive también en el menú). El
+   * bloque de ayuda baja para hacerle sitio (helpY 1150 → 1204): quedan 9 px
+   * de aire a cada lado del botón y 13 px de margen inferior. */
+  /** Centro Y del botón CHAT del menú. */
+  chatY: 1096,
+  /** Ancho/alto del botón CHAT (mismo ancho que JUGAR/MULTIJUGADOR). */
+  chatWidth: 400,
+  chatHeight: 64,
+  /** Tamaño de fuente de la etiqueta CHAT (px). */
+  chatFontSize: 34,
   /** Y del centro del bloque de ayuda de controles. */
-  helpY: 1150,
+  helpY: 1204,
   /** Separación vertical entre líneas de ayuda (px). */
   helpLineHeight: 34,
   /** Tamaño de fuente de las líneas de récord/monedas (px). */
@@ -790,6 +801,32 @@ export const CHAT = {
   closeFontSize: 34,
   /** Color CSS de los mensajes propios (destacados, amarillo del repo). */
   selfColor: '#f7c531',
+  /* C2 (issue #2) — tab PÚBLICO (sala de presencia): toggle grande de
+   * disponibilidad + lista de disponibles + detalle al tocar una fila. La
+   * lista ocupa el mismo panel que los mensajes (listBottomY como borde
+   * inferior) pero anclada ARRIBA (las primeras filas). */
+  /** Y del toggle MOSTRARME DISPONIBLE (centro). */
+  publicToggleY: 388,
+  /** Tamaño del toggle. */
+  publicToggleWidth: 600,
+  publicToggleHeight: 104,
+  publicToggleFontSize: 30,
+  /** Borde superior del panel de disponibles (Y del borde). */
+  peerListTopY: 480,
+  /** Y de la primera fila de disponibles; una fila por peer. */
+  peerRowStartY: 530,
+  /** Separación vertical entre filas de disponibles (px). */
+  peerRowHeight: 64,
+  /** Tamaño de fuente de las filas de disponibles (px). */
+  peerRowFontSize: 30,
+  /** Cuadrado de color a la izquierda del nombre (px). */
+  peerSwatchSize: 28,
+  /** Máximo de filas renderizadas (siempre las PRIMERAS). */
+  visiblePeers: 5,
+  /** Y del detalle del peer tocado / errores de presencia (centro). */
+  peerDetailY: 948,
+  /** Tamaño de fuente del detalle (px). */
+  peerDetailFontSize: 26,
 } as const;
 
 /* ------------------------------------------------------------------ */

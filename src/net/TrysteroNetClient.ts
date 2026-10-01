@@ -37,6 +37,7 @@
 
 import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
 import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
+import type { NetEnvSource } from './appId';
 import { assignColors, isRoomFull, resolveHostPeerId } from './lobbyState';
 import type { NetClient, CreateRoomOptions, JoinRoomOptions } from './NetClient';
 import {
@@ -95,25 +96,13 @@ export type RoomFactory = (appId: string, roomId: string) => TrysteroRoom;
 const defaultRoomFactory: RoomFactory = (appId, roomId) =>
   joinRoom({ appId }, roomId) as unknown as TrysteroRoom;
 
-/** Entorno de Vite (por defecto el real; los tests inyectan el suyo). */
-export interface NetEnvSource {
-  readonly VITE_TRYSTERO_APP_ID?: string;
-}
-
 /**
- * Resuelve el appId de Trystero desde el entorno. Fail-fast: sin
- * `VITE_TRYSTERO_APP_ID` no hay matchmaking posible, y conectar "en
- * silencio" con un appId vacío daría salas fantasma — mejor un error claro
- * que la UI del lobby muestra. (Definirlo en `.env.local` para dev y en el
- * CI para producción; ver `.env.example`.)
+ * Resolución del appId + tipo del entorno: MOVIDOS a `net/appId.ts` (C2) porque
+ * TrysteroChatClient (sala pública de presencia) resuelve el MISMO appId —
+ * se re-exportan acá para no romper los imports existentes (escenas y tests).
  */
-export function resolveAppId(env: NetEnvSource = import.meta.env): string {
-  const appId = env.VITE_TRYSTERO_APP_ID?.trim();
-  if (!appId) {
-    throw new Error('falta VITE_TRYSTERO_APP_ID (namespace de matchmaking de Trystero; ver .env.example)');
-  }
-  return appId;
-}
+export { resolveAppId } from './appId';
+export type { NetEnvSource } from './appId';
 
 /** Opciones del constructor (todas con default = red real). */
 export interface TrysteroNetClientOptions {

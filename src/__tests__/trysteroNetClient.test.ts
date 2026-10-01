@@ -6,81 +6,17 @@ import {
   MAX_WORD_REGEN_ATTEMPTS,
   resolveAppId,
   TrysteroNetClient,
-  type ActionSendOptions,
-  type TrysteroAction,
-  type TrysteroRoom,
 } from '../net/TrysteroNetClient';
+import { FakeTrysteroRoom } from './fakes/FakeTrysteroRoom';
 import type { ChatPayload, PeerMeta, StartPayload } from '../net/protocol';
 
 /**
  * Tests del TrysteroNetClient (M1) con roomFactory FAKE: un doble
- * estructural de la room de Trystero (makeAction/onPeerJoin/onPeerLeave/
- * getPeers/leave) permite ejercitar TODO el flujo del lobby sin red — la
- * red real (WebRTC + señalización torrent) se valida jugando.
+ * estructural de la room de Trystero (`fakes/FakeTrysteroRoom`, compartido
+ * con los tests del chat client de C2) permite ejercitar TODO el flujo del
+ * lobby sin red — la red real (WebRTC + señalización torrent) se valida
+ * jugando.
  */
-
-/** Acción fake: registra los envíos y permite disparar onMessage. */
-interface RecordedAction<T> extends TrysteroAction<T> {
-  readonly sends: Array<{ data: T; options?: ActionSendOptions }>;
-}
-
-/** Doble de la room de Trystero: mismo subconjunto estructural que usa el cliente. */
-class FakeTrysteroRoom implements TrysteroRoom {
-  onPeerJoin: ((peerId: string) => void) | null = null;
-  onPeerLeave: ((peerId: string) => void) | null = null;
-  /** Peers "conectados" (lo que devolvería getPeers de Trystero). */
-  peers: Record<string, unknown> = {};
-  left = false;
-  readonly calls: Array<{ appId: string; roomId: string }> = [];
-  private readonly actions = new Map<string, RecordedAction<never>>();
-
-  makeAction<T>(namespace: string): TrysteroAction<T> {
-    const existing = this.actions.get(namespace);
-    if (existing) {
-      return existing as unknown as TrysteroAction<T>;
-    }
-    const action: RecordedAction<never> = {
-      sends: [],
-      send: ((data: never, options?: ActionSendOptions) => {
-        action.sends.push({ data, options });
-      }) as never,
-      onMessage: null,
-    };
-    this.actions.set(namespace, action);
-    return action as unknown as TrysteroAction<T>;
-  }
-
-  /** Acción grabada por namespace (para inspeccionar sends/disparar onMessage). */
-  recorded<T>(namespace: string): RecordedAction<T> {
-    return this.actions.get(namespace) as unknown as RecordedAction<T>;
-  }
-
-  getPeers(): Readonly<Record<string, unknown>> {
-    return this.peers;
-  }
-
-  leave(): void {
-    this.left = true;
-  }
-
-  /** Simula la conexión de un peer remoto (dispara onPeerJoin local). */
-  connectPeer(peerId: string): void {
-    this.peers[peerId] = {};
-    this.onPeerJoin?.(peerId);
-  }
-
-  /** Simula la desconexión de un peer remoto (dispara onPeerLeave local). */
-  disconnectPeer(peerId: string): void {
-    delete this.peers[peerId];
-    this.onPeerLeave?.(peerId);
-  }
-
-  /** Entrega un mensaje de acción como si viniera de un peer remoto. */
-  receive<T>(namespace: string, data: T, from: string): void {
-    const action = this.recorded<T>(namespace);
-    action.onMessage?.(data, { peerId: from });
-  }
-}
 
 /**
  * Crea un cliente con roomFactory fake; `room()` resuelve a la ÚLTIMA room
