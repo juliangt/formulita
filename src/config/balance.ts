@@ -668,6 +668,14 @@ export const SPECTATOR_OVERLAY = {
   subtitleFontSize: 28,
   /** Profundidad: por encima del HUD de carrera, bajo el HUD táctil. */
   depth: 46,
+  /* C3 (issue #2, decisión 2A) — botón CHAT del espectador: SOLO existe
+   * para el eliminado (nunca para el vivo — ver chat/spectatorChat.ts).
+   * Va centrado bajo el subtítulo, fuera de la franja de posiciones. */
+  /** Y del botón CHAT del espectador (centro). */
+  chatButtonY: 420,
+  chatButtonWidth: 240,
+  chatButtonHeight: 76,
+  chatButtonFontSize: 32,
 } as const;
 
 /**
@@ -827,6 +835,38 @@ export const CHAT = {
   peerDetailY: 948,
   /** Tamaño de fuente del detalle (px). */
   peerDetailFontSize: 26,
+  /* C3 (issue #2) — hilo de DM: el header del peer ocupa la fila de tabs y
+   * la acción de la fila de CERRAR pasa a ser VOLVER + BLOQUEAR (+ INVITAR
+   * si estoy en un lobby con palabra activa). El panel de mensajes/input es
+   * el MISMO ChatPanel de la tab SALA (mismas posiciones). */
+  /** Separación entre el swatch y el nombre del header del DM (px). */
+  dmHeaderGap: 16,
+  /** Tamaño del swatch de color del header del DM (px). */
+  dmHeaderSwatchSize: 32,
+  /** Tamaño de fuente del header del DM (px). */
+  dmHeaderFontSize: 34,
+  /** Botones del hilo de DM: fila de CERRAR, tres al ancho de la lista. */
+  dmButtonY: 1196,
+  dmButtonWidth: 200,
+  dmButtonHeight: 92,
+  dmButtonFontSize: 26,
+  /** Centros X de VOLVER / BLOQUEAR / INVITAR (fila de 3 sobre 640 px). */
+  dmBackX: 140,
+  dmBlockX: 360,
+  dmInviteX: 580,
+  /* C3 — banner de invitación (tab PÚBLICO): texto en la línea del detalle
+   * + botones UNIRSE / IGNORAR debajo (la fila del ENVIAR está libre en la
+   * vista de lista). */
+  /** Y de los botones UNIRSE / IGNORAR del banner (centro). */
+  inviteButtonY: 1064,
+  inviteButtonWidth: 300,
+  inviteButtonHeight: 96,
+  inviteButtonFontSize: 34,
+  /** Centros X de UNIRSE / IGNORAR. */
+  inviteJoinX: 220,
+  inviteDismissX: 500,
+  /** Color CSS de los mensajes de sistema del hilo (avisos locales). */
+  systemColor: '#9aa0a8',
 } as const;
 
 /* ------------------------------------------------------------------ */

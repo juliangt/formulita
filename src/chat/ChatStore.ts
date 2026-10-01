@@ -9,11 +9,16 @@
  * - SALIDA: la UI llama `sendRoomMessage`/`sendDm`; el store valida el
  *   cooldown y sanitiza el texto, y devuelve el `ChatMessage` listo o `null`
  *   (rechazado). Si no es null, QUIEN LLAMÓ lo envía por la red — el store
- *   no conoce el transporte.
+ *   no conoce el transporte. C3: `sendDm` ADEMÁS rechaza el envío hacia un
+ *   peer BLOQUEADO (guarda de salida — ver `blockPeer`).
  * - ENTRADA: el adaptador de red llama `receiveRoomMessage`/`receiveDm` con
  *   lo que llegó; el store sanitiza de nuevo (misma regla), descarta los de
  *   peers bloqueados ANTES de que entren al estado de UI y devuelve el
  *   mensaje agregado o `null` (descartado).
+ *
+ * Además de los mensajes conversacionales, cada hilo puede recibir avisos de
+ * SISTEMA locales (`appendSystemMessage`, C3): notas del propio cliente
+ * ("BLOQUEASTE A NOMBRE") sin remitente que no suman no leídos.
  *
  * Hilos: `room` (el chat de la sala de partida, uno solo) + uno por `peerId`
  * (DM). Los hilos de DM se crean ON-DEMAND al primer mensaje (enviado o
@@ -52,6 +57,12 @@ export interface ChatMessage {
   readonly at: number;
   /** true si lo envié yo (mensajes propios: no suman no leídos). */
   readonly mine: boolean;
+  /**
+   * true para los mensajes de SISTEMA (avisos locales del propio hilo: se
+   * bloqueó a alguien, se invitó a una partida…). No son de nadie: no llevan
+   * remitente ni suman no leídos, y la UI los pinta neutros y centrados.
+   */
+  readonly system?: boolean;
 }
 
 /** Opciones del store: identidad propia + reloj inyectable. */
@@ -155,12 +166,18 @@ export class ChatStore {
 
   /**
    * Igual que `sendRoomMessage` pero para el hilo de DM de `peerId` (se crea
-   * on-demand si no existía). Se permite enviar aunque el peer esté marcado
-   * DESCONECTADO o bloqueado (el bloqueo descarta al RECIBIR — ver
-   * `blockPeer`): el store solo opina sobre cooldown y texto; la UI decide
-   * si ofrece el botón.
+   * on-demand si no existía). C3 — GUARDA DE SALIDA DEL BLOQUEO: si el peer
+   * está bloqueado, el envío se rechaza (null, sin consumir cooldown ni crear
+   * el hilo): bloquear a alguien corta la conversación en AMBOS sentidos (sus
+   * mensajes no entran por `receiveDm`, los míos no salen por acá). En cambio
+   * se permite enviar aunque el peer esté marcado DESCONECTADO: el store solo
+   * opina sobre cooldown/texto/bloqueo; la disponibilidad la decide la capa de
+   * presencia y la UI deshabilita el input cuando el hilo está caído.
    */
   sendDm(peerId: string, text: string, now?: number): ChatMessage | null {
+    if (this.isBlocked(peerId)) {
+      return null;
+    }
     return this.send(peerId, text, now);
   }
 
@@ -237,7 +254,9 @@ export class ChatStore {
 
   /**
    * Agrega el mensaje a su hilo (creándolo on-demand) y suma no leídos si es
-   * ajeno. Único punto de entrada de mensajes al estado de UI.
+   * ajeno. Único punto de entrada de mensajes al estado de UI. Los mensajes
+   * de SISTEMA nunca suman no leídos: son avisos locales del propio hilo (el
+   * usuario ya lo está mirando cuando se generan), no contenido de nadie.
    */
   private append(message: ChatMessage): void {
     let thread = this.threads.get(message.threadId);
@@ -247,9 +266,35 @@ export class ChatStore {
       this.unread.set(message.threadId, 0);
     }
     thread.push(message);
-    if (!message.mine) {
+    if (!message.mine && !message.system) {
       this.unread.set(message.threadId, (this.unread.get(message.threadId) ?? 0) + 1);
     }
+  }
+
+  /**
+   * Agrega un aviso de SISTEMA local al hilo (C3): "BLOQUEASTE A NOMBRE",
+   * "INVITASTE A …", etc. Se crea on-demand igual que un mensaje normal, NO
+   * lleva remitente, NO suma no leídos y NO consume cooldown. Devuelve el
+   * mensaje agregado para que la UI lo pinte (los de texto vacío se rechazan
+   * con null, sin tocar el hilo).
+   */
+  appendSystemMessage(threadId: string, text: string, at?: number): ChatMessage | null {
+    const clean = this.sanitizeText(text);
+    if (clean.length === 0) {
+      return null;
+    }
+    const message: ChatMessage = {
+      threadId,
+      fromPeerId: '',
+      fromName: '',
+      color: 0,
+      text: clean,
+      at: at ?? this.nowFn(),
+      mine: false,
+      system: true,
+    };
+    this.append(message);
+    return message;
   }
 
   /* ---------------------------------------------------------------- */
@@ -299,12 +344,12 @@ export class ChatStore {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Bloquea un peer: SUS MENSAJES SE DESCARTAN AL RECIBIR (ni entran al
-   * estado de UI, no suman no leídos). Solo filtra la ENTRADA: el envío
-   * propio hacia él sigue permitido — es el receptor quien descarta lo que
-   * no quiere ver. Es POR SESIÓN: no se persiste, porque los peerId de
-   * Trystero cambian en cada conexión (bloquear un peerId viejo no serviría
-   * de nada al reconectar).
+   * Bloquea un peer: la conversación se corta EN AMBOS SENTIDOS — sus
+   * mensajes se DESCARTAN al recibir (`receiveDm` → null, ni entran al
+   * estado de UI ni suman no leídos) y los míos hacia él se rechazan al
+   * enviar (`sendDm` → null, guarda de salida de C3). Es POR SESIÓN: no se
+   * persiste, porque los peerId de Trystero cambian en cada conexión
+   * (bloquear un peerId viejo no serviría de nada al reconectar).
    */
   blockPeer(peerId: string): void {
     this.blocked.add(peerId);
@@ -355,6 +400,19 @@ export class ChatStore {
   /* ---------------------------------------------------------------- */
   /* Ciclo de sesión                                                   */
   /* ---------------------------------------------------------------- */
+
+  /**
+   * Vacia UN hilo (mensajes, no leídos y cooldown) sin tocar los demás. C3 lo
+   * usa cuando MUERE la sala de partida: el hilo `room` desaparece con su
+   * sala, pero los hilos de DM SON de la sesión social y sobreviven (igual
+   * que el bloqueo). La disponibilidad no se toca: la alimenta la capa de
+   * presencia con la lista viva de disponibles.
+   */
+  clearThread(threadId: string): void {
+    this.threads.delete(threadId);
+    this.lastSentAt.delete(threadId);
+    this.unread.delete(threadId);
+  }
 
   /**
    * Vacia mensajes, no leídos, cooldowns y disponibilidad (al salir de la

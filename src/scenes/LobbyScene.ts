@@ -33,7 +33,7 @@
 import Phaser from 'phaser';
 import { LOBBY, MENU, MULTIPLAYER, TRACK } from '../config/balance';
 import { ChatStore, ROOM_THREAD_ID } from '../chat/ChatStore';
-import { removeSessionChatStore, setSessionChatStore } from '../chat/chatSession';
+import { ensureSessionChatStore } from '../chat/chatSession';
 import { receiveRoomChat } from '../chat/roomChat';
 import { getSessionEventBus } from '../core/EventBus';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
@@ -106,6 +106,11 @@ const WORD_INPUT_CSS = {
 export interface LobbySceneData {
   readonly mode: 'create' | 'join';
   readonly name?: string;
+  /**
+   * C3 — palabra de sala PRECARGADA (invitación aceptada): si llega, el
+   * input de UNIRSE arranca con este valor.
+   */
+  readonly keyword?: string;
 }
 
 /** Parseo defensivo del init data (Phaser lo propaga como unknown). */
@@ -113,7 +118,8 @@ function parseLobbyData(raw: unknown): LobbySceneData {
   const record = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
   const mode = record.mode === 'join' ? 'join' : 'create';
   const name = typeof record.name === 'string' ? record.name : undefined;
-  return { mode, name };
+  const keyword = typeof record.keyword === 'string' ? record.keyword : undefined;
+  return { mode, name, keyword };
 }
 
 export class LobbyScene extends Phaser.Scene {
@@ -123,6 +129,8 @@ export class LobbyScene extends Phaser.Scene {
   private client: NetClient | null = null;
   private appId = '';
   private playerName = '';
+  /** C3 — palabra precargada del flujo UNIRSE (invitación aceptada). */
+  private joinKeyword = '';
   /** true una vez que la escena entró a una sala (create o join exitoso). */
   private joined = false;
   /**
@@ -159,6 +167,9 @@ export class LobbyScene extends Phaser.Scene {
   init(data: unknown): void {
     this.lobbyData = parseLobbyData(data);
     this.playerName = sanitizePlayerName(this.lobbyData.name ?? '');
+    // C3 — invitación aceptada: la palabra viaja sanitizada (el input la
+    // muestra y ENTRAR la valida de nuevo — flujo de #1 intacto).
+    this.joinKeyword = sanitizeRoomWord(this.lobbyData.keyword ?? '');
     this.joined = false;
     this.handedOff = false;
   }
@@ -261,14 +272,15 @@ export class LobbyScene extends Phaser.Scene {
       this.unsubscribeChat = null;
       if (this.handedOff) {
         // La sala SIGUE VIVA en la carrera: el store queda publicado para
-        // C2/C3 (espectador/menú); el chat de C1 no se abre en carrera.
+        // el modo espectador (C3 lee/escribe el hilo room desde GameScene).
         this.client = null;
         return;
       }
-      // La sala murió con el lobby: el chat de la sesión se vacía y se retira
-      // del registry (la próxima sala arranca con un store fresco).
-      this.chatStore?.clear();
-      removeSessionChatStore(this.registry);
+      // La sala murió con el lobby: SOLO muere su hilo `room` — el store de
+      // sesión (C3) sigue publicado con los DM, sus no leídos y los bloqueos
+      // (el chat social es de la PESTAÑA, no de la partida). El cliente de
+      // red sí se destruye: la próxima sala arranca con transporte fresco.
+      this.chatStore?.clearThread(ROOM_THREAD_ID);
       this.chatStore = null;
       this.chatButton = null;
       this.client?.destroy();
@@ -312,6 +324,11 @@ export class LobbyScene extends Phaser.Scene {
     node.maxLength = MULTIPLAYER.roomWordMaxLength;
     node.autocapitalize = 'characters';
     node.placeholder = 'PALABRA';
+    // C3 — invitación aceptada: la palabra llega PRECARGADA y el jugador
+    // confirma con ENTRAR (mismo flujo de unirse de #1, sin atajos).
+    if (this.joinKeyword.length > 0) {
+      node.value = this.joinKeyword;
+    }
     this.wordInput.setOrigin(0.5);
 
     this.enterButton?.destroy();
@@ -523,26 +540,30 @@ export class LobbyScene extends Phaser.Scene {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Entrada a una sala con chat: crea el ChatStore de la sesión (self derivado
-   * del roster del propio cliente) y lo publica en el registry para que el
-   * overlay (y en C2/C3 el menú/espectador) lo compartan, junto al botón CHAT.
+   * Entrada a una sala con chat: asegura el ChatStore de la sesión (C3: lo
+   * REUSA si la sesión social ya lo creó — menú/DM — refrescando su
+   * identidad con el roster de la partida; los hilos de DM y los bloqueos
+   * sobreviven a las partidas) y publica el botón CHAT.
    */
   private openChatEntry(): void {
     const client = this.requireClient();
     const self =
       client.getRoster().find((player) => player.peerId === client.selfPeerId) ??
       { peerId: client.selfPeerId, name: this.playerName, color: 0 };
-    this.chatStore = new ChatStore({ self });
-    setSessionChatStore(this.registry, this.chatStore);
+    this.chatStore = ensureSessionChatStore(this.registry, self);
     this.createChatButton();
   }
 
-  /** Retira el chat al salir de la sala (SALIR, sala llena, re-entrada). */
+  /**
+   * Retira el chat al salir de la sala (SALIR, sala llena, re-entrada): muere
+   * SOLO el hilo `room` de esta partida; el store de sesión (DM + bloqueos)
+   * queda publicado para el chat social y el badge del menú (C3).
+   */
   private closeChatEntry(): void {
     this.chatButton?.destroy();
     this.chatButton = null;
+    this.chatStore?.clearThread(ROOM_THREAD_ID);
     this.chatStore = null;
-    removeSessionChatStore(this.registry);
   }
 
   /** Botón CHAT de la esquina superior derecha (solo existe dentro de la sala). */
@@ -566,8 +587,9 @@ export class LobbyScene extends Phaser.Scene {
    * pausar nada). La escena NO está en el array de `gameConfig.ts` — se
    * registra on-demand la primera vez y queda disponible para la sesión. El
    * envío viaja como callback: el overlay nunca toca el NetClient, así que
-   * cerrar el chat no rompe la sala. C2: se pide la tab SALA explícita
-   * (PÚBLICO también vive acá, pero el lobby abre por default en SALA).
+   * cerrar el chat no rompe la sala. C2: se pide la tab SALA explícita.
+   * C3: además pasa el proveedor de la palabra de sala activa — es lo que
+   * habilita el botón INVITAR de los hilos de DM del overlay.
    */
   private openChatOverlay(): void {
     if (!this.chatStore) {
@@ -580,6 +602,7 @@ export class LobbyScene extends Phaser.Scene {
       thread: ROOM_THREAD_ID,
       tab: 'room',
       sendChat: (text: string) => this.client?.sendChat(text),
+      inviteKeyword: () => (this.joined ? (this.client?.roomWord ?? null) : null),
     });
   }
 

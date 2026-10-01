@@ -157,6 +157,18 @@ describe('presenceView — lista de disponibles', () => {
     expect(formatAvailablePeerRow({ peerId: 'b', name: '', color: 0 }).text).toBe('PILOTO');
   });
 
+  it('formatAvailablePeerRow (C3): no leídos del hilo de DM agregan el badge "· N"', () => {
+    const beto = { peerId: 'b', name: 'Beto', color: 0xd63c3c };
+    // Sin no leídos (default): la fila queda pelada.
+    expect(formatAvailablePeerRow(beto).text).toBe('Beto');
+    expect(formatAvailablePeerRow(beto, 0).text).toBe('Beto');
+    // Con N>0: el badge cuenta lo no leído del hilo con ese peer.
+    expect(formatAvailablePeerRow(beto, 1).text).toBe('Beto · 1');
+    expect(formatAvailablePeerRow(beto, 7).text).toBe('Beto · 7');
+    // El color no se toca: el badge es solo texto.
+    expect(formatAvailablePeerRow(beto, 7).color).toBe('#d63c3c');
+  });
+
   it('visibleAvailablePeers: las PRIMERAS maxVisible filas (ancladas arriba)', () => {
     const peers = [
       { peerId: 'a', name: 'A', color: 1 },

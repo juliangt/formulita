@@ -27,6 +27,10 @@ import { parseGameOverData } from '../data/types';
 import { GhostCar } from '../entities/GhostCar';
 import { PlayerCar } from '../entities/PlayerCar';
 import { TrackEntity } from '../entities/TrackEntity';
+import { ROOM_THREAD_ID } from '../chat/ChatStore';
+import { getSessionChatStore } from '../chat/chatSession';
+import { receiveRoomChat } from '../chat/roomChat';
+import { isSpectatorChatVisible } from '../chat/spectatorChat';
 import { SnapshotBuffer } from '../net/interpolation';
 import type { NetClient } from '../net/NetClient';
 import { takeSessionNetClient } from '../net/netClientSession';
@@ -61,6 +65,7 @@ import { PositionStrip } from '../ui/PositionStrip';
 import { ScoreHud } from '../ui/ScoreHud';
 import { Speedometer } from '../ui/Speedometer';
 import { MuteButton } from '../ui/MuteButton';
+import { ChatScene } from './ChatScene';
 import { GameOverScene } from './GameOverScene';
 import { PauseScene } from './PauseScene';
 
@@ -159,6 +164,8 @@ export class GameScene extends Phaser.Scene {
   private blurNotice: Phaser.GameObjects.Text | null = null;
   private spectatorBanner: Phaser.GameObjects.Text | null = null;
   private spectatorSubtitle: Phaser.GameObjects.Text | null = null;
+  /** C3 — botón CHAT del espectador (solo existe tras MI eliminación). */
+  private spectatorChatButton: MenuButton | null = null;
 
   /* Estado de la carrera. */
   private currentSpeed = BASE_SPEED;
@@ -233,6 +240,7 @@ export class GameScene extends Phaser.Scene {
     this.blurNotice = null;
     this.spectatorBanner = null;
     this.spectatorSubtitle = null;
+    this.spectatorChatButton = null;
 
     // Fase 7 — pausa y countdown frescos, y mundo CONGELADO hasta el GO!:
     // ni scroll, ni spawn, ni puntaje, ni física durante la cuenta (el plan
@@ -368,6 +376,13 @@ export class GameScene extends Phaser.Scene {
       this.ghosts.clear();
       this.ghostBuffers.clear();
       this.positionStrip = null;
+      // C3 — la sala de partida murió con la carrera: muere SOLO su hilo
+      // `room` en el store de sesión (el chat social —DM, bloqueos, badge—
+      // sobrevive en el menú). Solo aplica en multi: en solo no hay hilo.
+      if (this.multiInit) {
+        getSessionChatStore(this.registry)?.clearThread(ROOM_THREAD_ID);
+      }
+      this.spectatorChatButton = null;
       // Salida sin crash (MENÚ desde la pausa, Fase 7): corta el dron del
       // motor sin SFX de crash. En el flujo a GameOver es un no-op: el dron
       // ya se apagó con `game-over`.
@@ -541,6 +556,16 @@ export class GameScene extends Phaser.Scene {
       client.onEliminated((peerId, payload) => this.handlePeerEliminated(peerId, payload)),
       client.onMatchOver((peerId, payload) => this.handlePeerMatchOver(peerId, payload)),
       client.onPeerLeave((peerId) => this.handlePeerLeft(peerId)),
+      // C3 — el chat de sala sigue llegando durante TODA la carrera: entra
+      // al store de sesión (mientras estoy vivo suma no leídos; al ser
+      // espectador lo leo/escribo desde el overlay). El remitente se resuelve
+      // contra el roster local, igual que en el lobby.
+      client.onChat((fromPeerId, payload) => {
+        const store = getSessionChatStore(this.registry);
+        if (store) {
+          receiveRoomChat(store, client.getRoster(), fromPeerId, payload, Date.now());
+        }
+      }),
     );
   }
 
@@ -653,6 +678,45 @@ export class GameScene extends Phaser.Scene {
       alpha: 0.45,
       delay: 2400,
       duration: 800,
+    });
+    // C3 (decisión 2A) — el ELIMINADO puede leer y escribir en el chat de
+    // sala: el botón CHAT del espectador existe SOLO en este overlay (la
+    // función pura `isSpectatorChatVisible` es la gate — un jugador VIVO
+    // nunca lo ve, ni siquiera deshabilitado).
+    if (isSpectatorChatVisible(this.selfEliminated, true)) {
+      this.spectatorChatButton = new MenuButton(this, {
+        x: this.scale.width / 2,
+        y: SPECTATOR_OVERLAY.chatButtonY,
+        width: SPECTATOR_OVERLAY.chatButtonWidth,
+        height: SPECTATOR_OVERLAY.chatButtonHeight,
+        label: 'CHAT',
+        tint: 0xb04ee0,
+        fontSize: SPECTATOR_OVERLAY.chatButtonFontSize,
+        bus: this.bus,
+        onPress: () => this.openSpectatorChat(),
+      });
+      this.spectatorChatButton.container.setDepth(SPECTATOR_OVERLAY.depth);
+    }
+  }
+
+  /**
+   * C3 — abre el overlay de chat ENCIMA de la carrera (patrón PauseScene:
+   * launch sin pausar; el mundo sigue sin el espectador). Tab SALA sobre el
+   * hilo `room` de la sesión con envío por el NetClient de la partida: el
+   * eliminado lee y escribe en la sala mientras la carrera siga viva. Sin
+   * transporte (degradación defensiva) no hay nada que abrir.
+   */
+  private openSpectatorChat(): void {
+    if (!this.netClient) {
+      return;
+    }
+    if (!this.scene.get(ChatScene.KEY)) {
+      this.scene.add(ChatScene.KEY, ChatScene, false);
+    }
+    this.scene.launch(ChatScene.KEY, {
+      thread: ROOM_THREAD_ID,
+      tab: 'room',
+      sendChat: (text: string) => this.netClient?.sendChat(text),
     });
   }
 

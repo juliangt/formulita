@@ -264,7 +264,7 @@ describe('ChatStore — no leídos por hilo y total', () => {
   });
 });
 
-describe('ChatStore — bloqueo por sesión (descarta AL RECIBIR)', () => {
+describe('ChatStore — bloqueo por sesión (filtra ENTRADA y SALIDA)', () => {
   it('recibir de un peer bloqueado se descarta antes de entrar al store', () => {
     const store = createStore();
     store.blockPeer('ana');
@@ -292,17 +292,39 @@ describe('ChatStore — bloqueo por sesión (descarta AL RECIBIR)', () => {
     expect(store.getMessages(ROOM_THREAD_ID)[0]?.text).toBe('re-admitido');
   });
 
-  it('el bloqueo solo filtra la ENTRADA: enviar hacia él sigue permitido', () => {
+  it('el bloqueo filtra ENTRADA y SALIDA: corta la conversación completa', () => {
     const store = createStore();
     store.blockPeer('ana');
 
-    // Decisión documentada: el bloqueo descarta al recibir; el propio envío
-    // sigue saliendo (es el receptor quien descarta lo que no quiere ver).
-    const message = store.sendDm('ana', 'igual te escribo', 1_000);
+    // C3 — guarda de SALIDA: enviar hacia un bloqueado se rechaza (null),
+    // SIN consumir cooldown ni crear el hilo (nada de lo que yo escriba le
+    // llega, igual que nada de lo que él escriba me entra).
+    expect(store.sendDm('ana', 'igual te escribo', 1_000)).toBeNull();
+    expect(store.hasThread('ana')).toBe(false);
+    expect(store.getMessages('ana')).toHaveLength(0);
+    expect(store.totalUnread).toBe(0);
 
+    // El rechazo no consumió el cooldown: apenas se desbloquea, el envío sale
+    // en el MISMO instante (el bloqueo no arma el reloj del hilo).
+    store.unblockPeer('ana');
+    const message = store.sendDm('ana', 'ahora sí', 1_000);
     expect(message).not.toBeNull();
     expect(store.getMessages('ana')).toHaveLength(1);
     expect(store.getMessages('ana')[0]?.mine).toBe(true);
+  });
+
+  it('desbloquear re-admite la SALIDA desde ese momento (y sin cooldown fantasma)', () => {
+    const store = createStore();
+    store.sendDm('ana', 'primer mensaje', 1_000); // arma el cooldown del hilo
+    store.blockPeer('ana');
+
+    // Bloqueado: ni el envío válido pasa (guarda de salida)…
+    expect(store.sendDm('ana', 'bloqueado', 1_100)).toBeNull();
+
+    // …y los rechazos durante el bloqueo NO extienden el cooldown: pasada la
+    // ventana original, el primer envío tras desbloquear sale sin esperar.
+    store.unblockPeer('ana');
+    expect(store.sendDm('ana', 're-admitido', 1_000 + CHAT_SEND_COOLDOWN_MS)).not.toBeNull();
   });
 
   it('el bloqueo sobrevive a clear() (es de sesión, no de partida)', () => {

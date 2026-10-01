@@ -5,7 +5,9 @@
  * visible del cooldown. Lo consume el overlay ChatScene (tab SALA) y en C2/C3
  * lo reutilizan el menú y el modo espectador; no sabe EN QUÉ escena vive ni
  * cómo viajan los mensajes: lee el `ChatStore` del hilo y delega el envío en
- * un `ChatSender` (adaptador `sendRoomChat` de `chat/roomChat.ts`).
+ * un `ChatSender` (adaptador `sendRoomChat` de `chat/roomChat.ts`; los hilos
+ * de DM de C3 inyectan `sendDirectMessage` de `chat/dmChat.ts` vía
+ * `sendOverride` y un estado de envío bloqueado vía `sendBlockedState`).
  *
  * RENDER SIN HTML: los mensajes son `Phaser.GameObjects.Text` (jamás
  * innerHTML — sin vector XSS) con wrap al ancho del panel, anclados ABAJO
@@ -36,6 +38,8 @@ import Phaser from 'phaser';
 import { CHAT, CHAT_MAX_LEN } from '../config/balance';
 import type { EventBus, GameEvents } from '../core/EventBus';
 import type { ChatMessage, ChatStore } from '../chat/ChatStore';
+import type { DmBlockedSendState } from '../chat/dmView';
+import { DM_SEND_OPEN } from '../chat/dmView';
 import type { ChatSender } from '../chat/roomChat';
 import { sendRoomChat } from '../chat/roomChat';
 import { MenuButton } from './MenuButton';
@@ -68,9 +72,14 @@ export function colorNumberToCss(color: number): string {
 /**
  * Formatea un mensaje como línea de chat: "NOMBRE: texto" coloreado con el
  * color del peer; los propios quedan "VOS: texto" en el color destacado
- * `CHAT.selfColor` (la escena además los alinea a la derecha).
+ * `CHAT.selfColor` (la escena además los alinea a la derecha). Los mensajes
+ * de SISTEMA (avisos locales: "BLOQUEASTE A NOMBRE") van SIN remitente, en
+ * el gris neutro de la UI — son del hilo, no de nadie.
  */
 export function formatChatLine(message: ChatMessage): ChatLine {
+  if (message.system) {
+    return { text: message.text, color: CHAT.systemColor, mine: false };
+  }
   if (message.mine) {
     return { text: `${SELF_LABEL}: ${message.text}`, color: CHAT.selfColor, mine: true };
   }
@@ -190,14 +199,34 @@ const CHAT_INPUT_CSS = {
 /** Placeholder del panel vacío. */
 const EMPTY_HINT = 'SIN MENSAJES TODAVÍA';
 
+/** Placeholder del input cuando el envío está HABILITADO. */
+const INPUT_PLACEHOLDER = 'ESCRIBÍ UN MENSAJE…';
+
 /** Configuración del panel (todo inyectado; el panel no crea stores). */
 export interface ChatPanelConfig {
-  /** Hilo que muestra y al que envía (C1: `ROOM_THREAD_ID`). */
+  /** Hilo que muestra y al que envía (`ROOM_THREAD_ID` o el peerId del DM). */
   readonly threadId: string;
   /** Store de la sesión (compartido lobby ↔ overlay por `chatSession`). */
   readonly store: ChatStore;
-  /** Transporte del envío (adaptador puro de `roomChat`). */
-  readonly sender: ChatSender;
+  /**
+   * Transporte del envío del hilo de SALA (adaptador puro de `roomChat`).
+   * Opcional para los hilos de DM de C3, que envían con `sendOverride`.
+   */
+  readonly sender?: ChatSender;
+  /**
+   * C3 — estrategia de envío del hilo: se le pasa a los hilos de DM
+   * (`sendDirectMessage` de `dmChat`, que valida bloqueo/desconexión); sin
+   * esto el panel usa el adaptador de sala (`sendRoomChat` + `sender`).
+   */
+  readonly sendOverride?: (rawText: string) => ChatMessage | null;
+  /**
+   * C3 — estado de envío BLOQUEADO del hilo (`dmBlockedSendState` de
+   * `dmView`: desconectado/bloqueado) o el estado abierto; consultado en
+   * cada refresh y en cada submit. Mientras haya razón, el input queda
+   * deshabilitado con ese aviso de placeholder y el botón muestra el label
+   * del estado (DESCONECTADO/BLOQUEADO).
+   */
+  readonly sendBlockedState?: () => DmBlockedSendState;
   /** Bus de sesión para el SFX de click del botón ENVIAR. */
   readonly bus?: EventBus<GameEvents> | null;
   /** Escape dentro del input (cierra el overlay). */
@@ -215,7 +244,9 @@ export class ChatPanel {
   private readonly scene: Phaser.Scene;
   private readonly threadId: string;
   private readonly store: ChatStore;
-  private readonly sender: ChatSender;
+  private readonly sender: ChatSender | null;
+  private readonly sendOverride: ((rawText: string) => ChatMessage | null) | null;
+  private readonly sendBlockedState: () => DmBlockedSendState;
   private readonly now: () => number;
 
   private readonly listBg: Phaser.GameObjects.Rectangle;
@@ -231,7 +262,9 @@ export class ChatPanel {
     this.scene = scene;
     this.threadId = config.threadId;
     this.store = config.store;
-    this.sender = config.sender;
+    this.sender = config.sender ?? null;
+    this.sendOverride = config.sendOverride ?? null;
+    this.sendBlockedState = config.sendBlockedState ?? (() => DM_SEND_OPEN);
     this.now = config.now ?? (() => Date.now());
 
     const centerX = scene.scale.width / 2;
@@ -247,7 +280,7 @@ export class ChatPanel {
     this.inputNode = this.input.node as HTMLInputElement;
     this.inputNode.maxLength = CHAT_MAX_LEN;
     this.inputNode.autocomplete = 'off';
-    this.inputNode.placeholder = 'ESCRIBÍ UN MENSAJE…';
+    this.inputNode.placeholder = INPUT_PLACEHOLDER;
     this.input.setOrigin(0.5);
     this.isolation = isolateChatInput(
       this.inputNode,
@@ -275,7 +308,9 @@ export class ChatPanel {
 
   /**
    * Sincroniza la vista con el store: repinta la lista cuando cambia la
-   * cantidad de mensajes y el botón ENVIAR según el cooldown visible.
+   * cantidad de mensajes, el botón ENVIAR según el cooldown visible y el
+   * input según el estado de envío del hilo (C3: desconectado o peer
+   * bloqueado — el input se deshabilita con el aviso de placeholder).
    */
   refresh(now?: number): void {
     const at = now ?? this.now();
@@ -284,21 +319,51 @@ export class ChatPanel {
       this.lastMessageCount = messages.length;
       this.renderMessages(messages);
     }
-    const state = chatSendState(this.store.cooldownRemainingMs(this.threadId, at));
-    if (state.label !== this.lastSendLabel) {
-      this.lastSendLabel = state.label;
-      this.sendButton.setLabel(state.label);
+    const blockedState = this.sendBlockedState();
+    const blocked = blockedState.reason !== null;
+    if (this.inputNode.disabled !== blocked) {
+      this.inputNode.disabled = blocked;
     }
-    this.sendButton.container.setAlpha(state.disabled ? 0.45 : 1);
+    const placeholder = blocked ? blockedState.reason : INPUT_PLACEHOLDER;
+    if (this.inputNode.placeholder !== placeholder) {
+      this.inputNode.placeholder = placeholder;
+    }
+    const label = blocked ? blockedState.sendLabel : chatSendState(this.store.cooldownRemainingMs(this.threadId, at)).label;
+    if (label !== this.lastSendLabel) {
+      this.lastSendLabel = label;
+      this.sendButton.setLabel(label);
+    }
+    this.sendButton.container.setAlpha(blocked ? 0.45 : this.cooldownAlpha(at));
+  }
+
+  /** Alfa del botón ENVIAR según el cooldown (tenue mientras espera). */
+  private cooldownAlpha(at: number): number {
+    return this.store.cooldownRemainingMs(this.threadId, at) > 0 ? 0.45 : 1;
   }
 
   /**
-   * Envía lo tipeado: valida cooldown/texto contra el store y difunde por la
-   * red solo si fue aceptado (`sendRoomChat`). Limpia el input solo cuando el
-   * mensaje salió (si quedó vacío o en cooldown, el texto se conserva para
-   * reintentar).
+   * Envía lo tipeado: si el hilo está bloqueado (C3) no intenta nada (el
+   * texto se conserva); si no, valida cooldown/texto contra el store y
+   * difunde por la red solo si fue aceptado (el hilo de DM usa su propia
+   * estrategia `sendOverride`; el de sala, `sendRoomChat`). Limpia el input
+   * solo cuando el mensaje salió (si quedó vacío o en cooldown, el texto se
+   * conserva para reintentar).
    */
   submit(): void {
+    if (this.sendBlockedState().reason !== null) {
+      return; // hilo bloqueado (desconectado/bloqueado): ni intenta enviar
+    }
+    if (this.sendOverride) {
+      const sent = this.sendOverride(this.inputNode.value);
+      if (sent) {
+        this.inputNode.value = '';
+        this.refresh(this.now());
+      }
+      return;
+    }
+    if (!this.sender) {
+      return; // hilo sin transporte de envío (defensivo): no hay nada que hacer
+    }
     const message = sendRoomChat(this.store, this.sender, this.inputNode.value, this.now());
     if (message) {
       this.inputNode.value = '';

@@ -1,26 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MULTIPLAYER, PRESENCE_HEARTBEAT_MS, PRESENCE_STALE_MS } from '../config/balance';
+import { CHAT_MAX_LEN, MULTIPLAYER, PRESENCE_HEARTBEAT_MS, PRESENCE_STALE_MS } from '../config/balance';
 import { SOCIAL_ROOM_SUFFIX, socialRoomId, type NetEnvSource } from '../net/appId';
 import {
   availablePeersView,
   TrysteroChatClient,
 } from '../net/TrysteroChatClient';
-import type { RoomFactory, TrysteroAction } from '../net/TrysteroNetClient';
-import type { ActionSendOptions } from '../net/TrysteroNetClient';
 import type { AvailablePeer, PresenceMeta } from '../net/ChatClient';
-import type { PingPayload } from '../net/protocol';
+import type { DmPayload, InvitePayload, PingPayload } from '../net/protocol';
 import { FakeTrysteroRoom } from './fakes/FakeTrysteroRoom';
+import { FakeSocialHub } from './fakes/FakeSocialHub';
 
 /**
- * Tests del TrysteroChatClient (C2 — sala pública de presencia) con
+ * Tests del TrysteroChatClient (C2 presencia + C3 DM/invite) con
  * roomFactory FAKE (`fakes/FakeTrysteroRoom`, el mismo doble del NetClient):
- * TODO el protocolo de presencia (join/meta/ping/stale/leave) corre sin red.
+ * TODO el protocolo de presencia y el de acciones dirigidas corre sin red.
  * Los timers (heartbeat + barrido) y el reloj (staleness) son inyectados:
  * los tests los disparan a mano con `fireTimers()` y avanzan `clock`.
  *
- * La integración de DOS CLIENTS usa un `FakeSocialHub` (acá mismo) que
- * conecta las rooms fake entre sí: entrega de acciones dirigida/broadcast,
- * onPeerJoin en ambos extremos y desconexiones educadas/abruptas.
+ * La integración de VARIOS CLIENTES usa `FakeSocialHub` (`fakes/`, extraído
+ * de acá en C3): entrega de acciones dirigida/broadcast con la semántica de
+ * Trystero (el dirigido NO llega a terceros), onPeerJoin en ambos extremos
+ * y desconexiones educadas/abruptas.
  */
 
 const ENV: NetEnvSource = { VITE_TRYSTERO_APP_ID: 'formulita-test' };
@@ -110,135 +110,8 @@ function createClientFixture(selfPeerId: string, self: PresenceMeta = SELF) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Hub de integración: dos rooms fake conectadas                       */
+/* Hub de integración: ver fakes/FakeSocialHub (extraído en C3)         */
 /* ------------------------------------------------------------------ */
-
-/** Room fake enchufada al hub: sus envíos se enrutan a los demás miembros. */
-class HubRoom extends FakeTrysteroRoom {
-  constructor(
-    private readonly hub: FakeSocialHub,
-    private readonly ownPeerId: string,
-  ) {
-    super();
-  }
-
-  override makeAction<T>(namespace: string): TrysteroAction<T> {
-    const action = super.makeAction<T>(namespace);
-    const baseSend = action.send.bind(action);
-    action.send = (data: T, options?: ActionSendOptions) => {
-      baseSend(data, options);
-      // El hub modela envío dirigido a UN peer (lo único que usan los
-      // clientes): target no-string cuenta como broadcast.
-      const target = options?.target ?? null;
-      this.hub.route(this.ownPeerId, namespace, data, typeof target === 'string' ? target : null);
-    };
-    return action;
-  }
-
-  override leave(): void {
-    super.leave();
-    this.hub.disconnect(this.ownPeerId); // leave educado: los demás se enteran
-  }
-}
-
-/**
- * La "red social" en memoria: rooms por roomId, entrega de acciones entre
- * miembros (broadcast o dirigida), onPeerJoin en AMBOS extremos de cada
- * conexión nueva (semántica Trystero) y dos formas de irse:
- * `disconnect` (educada, dispara onPeerLeave) y `drop` (abrupta, nadie se
- * entera — la cubre el stale).
- *
- * ASENTAMIENTO: en Trystero la malla se descubre ASÍNCRONA después de que
- * `joinRoom` vuelve y el cliente cableó sus handlers — nunca adentro de la
- * propia factory. El hub modela eso: la factory solo REGISTRA al miembro
- * (para que el routing de acciones ya funcione) y encola el aviso mutuo de
- * join; `settle()` lo dispara cuando el cliente ya está cableado.
- */
-class FakeSocialHub {
-  private readonly rooms = new Map<string, Map<string, HubRoom>>();
-  private readonly roomOf = new Map<string, { roomId: string; room: HubRoom }>();
-  private readonly pendingJoins: Array<{ roomId: string; peerId: string }> = [];
-
-  factoryFor(peerId: string): RoomFactory {
-    return (_appId, roomId) => {
-      const room = new HubRoom(this, peerId);
-      let members = this.rooms.get(roomId);
-      if (!members) {
-        members = new Map();
-        this.rooms.set(roomId, members);
-      }
-      members.set(peerId, room);
-      this.roomOf.set(peerId, { roomId, room });
-      this.pendingJoins.push({ roomId, peerId });
-      return room;
-    };
-  }
-
-  /** Dispara los joins pendientes: onPeerJoin en AMBOS extremos, en orden. */
-  settle(): void {
-    const joins = this.pendingJoins.splice(0);
-    for (const { roomId, peerId } of joins) {
-      const members = this.rooms.get(roomId);
-      if (!members) {
-        continue;
-      }
-      for (const [existingPeerId, existingRoom] of members) {
-        if (existingPeerId === peerId) {
-          continue;
-        }
-        existingRoom.connectPeer(peerId); // el residente ve llegar al nuevo
-        members.get(peerId)?.connectPeer(existingPeerId); // el nuevo ve al residente
-      }
-    }
-  }
-
-  /** Entrega una acción de `from` a los demás miembros de su sala. */
-  route(from: string, namespace: string, data: unknown, target: string | null): void {
-    const entry = this.roomOf.get(from);
-    if (!entry) {
-      return;
-    }
-    const members = this.rooms.get(entry.roomId);
-    if (!members) {
-      return;
-    }
-    for (const [peerId, room] of members) {
-      if (peerId === from) {
-        continue; // Trystero no echa las acciones al emisor
-      }
-      if (target !== null && peerId !== target) {
-        continue;
-      }
-      room.receive(namespace, data, from);
-    }
-  }
-
-  /** Salida EDUCADA (leave): los demás reciben onPeerLeave. */
-  disconnect(peerId: string): void {
-    const entry = this.roomOf.get(peerId);
-    if (!entry) {
-      return;
-    }
-    const members = this.rooms.get(entry.roomId);
-    members?.delete(peerId);
-    this.roomOf.delete(peerId);
-    if (members) {
-      for (const [, room] of members) {
-        room.disconnectPeer(peerId);
-      }
-    }
-  }
-
-  /** Salida ABRUPTA (pestaña muerta): nadie recibe onPeerLeave. */
-  drop(peerId: string): void {
-    const entry = this.roomOf.get(peerId);
-    if (!entry) {
-      return;
-    }
-    this.rooms.get(entry.roomId)?.delete(peerId);
-    this.roomOf.delete(peerId);
-  }
-}
 
 /** Fixture de integración: dos clientes sobre un mismo hub/reloj/cola. */
 function createTwoClientFixture() {
@@ -665,5 +538,230 @@ describe('TrysteroChatClient — integración dos clientes (hub fake)', () => {
     net.fireTimers();
 
     expect(b.getAvailablePeers()).toEqual([]); // stale: 20 s sin señal
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* C3 — DM (acción dirigida de la sala pública)                        */
+/* ------------------------------------------------------------------ */
+
+describe('TrysteroChatClient — sendDm/onDm (C3)', () => {
+  it('sendDm envía la acción dm DIRIGIDA con payload sanitizado y targetPeerId', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+
+    net.client.sendDm('zz-remoto', '  hola   qué tal  ');
+
+    const sends = net.room().recorded<DmPayload>('dm').sends;
+    expect(sends).toEqual([
+      {
+        data: { text: 'hola qué tal', targetPeerId: 'zz-remoto' },
+        options: { target: 'zz-remoto' },
+      },
+    ]);
+  });
+
+  it('sendDm trunca el texto a CHAT_MAX_LEN aunque el input sea gigante', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+
+    net.client.sendDm('zz-remoto', 'x'.repeat(CHAT_MAX_LEN + 50));
+
+    const sends = net.room().recorded<DmPayload>('dm').sends;
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.data.text).toHaveLength(CHAT_MAX_LEN);
+  });
+
+  it('sendDm con texto que queda vacío NO viaja (no hay mensaje)', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+
+    net.client.sendDm('zz-remoto', '    ');
+
+    expect(net.room().recorded<DmPayload>('dm').sends).toEqual([]);
+  });
+
+  it('sendDm sin disponibilidad (toggle OFF) es no-op y no lanza', () => {
+    const net = createClientFixture('yo');
+
+    expect(() => net.client.sendDm('zz-remoto', 'hola')).not.toThrow();
+    expect(net.rooms()).toEqual([]); // ni room hay
+  });
+
+  it('sendDm tras setAvailable(false) ya no envía (acción apagada)', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+    net.client.setAvailable(false);
+
+    net.client.sendDm('zz-remoto', 'hola');
+
+    expect(net.room().recorded<DmPayload>('dm').sends).toEqual([]);
+  });
+
+  it('onDm despacha al destinatario con el texto re-sanitizado', () => {
+    const net = createClientFixture('yo');
+    const onDm = vi.fn();
+    net.client.onDm(onDm);
+    net.client.setAvailable(true);
+
+    net.room().receive<DmPayload>(
+      'dm',
+      { text: `b${'x'.repeat(CHAT_MAX_LEN + 10)}`, targetPeerId: 'yo' },
+      'zz-remoto',
+    );
+
+    expect(onDm).toHaveBeenCalledTimes(1);
+    const [from, payload] = onDm.mock.calls[0];
+    expect(from).toBe('zz-remoto');
+    expect(payload.text).toHaveLength(CHAT_MAX_LEN);
+    expect(payload.targetPeerId).toBe('yo');
+  });
+
+  it('un dm dirigido a OTRO peerId se ignora (defensa contra broadcast)', () => {
+    const net = createClientFixture('yo');
+    const onDm = vi.fn();
+    net.client.onDm(onDm);
+    net.client.setAvailable(true);
+
+    net.room().receive<DmPayload>('dm', { text: 'hola', targetPeerId: 'otro' }, 'zz-remoto');
+
+    expect(onDm).not.toHaveBeenCalled();
+  });
+
+  it('el eco del propio dm no despacha', () => {
+    const net = createClientFixture('yo');
+    const onDm = vi.fn();
+    net.client.onDm(onDm);
+    net.client.setAvailable(true);
+
+    net.room().receive<DmPayload>('dm', { text: 'hola', targetPeerId: 'yo' }, 'yo');
+
+    expect(onDm).not.toHaveBeenCalled();
+  });
+
+  it('un dm con texto vacío tras sanitizar no despacha', () => {
+    const net = createClientFixture('yo');
+    const onDm = vi.fn();
+    net.client.onDm(onDm);
+    net.client.setAvailable(true);
+
+    net.room().receive<DmPayload>('dm', { text: '   ', targetPeerId: 'yo' }, 'zz-remoto');
+
+    expect(onDm).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* C3 — invite (acción dirigida con palabra de sala)                   */
+/* ------------------------------------------------------------------ */
+
+describe('TrysteroChatClient — sendInvite/onInvite (C3)', () => {
+  it('sendInvite envía la acción invite DIRIGIDA con la palabra normalizada', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+
+    net.client.sendInvite('zz-remoto', ' parRilla ');
+
+    const sends = net.room().recorded<InvitePayload>('invite').sends;
+    expect(sends).toEqual([{ data: { keyword: 'PARRILLA' }, options: { target: 'zz-remoto' } }]);
+  });
+
+  it('sendInvite con palabra INVÁLIDA no viaja (ni corta ni con charset raro)', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+
+    net.client.sendInvite('zz-remoto', 'ABC'); // muy corta (3 < 5)
+    net.client.sendInvite('zz-remoto', 'PIÑA'); // charset raro: NFD la deja en PINA (4) → inválida
+    net.client.sendInvite('zz-remoto', 'P1Ñ2A'); // mezcla digits+Ñ: queda PNA (3) → inválida
+    net.client.sendInvite('zz-remoto', 'ABCDEFGHIJ'); // muy larga (10 > 9)
+
+    expect(net.room().recorded<InvitePayload>('invite').sends).toEqual([]);
+  });
+
+  it('sendInvite con charset raro que NORMALIZA a palabra válida SÍ viaja normalizada', () => {
+    const net = createClientFixture('yo');
+    net.client.setAvailable(true);
+
+    // "PIRAÑA9!" se limpia a PIRANA (6, A–Z): es una sala posible, la
+    // invitación viaja con la forma de protocolo.
+    net.client.sendInvite('zz-remoto', 'PIRAÑA9!');
+
+    const sends = net.room().recorded<InvitePayload>('invite').sends;
+    expect(sends).toEqual([{ data: { keyword: 'PIRANA' }, options: { target: 'zz-remoto' } }]);
+  });
+
+  it('sendInvite sin disponibilidad es no-op y no lanza', () => {
+    const net = createClientFixture('yo');
+
+    expect(() => net.client.sendInvite('zz-remoto', 'PARRILLA')).not.toThrow();
+  });
+
+  it('onInvite despacha con la keyword sanitizada y válida', () => {
+    const net = createClientFixture('yo');
+    const onInvite = vi.fn();
+    net.client.onInvite(onInvite);
+    net.client.setAvailable(true);
+
+    net.room().receive<InvitePayload>('invite', { keyword: 'parRilla' }, 'zz-remoto');
+
+    expect(onInvite).toHaveBeenCalledWith('zz-remoto', { keyword: 'PARRILLA' });
+  });
+
+  it('onInvite con keyword inválida se ignora (un rogue no cuela basura)', () => {
+    const net = createClientFixture('yo');
+    const onInvite = vi.fn();
+    net.client.onInvite(onInvite);
+    net.client.setAvailable(true);
+
+    net.room().receive<InvitePayload>('invite', { keyword: 'ABC' }, 'zz-remoto');
+    net.room().receive<InvitePayload>('invite', { keyword: '' }, 'zz-remoto');
+
+    expect(onInvite).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* C3 — integración por el hub: dirigido NO llega a terceros           */
+/* ------------------------------------------------------------------ */
+
+describe('TrysteroChatClient — DM/invite por el hub (C3)', () => {
+  it('A→B dm dirigido: B lo recibe y un TERCERO (C) no', () => {
+    const net = createTwoClientFixture();
+    const a = net.makeClient('peer-a', { name: 'Ana', color: 0 });
+    const b = net.makeClient('peer-b', { name: 'Beto', color: 0 });
+    const c = net.makeClient('peer-c', { name: 'Caro', color: 0 });
+    const onDmB = vi.fn();
+    const onDmC = vi.fn();
+    a.setAvailable(true);
+    b.setAvailable(true);
+    c.setAvailable(true);
+    net.settle();
+    b.onDm(onDmB);
+    c.onDm(onDmC);
+
+    a.sendDm('peer-b', 'hola beto');
+
+    expect(onDmB).toHaveBeenCalledWith('peer-a', { text: 'hola beto', targetPeerId: 'peer-b' });
+    expect(onDmC).not.toHaveBeenCalled(); // el dirigido no llega a terceros
+  });
+
+  it('A→B invite dirigido: B recibe la keyword y un tercero no', () => {
+    const net = createTwoClientFixture();
+    const a = net.makeClient('peer-a', { name: 'Ana', color: 0 });
+    const b = net.makeClient('peer-b', { name: 'Beto', color: 0 });
+    const c = net.makeClient('peer-c', { name: 'Caro', color: 0 });
+    const onInviteB = vi.fn();
+    const onInviteC = vi.fn();
+    a.setAvailable(true);
+    b.setAvailable(true);
+    c.setAvailable(true);
+    net.settle();
+    b.onInvite(onInviteB);
+    c.onInvite(onInviteC);
+
+    a.sendInvite('peer-b', 'PARRILLA');
+
+    expect(onInviteB).toHaveBeenCalledWith('peer-a', { keyword: 'PARRILLA' });
+    expect(onInviteC).not.toHaveBeenCalled();
   });
 });

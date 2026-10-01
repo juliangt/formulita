@@ -8,18 +8,20 @@
  * transfiere y se remueve al tomar), el ChatStore se COMPARTE mientras viva
  * la sala de partida:
  *
- * 1. LobbyScene lo crea al entrar a la sala y lo publica con
- *    `setSessionChatStore` (self derivado del roster, refrescado en cada
- *    `onRosterChange`).
- * 2. ChatScene (overlay) lo lee con `getSessionChatStore` para pintar el
- *    hilo `room` y enviar — nunca lo destruye: cerrar el chat NO mata la sala.
- * 3. Cuando la sala MUERE (SALIR del lobby / shutdown sin handoff), el dueño
- *    hace `store.clear()` + `removeSessionChatStore`: la próxima sala arranca
- *    con un store fresco. Con handoff a la carrera el store queda publicado
- *    (la sala sigue viva en GameScene; C2/C3 deciden su destino).
+ * 1. LobbyScene entra a una sala y asegura el store de la sesión con
+ *    `ensureSessionChatStore` (self derivado del roster, refrescado en cada
+ *    `onRosterChange`): lo REUSA si la sesión social ya lo creó (C3) — los
+ *    DM y el badge del menú viven en el MISMO store que el chat de sala.
+ * 2. ChatScene (overlay) lo lee con `getSessionChatStore` para pintar sus
+ *    hilos y enviar — nunca lo destruye: cerrar el chat NO mata nada.
+ * 3. C3: el store de sesión vive TODA la pestaña (lo crea on-demand la
+ *    sesión social, ver `socialChatSession`). Cuando una sala de partida
+ *    muere se limpia SOLO su hilo `room` (`clearThread`): los hilos de DM,
+ *    sus no leídos y los bloqueos de sesión sobreviven a la partida.
  */
 
-import type { ChatStore } from './ChatStore';
+import { ChatStore } from './ChatStore';
+import type { PlayerInfo } from '../net/protocol';
 
 /** Clave del registry de Phaser donde vive el ChatStore de la sesión. */
 export const CHAT_STORE_REGISTRY_KEY = 'chatStore';
@@ -37,7 +39,7 @@ export function setSessionChatStore(registry: RegistrySlice, store: ChatStore): 
 }
 
 /**
- * Devuelve el ChatStore publicado (o null si no hay sala con chat): lo deja
+ * Devuelve el ChatStore publicado (o null si no hay sesión de chat): lo deja
  * PUBLICADO — es un recurso compartido, no una entrega única como el
  * `takeSessionNetClient`. Defensivo contra basura en la clave.
  */
@@ -52,6 +54,34 @@ export function getSessionChatStore(registry: RegistrySlice): ChatStore | null {
     typeof candidate.receiveRoomMessage === 'function' &&
     typeof candidate.getMessages === 'function';
   return looksLikeStore ? (raw as ChatStore) : null;
+}
+
+/**
+ * C3 — asegura que el ChatStore de sesión EXISTA y lo devuelve: lo crea con
+ * la identidad dada si nadie lo publicó aún, o REUSA el publicado
+ * (refrescando su identidad con `updateSelf`) en vez de recrearlo. Es el
+ * corazón del ciclo de vida de C3: el store de sesión vive TODA la pestaña
+ * (los DM y el badge del menú son sociales, no de una partida), así que:
+ *
+ * - La sesión social lo crea on-demand con el perfil persistido
+ *   (`socialChatSession`), la primera vez que alguien lo necesita (menú).
+ * - El lobby que entra a una sala REUSA el que haya (updateSelf al roster:
+ *   mismo peerId, nombre/color de la partida) y sigue publicándolo.
+ * - Cuando la sala de partida MUERE se limpia SOLO su hilo `room`
+ *   (`clearThread`): los DM, sus no leídos y los bloqueos son de la sesión.
+ */
+export function ensureSessionChatStore(
+  registry: RegistrySlice,
+  self: PlayerInfo,
+): ChatStore {
+  const existing = getSessionChatStore(registry);
+  if (existing) {
+    existing.updateSelf(self);
+    return existing;
+  }
+  const store = new ChatStore({ self });
+  registry.set(CHAT_STORE_REGISTRY_KEY, store);
+  return store;
 }
 
 /**

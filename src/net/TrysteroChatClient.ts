@@ -27,14 +27,20 @@
  *   heartbeats perdidos) se considera DESCONECTADO y sale de la lista — cubre
  *   pestañas muertas y cortes que no dispararon `onPeerLeave`. El barrido es
  *   un timer periódico (cadencia del heartbeat) sobre el reloj inyectado.
+ * - `dm {text, targetPeerId}` (C3): mensaje DIRIGIDO a un peer de la sala.
+ *   Viaja con `target` (la acción de Trystero entrega SOLO al destinatario)
+ *   y, además, con el `targetPeerId` DENTRO del payload: el receptor vuelve
+ *   a verificar que el mensaje es para él antes de despacharlo — si un
+ *   transporte futuro degradara el dirigido a broadcast, cada cliente
+ *   descartaría los dm ajenos igualmente (defensa en profundidad).
+ * - `invite {keyword}` (C3): invitación DIRIGIDA a un peer con la PALABRA de
+ *   la sala de partida del invitador; solo viaja si la palabra es válida
+ *   (`isValidRoomWord`, A–Z 5–9) y el receptor solo despacha keywords
+ *   válidas (un cliente rogue no puede colar basura por el banner).
  *
  * Testeabilidad (patrón TrysteroNetClient): `roomFactory`, `selfIdProvider`,
  * `env` y `scheduler` inyectables — los tests conectan rooms fake sin red y
  * disparan los timers a mano; `now` es el reloj inyectable del staleness.
- *
- * C3: `sendDm`/`sendInvite` están declarados en la interfaz y acá lanzan
- * "no implementado" (llegan con el DM); `onDm`/`onInvite` registran handlers
- * que todavía nunca disparan, para que la UI pueda cablearse ya.
  */
 
 import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
@@ -43,8 +49,14 @@ import { resolveAppId, socialRoomId, type NetEnvSource } from './appId';
 import type { AvailablePeer, ChatClient, PresenceMeta } from './ChatClient';
 import { assignColors } from './lobbyState';
 import {
+  isValidChatText,
+  isValidRoomWord,
+  makeDmPayload,
+  makeInvitePayload,
   makePingPayload,
+  sanitizeChatText,
   sanitizePlayerName,
+  sanitizeRoomWord,
   type DmPayload,
   type InvitePayload,
   type PingPayload,
@@ -135,6 +147,8 @@ export class TrysteroChatClient implements ChatClient {
   private room: TrysteroRoom | null = null;
   private metaAction: TrysteroAction<PresenceMeta> | null = null;
   private pingAction: TrysteroAction<PingPayload> | null = null;
+  private dmAction: TrysteroAction<DmPayload> | null = null;
+  private inviteAction: TrysteroAction<InvitePayload> | null = null;
   /** Identidad propia anunciada (la actualiza la UI con el nombre del perfil). */
   private self: PresenceMeta;
   /** Metas conocidas de los demás peers (solo quien anunció meta aparece). */
@@ -205,6 +219,15 @@ export class TrysteroChatClient implements ChatClient {
     this.pingAction = room.makeAction<PingPayload>('ping');
     this.pingAction.onMessage = (_payload, context) => this.receivePing(context.peerId);
 
+    // C3 — acciones dirigidas de la sala pública (dm e invite): mismas
+    // acciones que meta, enviadas SIEMPRE con target al destinatario.
+    this.dmAction = room.makeAction<DmPayload>('dm');
+    this.dmAction.onMessage = (payload, context) => this.receiveDmMessage(context.peerId, payload);
+
+    this.inviteAction = room.makeAction<InvitePayload>('invite');
+    this.inviteAction.onMessage = (payload, context) =>
+      this.receiveInviteMessage(context.peerId, payload);
+
     room.onPeerJoin = (peerId) => this.handlePeerJoin(peerId);
     room.onPeerLeave = (peerId) => this.handlePeerLeave(peerId);
 
@@ -238,6 +261,8 @@ export class TrysteroChatClient implements ChatClient {
     this.room = null;
     this.metaAction = null;
     this.pingAction = null;
+    this.dmAction = null;
+    this.inviteAction = null;
     this.metas.clear();
     this.lastSeen.clear();
     this.emitPeers(); // la lista en vivo queda vacía
@@ -332,10 +357,49 @@ export class TrysteroChatClient implements ChatClient {
     }
   }
 
-  /* ---------------- C3 (placeholders tipados) ---------------- */
+  /* ---------------- C3 — DM e invitaciones (acciones dirigidas) ---------------- */
 
-  sendDm(_peerId: string, _text: string): void {
-    throw new Error('C3: el mensaje directo (dm) todavía no está implementado');
+  /**
+   * Envía un mensaje directo a `peerId` por la acción `dm` de la sala pública
+   * (DIRIGIDA: `target` en el envío + `targetPeerId` en el payload). El texto
+   * se sanitiza (trim/colapso/máx 200) y un texto que queda vacío NO viaja.
+   * Sin disponibilidad (toggle OFF) es un no-op silencioso: sin sala pública
+   * no hay a quién enviarle — la UI ni ofrece el hilo en ese estado.
+   */
+  sendDm(peerId: string, text: string): void {
+    if (!this.dmAction) {
+      return;
+    }
+    const target = peerId.trim();
+    if (target.length === 0 || target === this.selfPeerId) {
+      return; // sin destinatario, o yo mismo: no tiene sentido viajar
+    }
+    if (!isValidChatText(text)) {
+      return; // vacío tras sanitizar: no hay mensaje que enviar
+    }
+    void this.dmAction.send(makeDmPayload(text, target), { target });
+  }
+
+  /**
+   * Despacha un `dm` recibido SOLO si es para mí: el transporte entregó el
+   * mensaje dirigido (o el emisor difundió por accidente — el `targetPeerId`
+   * del payload decide). El texto se re-sanitiza (misma regla que el emisor:
+   * un cliente rogue no elude el límite) antes de llegar a los handlers.
+   */
+  private receiveDmMessage(fromPeerId: string, payload: DmPayload): void {
+    if (fromPeerId === this.selfPeerId) {
+      return; // eco del propio envío
+    }
+    if (payload.targetPeerId !== this.selfPeerId) {
+      return; // dirigido a otro peer: ni lo proceso
+    }
+    const text = sanitizeChatText(payload.text);
+    if (text.length === 0) {
+      return;
+    }
+    for (const handler of this.handlers.dm) {
+      handler(fromPeerId, { text, targetPeerId: payload.targetPeerId });
+    }
   }
 
   onDm(handler: (fromPeerId: string, payload: DmPayload) => void): () => void {
@@ -343,8 +407,43 @@ export class TrysteroChatClient implements ChatClient {
     return () => this.handlers.dm.delete(handler);
   }
 
-  sendInvite(_peerId: string, _keyword: string): void {
-    throw new Error('C3: la invitación a partida todavía no está implementada');
+  /**
+   * Invita a `peerId` a la partida por palabra de sala (acción `invite`
+   * dirigida). La palabra se normaliza (mayúsculas, solo A–Z) y una palabra
+   * que queda INVÁLIDA (fuera de 5–9 A–Z) NO viaja: no existe sala con esa
+   * forma, invitar a la nada solo confunde. Sin disponibilidad es no-op.
+   */
+  sendInvite(peerId: string, keyword: string): void {
+    if (!this.inviteAction) {
+      return;
+    }
+    const target = peerId.trim();
+    if (target.length === 0 || target === this.selfPeerId) {
+      return;
+    }
+    const payload = makeInvitePayload(keyword);
+    if (!isValidRoomWord(payload.keyword)) {
+      return;
+    }
+    void this.inviteAction.send(payload, { target });
+  }
+
+  /**
+   * Despacha una invitación recibida: solo keywords VÁLIDAS (A–Z 5–9) llegan
+   * a los handlers — la keyword viaja ya sanitizada, lista para el flujo de
+   * UNIRSE del lobby.
+   */
+  private receiveInviteMessage(fromPeerId: string, payload: InvitePayload): void {
+    if (fromPeerId === this.selfPeerId) {
+      return; // eco del propio envío
+    }
+    const keyword = sanitizeRoomWord(payload.keyword);
+    if (!isValidRoomWord(keyword)) {
+      return;
+    }
+    for (const handler of this.handlers.invite) {
+      handler(fromPeerId, { keyword });
+    }
   }
 
   onInvite(handler: (fromPeerId: string, payload: InvitePayload) => void): () => void {
