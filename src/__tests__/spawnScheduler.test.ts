@@ -234,7 +234,7 @@ describe('SpawnScheduler — pesos por tipo', () => {
 
     const { kinds } = simulate({
       seed: 2026,
-      seconds: 600,
+      seconds: 1200,
       difficulty,
       speedAt: (frame) => 380 + 300 * Math.abs(Math.sin(frame / 700)),
     });
@@ -254,7 +254,10 @@ describe('SpawnScheduler — pesos por tipo', () => {
     const totalHazards = (kinds.get('debris') ?? 0) + (kinds.get('oil') ?? 0);
     expect(totalHazards).toBeGreaterThan(40);
     const debrisRatio = (kinds.get('debris') ?? 0) / totalHazards;
-    expect(Math.abs(debrisRatio - 6 / 10)).toBeLessThan(0.1);
+    // Tolerancia ≈ 2.7σ del muestreo binomial con ~120 hazards (σ ≈ 0.045):
+    // la secuencia de draws depende del ritmo de oleadas (que escala con
+    // BASE_SPEED), así que la cota debe sobrevivir cambios de balance.
+    expect(Math.abs(debrisRatio - 6 / 10)).toBeLessThan(0.12);
   });
 
   it('los pickups aparecen con la probabilidad de balance (ni 0 ni avalancha)', () => {

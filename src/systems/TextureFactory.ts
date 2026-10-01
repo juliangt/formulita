@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TOUCH_HUD, TRACK } from '../config/balance';
+import { SPAWN, TOUCH_HUD, TRACK } from '../config/balance';
 
 /**
  * TextureFactory — generación 100% procedural de las texturas pixel-art del
@@ -79,29 +79,30 @@ export interface PixelSprite {
 
 /**
  * Mapa del F1 vista superior (12×19 píxeles), nariz hacia arriba:
- * alerón delantero, ruedas delanteras, pontones, cabina, ruedas traseras y
- * alerón trasero. Compartido por jugador y rivales (palette swap).
+ * alerón delantero ancho con endplates, ruedas delanteras, pontones con
+ * brillo lateral, cabina con casco, ruedas traseras anchas y alerón trasero
+ * de dos tramos. Compartido por jugador y rivales (palette swap).
  */
 export const CAR_SPRITE_ROWS: readonly string[] = [
-  '.....ww.....', // alerón delantero
+  '.wwwwwwwwww.', // alerón delantero (plano ancho)
+  '.w.rrrrrr.w.', // endplates + unión con la nariz
   '.....rr.....', // nariz
-  '.....rr.....', // nariz
-  '.tt..rr..tt.', // ruedas delanteras
-  '.tt..rr..tt.',
-  '.ttrrrrrrtt.', // pontones
-  '.ttrrrrrrtt.',
-  '..trrrrrrt..',
-  '..trddddrt..', // tapa de motor
-  '...rksskr...', // cabina + casco
-  '...rkkkkr...', // cabina
-  '..trrrrrrt..',
+  '....rrrr....', // nariz ensanchando
+  '.tt.rrrr.tt.', // ruedas delanteras
+  '.tthrrrrhtt.', // pontones: brillo en los bordes
+  '.thrrrrrrht.',
+  '.thrrrrrrht.',
+  '..thrrrrht..', // se estrecha hacia la cabina
+  '..rrksskrr..', // cabina + casco
+  '..rrkkkkrr..', // cuello del cockpit
   '..trrrrrrt..',
   '.ttrrrrrrtt.', // ruedas traseras
   '.ttrrrrrrtt.',
   '.ttrrrrrrtt.',
   '.tt.rrrr.tt.',
-  'gg..rrrr..gg', // endplates del alerón trasero
-  'gggggggggggg', // alerón trasero
+  'gg..rrrr..gg', // soportes del alerón trasero
+  'gggggggggggg', // alerón trasero (plano)
+  'gddddddddddg', // cara inferior en sombra
 ];
 
 /** Escala en px de cada "píxel" del mapa del auto. */
@@ -111,6 +112,8 @@ const CAR_SCALE = 4;
  * Crea el sprite de un auto con la paleta indicada (palette swap).
  * @param bodyColor   color principal de la carrocería.
  * @param shadowColor color de sombra (tapa de motor / zonas oscuras).
+ * El brillo (`h`) se deriva del color de carrocería para que el palette
+ * swap mantenga el modelado de luz de cada auto.
  */
 export function makeCarSprite(bodyColor: string, shadowColor: string): PixelSprite {
   return {
@@ -120,11 +123,22 @@ export function makeCarSprite(bodyColor: string, shadowColor: string): PixelSpri
       t: '#14141a', // neumáticos
       r: bodyColor, // carrocería
       d: shadowColor, // sombras
+      h: shadeHex(bodyColor, 1.5), // brillo lateral de la carrocería
       k: '#0e0e12', // cockpit
       s: '#cdd3dd', // casco
       g: '#1a1a20', // alerón trasero (endplates + plano)
     },
   };
+}
+
+/** Aclara (`factor` > 1) u oscurece (`factor` < 1) un color '#rrggbb'. */
+function shadeHex(hex: string, factor: number): string {
+  const value = parseInt(hex.slice(1), 16);
+  const channel = (shift: number): string =>
+    Math.min(255, Math.round(((value >> shift) & 0xff) * factor))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
 }
 
 /** Moneda 8×8 (24×24 con escala 3). */
@@ -233,32 +247,32 @@ export const DRS_PICKUP_SPRITE: PixelSprite = {
 /** Escala en px de los glifos de flecha del HUD (7×8 → 42×48). */
 const HUD_ARROW_SCALE = 6;
 
-/** Flecha pixel ◀ (7×8), blanca tintable. */
+/** Flecha pixel ◀ (7×8), blanca tintable: punta hacia la IZQUIERDA. */
 export const HUD_ARROW_LEFT_SPRITE: PixelSprite = {
   rows: [
-    'ww.....',
-    'wwww...',
-    'wwwwww.',
+    '.....ww',
+    '...wwww',
+    '.wwwwww',
     'wwwwwww',
     'wwwwwww',
-    'wwwwww.',
-    'wwww...',
-    'ww.....',
+    '.wwwwww',
+    '...wwww',
+    '.....ww',
   ],
   palette: { w: '#f2f2f2' },
 };
 
-/** Flecha pixel ▶ (7×8), blanca tintable. */
+/** Flecha pixel ▶ (7×8), blanca tintable: punta hacia la DERECHA. */
 export const HUD_ARROW_RIGHT_SPRITE: PixelSprite = {
   rows: [
-    '.....ww',
-    '...wwww',
-    '.wwwwww',
+    'ww.....',
+    'wwww...',
+    'wwwwww.',
     'wwwwwww',
     'wwwwwww',
-    '.wwwwww',
-    '...wwww',
-    '.....ww',
+    'wwwwww.',
+    'wwww...',
+    'ww.....',
   ],
   palette: { w: '#f2f2f2' },
 };
@@ -448,10 +462,12 @@ export class TextureFactory {
 
   /**
    * Tile de pista 720×256 (el alto divide a 1280 → tiling limpio).
-   * De afuera hacia adentro: barrera gris con juntas (scrollean y venden
-   * velocidad), kerb rojo/blanco en bloques de 32px (256/32 par → alternancia
-   * continua entre tiles), líneas blancas del borde y línea central
-   * discontinua con período 64 (también continua entre tiles).
+   * De afuera hacia adentro: barrera gris con juntas y brillo metálico
+   * (scrollean y venden velocidad), kerb rojo/blanco en bloques de 32px con
+   * línea de sombreado, líneas blancas del borde, línea central discontinua
+   * con período 64 (continua entre tiles), bandas de desgaste de neumáticos
+   * por carril y grano de asfalto determinístico (hash de posición: mismo
+   * tile en cada corrida, sin Math.random).
    */
   private static drawRoadTile(scene: Phaser.Scene): void {
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
@@ -471,14 +487,41 @@ export class TextureFactory {
     g.fillRect(300, 64, 90, 20);
     g.fillRect(520, 208, 70, 30);
 
+    // Grano de asfalto: motas claras/oscuras fijas por coordenada (hash
+    // entero). Pocos puntos por tile: textura sin costo por frame.
+    for (let y = 0; y < height; y += 4) {
+      for (let x = TRACK.roadLeft; x < TRACK.roadRight; x += 4) {
+        const hash = (((x * 73856093) ^ (y * 19349663)) >>> 0) % 97;
+        if (hash < 6) {
+          g.fillStyle(hash < 3 ? 0x45474d : 0x36383e, 1);
+          g.fillRect(x + (hash % 3), y + ((hash >> 2) % 3), 2, 2);
+        }
+      }
+    }
+
+    // Bandas de desgaste de neumáticos: el ruedo de cada carril, un paso más
+    // oscuro y con el centro apenas más claro (doble marca de goma).
+    const laneWidth = (TRACK.roadRight - TRACK.roadLeft) / SPAWN.laneCount;
+    for (let lane = 0; lane < SPAWN.laneCount; lane += 1) {
+      const centerX = TRACK.roadLeft + laneWidth * (lane + 0.5);
+      g.fillStyle(0x37393f, 1);
+      g.fillRect(centerX - 26, 0, 52, height);
+      g.fillStyle(0x424449, 1);
+      g.fillRect(centerX - 30, 0, 4, height);
+      g.fillRect(centerX + 26, 0, 4, height);
+    }
+
     // Barreras laterales.
     g.fillStyle(0x23242c, 1);
     g.fillRect(0, 0, barrier, height);
     g.fillRect(width - barrier, 0, barrier, height);
-    // Cara interna iluminada.
+    // Cara interna iluminada + brillo metálico.
     g.fillStyle(0x3a3c48, 1);
     g.fillRect(barrier - 4, 0, 4, height);
     g.fillRect(width - barrier, 0, 4, height);
+    g.fillStyle(0x4c4e5c, 1);
+    g.fillRect(barrier - 12, 0, 2, height);
+    g.fillRect(width - barrier + 10, 0, 2, height);
     // Juntas horizontales (scrollean con la pista → sensación de velocidad).
     g.fillStyle(0x16171d, 1);
     for (let y = 0; y < height; y += 64) {
@@ -486,11 +529,16 @@ export class TextureFactory {
       g.fillRect(width - barrier, y, barrier, 4);
     }
 
-    // Bandas de rumble (kerb) rojo/blanco en bloques de 32px.
+    // Bandas de rumble (kerb) rojo/blanco en bloques de 32px, con una línea
+    // de sombra en la base de cada bloque (relieve).
     for (let y = 0; y < height; y += 32) {
-      g.fillStyle((y / 32) % 2 === 0 ? 0xd23c3c : 0xf2f2f2, 1);
+      const isRed = (y / 32) % 2 === 0;
+      g.fillStyle(isRed ? 0xd23c3c : 0xf2f2f2, 1);
       g.fillRect(TRACK.roadLeft - kerb, y, kerb, 32);
       g.fillRect(TRACK.roadRight, y, kerb, 32);
+      g.fillStyle(isRed ? 0x8f1f1f : 0xb9bcc2, 1);
+      g.fillRect(TRACK.roadLeft - kerb, y + 28, kerb, 4);
+      g.fillRect(TRACK.roadRight, y + 28, kerb, 4);
     }
 
     // Líneas blancas continuas del borde del asfalto.

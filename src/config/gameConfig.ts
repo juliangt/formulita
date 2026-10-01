@@ -46,8 +46,18 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
     // Multi-touch real (Fase 2): el default de Phaser es 1 puntero. Doblar
     // (◀/▶) y acelerar a la vez exige varios dedos simultáneos; 5 alcanza de
     // sobra para los 6 botones del HUD táctil.
+    //
+    // `touch: true` es CLAVE: sin él Phaser solo crea el TouchManager si el
+    // navegador reporta soporte táctil en el arranque (Device.input.touch).
+    // En pantallas táctiles que reportan modo desktop (WebView in-app, "sitio
+    // de computadora", laptops con pantalla táctil en algunos modos) ningún
+    // botón interactivo recibe taps: el juego nunca escucha touchstart y el
+    // `touch-action: none` del CSS suprime los mouse events emulados. Forzar
+    // el manager hace que el tap funcione siempre (en desktop sin touch el
+    // listener simplemente nunca dispara).
     input: {
       activePointers: 5,
+      touch: true,
     },
     // Flujo completo (Fase 5 + pausa de Fase 7): Boot → Preload (texturas) →
     // Menu → Game → GameOver; REINTENTAR vuelve a Game y MENÚ a Menu.

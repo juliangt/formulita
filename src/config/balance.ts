@@ -17,13 +17,13 @@
  * SpeedSystem (el acelerador sube hasta `MAX_SPEED`, el freno baja hasta
  * `MIN_SPEED`).
  */
-export const BASE_SPEED = 300;
+export const BASE_SPEED = 360;
 
 /** Velocidad máxima base (sin turbo/DRS). */
-export const MAX_SPEED = 420;
+export const MAX_SPEED = 504;
 
 /** Velocidad mínima (frenando a fondo). */
-export const MIN_SPEED = 160;
+export const MIN_SPEED = 190;
 
 /* ------------------------------------------------------------------ */
 /* Turbo                                                               */
@@ -69,9 +69,9 @@ export const DRS_SPEED_THRESHOLD = 0.75;
 
 /**
  * Aceleración con el acelerador (px/s²): de `BASE_SPEED` a `MAX_SPEED`
- * en ≈ 1.2 s de acelerador sostenido.
+ * en ≈ 1.25 s de acelerador sostenido.
  */
-export const SPEED_ACCELERATION = 100;
+export const SPEED_ACCELERATION = 120;
 
 /** Desaceleración con el freno (px/s²): más brusca que acelerar. */
 export const SPEED_BRAKE_DECELERATION = 260;
@@ -84,10 +84,10 @@ export const SPEED_COAST_DRAG = 60;
 
 /**
  * Conversión estética del velocímetro: km/h mostrados por cada px/s reales.
- * Calibrada para que la punta combinada (MAX × turbo × DRS = 840 px/s)
- * marque ≈ 336 km/h, típico de una F1.
+ * Calibrada para que la punta combinada (MAX × turbo × DRS = 1008 px/s)
+ * marque ≈ 363 km/h, típico de una F1.
  */
-export const SPEEDOMETER_KMH_PER_PX = 0.4;
+export const SPEEDOMETER_KMH_PER_PX = 0.36;
 
 /* ------------------------------------------------------------------ */
 /* HUD de carrera (Fase 3)                                             */

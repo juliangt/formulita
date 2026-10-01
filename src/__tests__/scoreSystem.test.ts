@@ -46,7 +46,7 @@ describe('ScoreSystem — puntaje por distancia', () => {
     expect(score.score).toBe(SCORE_PER_SECOND_AT_BASE_SPEED); // 10
   });
 
-  it('escala linealmente con la velocidad real (MAX_SPEED → 14 pts/s)', () => {
+  it('escala linealmente con la velocidad real (a MAX_SPEED rinde tasa × MAX/BASE)', () => {
     const score = new ScoreSystem();
     tick(score, 1, MAX_SPEED);
 
@@ -62,7 +62,7 @@ describe('ScoreSystem — puntaje por distancia', () => {
     expect(boosted.score / plain.score).toBeCloseTo(TURBO_MULTIPLIER * DRS_MULTIPLIER);
   });
 
-  it('a MIN_SPEED rinde proporción 160/300 de la tasa base', () => {
+  it('a MIN_SPEED rinde la proporción MIN_SPEED / BASE_SPEED de la tasa base', () => {
     const score = new ScoreSystem();
     tick(score, 1, MIN_SPEED);
 
@@ -100,7 +100,7 @@ describe('ScoreSystem — puntaje por distancia', () => {
 
   it('el puntaje es siempre un entero (piso del acumulador fraccional)', () => {
     const score = new ScoreSystem();
-    score.update(0.05, MIN_SPEED); // 10 × (160/300) × 0.05 ≈ 0.267
+    score.update(0.05, MIN_SPEED); // 10 × (MIN/BASE) × 0.05
 
     expect(Number.isInteger(score.score)).toBe(true);
     expect(score.score).toBe(0); // aún no cruza el primer punto

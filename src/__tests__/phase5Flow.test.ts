@@ -99,7 +99,9 @@ describe('flujo de carrera → guardado → pantalla', () => {
     // "Recarga de página": nueva instancia sobre el mismo storage.
     const reloaded = new LocalStorageSaveRepository(storage).load();
     expect(reloaded.bestScore).toBe(raceOne.score);
-    expect(reloaded.bestDistance).toBeCloseTo(raceOne.distance);
+    // El repositorio persiste conteos enteros (toCount hace floor), así que
+    // el contrato exacto es: bestDistance == floor(distancia de la carrera).
+    expect(reloaded.bestDistance).toBe(Math.floor(raceOne.distance));
     expect(reloaded.totalCoins).toBe(5);
 
     // Carrera 2, peor: no rompe récords pero suma monedas.

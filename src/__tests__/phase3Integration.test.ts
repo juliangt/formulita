@@ -73,7 +73,7 @@ describe('integración Fase 3 — velocidad compuesta', () => {
     expect(race.effective).toBe(BASE_SPEED);
   });
 
-  it('a fondo sin ayudas: la punta es MAX_SPEED (420 px/s)', () => {
+  it('a fondo sin ayudas: la punta es MAX_SPEED', () => {
     const race = new RaceHarness();
     race.tick(5, FULL_THROTTLE);
 
@@ -91,7 +91,7 @@ describe('integración Fase 3 — velocidad compuesta', () => {
     expect(race.effective).toBeGreaterThan(MAX_SPEED); // pega el empujón al instante
   });
 
-  it('turbo + DRS juntos alcanzan la punta teórica de 840 px/s', () => {
+  it('turbo + DRS juntos alcanzan la punta teórica (MAX × turbo × DRS)', () => {
     const race = new RaceHarness();
 
     // Acelera hasta el tope con turbo (sube por encima del umbral DRS).
