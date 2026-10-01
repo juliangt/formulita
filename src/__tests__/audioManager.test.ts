@@ -286,6 +286,12 @@ function makeHarness(options?: {
   withBus?: boolean;
   /** `null` = factory de media element que devuelve null (workaround off). */
   mediaElement?: FakeMediaElement | null;
+  /**
+   * Perfil del dron (issue #4 H4): `true` = móvil. Por default se fija
+   * `false` (desktop) de forma EXPLÍCITA para que las 65 expectativas
+   * existentes no dependan del `navigator` del entorno de tests.
+   */
+  mobile?: boolean;
 }): Harness {
   let calls = 0;
   let hints = 0;
@@ -309,6 +315,8 @@ function makeHarness(options?: {
     onAudioBlocked: () => {
       hints += 1;
     },
+    // El default real autodetecta vía user agent: acá se fija el perfil.
+    mobileProfile: options?.mobile ?? false,
   });
   const bus = new EventBus<GameEvents>();
   if (options?.withBus) {
@@ -368,6 +376,28 @@ describe('engineFrequencyForSpeed — mapeo velocidad → frecuencia', () => {
 
   it('mapea la punta combinada al máximo configurado', () => {
     expect(engineFrequencyForSpeed(CEILING)).toBeCloseTo(AUDIO.engineFreqMax, 5);
+  });
+
+  it('perfil móvil (issue #4 H4): una octava arriba, monótona y con turbo', () => {
+    // Los extremos caen en la banda móvil (parlante de celular: ~110 Hz sí
+    // se reproduce, a diferencia de los 55 Hz del perfil desktop).
+    expect(engineFrequencyForSpeed(0, false, true)).toBe(AUDIO.engineFreqMinMobile);
+    expect(engineFrequencyForSpeed(CEILING, false, true)).toBeCloseTo(AUDIO.engineFreqMaxMobile, 5);
+    expect(engineFrequencyForSpeed(0, false, true)).toBe(
+      engineFrequencyForSpeed(0, false) * 2,
+    );
+    expect(engineFrequencyForSpeed(CEILING, false, true)).toBe(
+      engineFrequencyForSpeed(CEILING, false) * 2,
+    );
+
+    // Misma forma lineal que el desktop: monótona creciente, turbo ≥ base.
+    let prev = engineFrequencyForSpeed(0, false, true);
+    for (let speed = 10; speed <= 900; speed += 10) {
+      const next = engineFrequencyForSpeed(speed, false, true);
+      expect(next).toBeGreaterThanOrEqual(prev);
+      expect(engineFrequencyForSpeed(speed, true, true)).toBeGreaterThanOrEqual(next);
+      prev = next;
+    }
   });
 });
 
@@ -1008,6 +1038,54 @@ describe('AudioManager — dron del motor', () => {
     // Idempotente: un segundo start no duplica osciladores.
     manager.startEngine();
     expect(ctx.oscillators.length).toBe(2);
+  });
+
+  it('perfil desktop (default del harness): banda, lowpass y ganancia clásicos', () => {
+    const { manager, ctx } = makeHarness();
+
+    manager.startEngine();
+
+    // A velocidad 0 el dron arranca en la frecuencia mínima del perfil, con
+    // el corte del lowpass y el volumen desktop EXACTOS (issue #4 H4: el
+    // perfil clásico no cambia).
+    expect(ctx.oscillators[0].frequency.value).toBe(AUDIO.engineFreqMin);
+    expect(ctx.filters[0].frequency.value).toBe(AUDIO.engineFilterHz);
+    expect(ctx.gains[1].gain.valuesOf('exponentialRamp')).toEqual([AUDIO.engineVolume]);
+  });
+
+  it('perfil móvil: el dron arranca una octava arriba, lowpass abierto y más ganancia', () => {
+    const { manager, ctx } = makeHarness({ mobile: true });
+
+    manager.startEngine();
+
+    expect(ctx.oscillators.length).toBe(2);
+    // Fundamental y sub según el perfil móvil (los parlantes de un celular
+    // apenas reproducen < ~400 Hz: la banda desktop quedaba inaudible).
+    expect(ctx.oscillators[0].frequency.value).toBe(AUDIO.engineFreqMinMobile);
+    expect(ctx.oscillators[1].frequency.value).toBe(AUDIO.engineFreqMinMobile / 2);
+    // El lowpass se abre para dejar pasar los armónicos de la nueva banda.
+    expect(ctx.filters[0].frequency.value).toBe(AUDIO.engineFilterHzMobile);
+    // El parlante chico rinde menos: más ganancia pico que el desktop.
+    expect(ctx.gains[1].gain.valuesOf('exponentialRamp')).toEqual([AUDIO.engineVolumeMobile]);
+  });
+
+  it('perfil móvil: sigue la velocidad y el turbo con el mapeo móvil', () => {
+    const { manager, ctx } = makeHarness({ mobile: true });
+    manager.startEngine();
+    const sawFreq = ctx.oscillators[0].frequency;
+    const lastTarget = (): number => {
+      const values = sawFreq.valuesOf('setTarget');
+      return values[values.length - 1];
+    };
+
+    manager.setEngineSpeed(300);
+    expect(lastTarget()).toBe(engineFrequencyForSpeed(300, false, true));
+
+    manager.setTurboActive(true);
+    expect(lastTarget()).toBe(engineFrequencyForSpeed(300, true, true));
+    // Y el lowpass se abre al corte móvil con turbo (flanco del turbo).
+    const filterTargets = ctx.filters[0].frequency.valuesOf('setTarget');
+    expect(filterTargets[filterTargets.length - 1]).toBe(AUDIO.engineFilterTurboHzMobile);
   });
 
   it('programa la frecuencia según la velocidad con umbral anti-spam', () => {

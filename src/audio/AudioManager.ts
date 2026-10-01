@@ -38,6 +38,14 @@
  *   (solo actúa en estados problemáticos: el propio `resume()` re-dispara
  *   `onstatechange` en `running`) y los listeners tienen cleanup en
  *   `dispose()`.
+ * - **Perfil del dron para móvil (Fase 4, issue #4).** Los parlantes de un
+ *   celular apenas reproducen por debajo de ~400 Hz: el dron desktop
+ *   (55–235 Hz) puede ser físicamente inaudible en móvil aunque todo el
+ *   pipeline funcione. El manager elige el perfil del dron al construirse
+ *   (autodetección por user agent vía `isMobileLikeDevice`, inyectable como
+ *   `mobileProfile` para los tests): en móvil el dron suena una octava
+ *   arriba, con el lowpass más abierto y más ganancia (números en
+ *   `AUDIO`, bloque de perfil móvil en `balance.ts`).
  * - **Mute persistido en clave PROPIA versionada** (`formulita.audio.v1`,
  *   decisión documentada): es un ajuste de dispositivo, no progreso de
  *   carrera, así no se mezcla con `SaveData` ni depende del flujo de
@@ -57,6 +65,7 @@ import {
   TURBO_MULTIPLIER,
 } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
+import { isMobileLikeDevice } from '../core/device';
 import { AUDIO_ENGINE_REGISTRY_KEY, type ISfxEngine, type SfxName } from './ISfxEngine';
 import { showAudioBlockedHint } from './AudioBlockedHint';
 
@@ -301,9 +310,8 @@ const MASTER_VOLUME = 0.9;
 const MUTE_RAMP_SECONDS = 0.05;
 const ENGINE_ATTACK_SECONDS = 0.3;
 const ENGINE_RELEASE_SECONDS = 0.25;
-/** Filtro del dron: corte base (Hz) y corte con turbo (Hz). */
-const ENGINE_FILTER_HZ = 1100;
-const ENGINE_FILTER_TURBO_HZ = 2200;
+// (El corte del lowpass del dron vive en `AUDIO`: `engineFilterHz` desktop y
+// `engineFilterHzMobile` móvil, issue #4 H4.)
 /** Umbral de reprogramación de frecuencia del dron (Hz, anti-spam de eventos). */
 const ENGINE_FREQ_EPSILON = 0.75;
 /** Duración del buffer de ruido blanco compartido (s). */
@@ -318,14 +326,23 @@ const ALMOST_ZERO = 0.0001;
  * `AUDIO.engineFreqMin` (a velocidad mínima) y `AUDIO.engineFreqMax` (a la
  * punta combinada turbo × DRS, mismo techo que `composeEffectiveSpeed`).
  * Monótona creciente; con turbo se realza por `AUDIO.engineTurboBoost`
- * (además del suba que ya trae la velocidad efectiva). Defensiva: NaN y
- * fuera de rango se clampean; siempre devuelve un número finito > 0.
+ * (además del suba que ya trae la velocidad efectiva). Con `mobileProfile`
+ * se usan las frecuencias del perfil móvil (`engineFreqMinMobile` /
+ * `engineFreqMaxMobile`, una octava arriba: los parlantes de un celular
+ * apenas reproducen < ~400 Hz — issue #4 H4). Defensiva: NaN y fuera de
+ * rango se clampean; siempre devuelve un número finito > 0.
  */
-export function engineFrequencyForSpeed(speed: number, turboActive = false): number {
+export function engineFrequencyForSpeed(
+  speed: number,
+  turboActive = false,
+  mobileProfile = false,
+): number {
+  const freqMin = mobileProfile ? AUDIO.engineFreqMinMobile : AUDIO.engineFreqMin;
+  const freqMax = mobileProfile ? AUDIO.engineFreqMaxMobile : AUDIO.engineFreqMax;
   const ceiling = MAX_SPEED * Math.max(1, TURBO_MULTIPLIER) * Math.max(1, DRS_MULTIPLIER);
   const clamped = Number.isFinite(speed) ? Math.min(Math.max(speed, MIN_SPEED), ceiling) : MIN_SPEED;
   const t = (clamped - MIN_SPEED) / (ceiling - MIN_SPEED);
-  const base = AUDIO.engineFreqMin + (AUDIO.engineFreqMax - AUDIO.engineFreqMin) * t;
+  const base = freqMin + (freqMax - freqMin) * t;
   return base * (turboActive ? Math.max(1, AUDIO.engineTurboBoost) : 1);
 }
 
@@ -354,6 +371,15 @@ export interface AudioManagerOptions {
    * se asume visible).
    */
   readonly visibilityTarget?: VisibilityEventTarget | null;
+  /**
+   * Perfil del dron del motor para móvil (issue #4, H4): frecuencias una
+   * octava arriba, lowpass más abierto y más ganancia — los parlantes de un
+   * celular apenas reproducen < ~400 Hz, el perfil desktop puede ser
+   * físicamente inaudible ahí. `undefined` = autodetectar vía `core/device`
+   * (user agent); pasar `true`/`false` lo fija (los tests fijan `false` para
+   * el perfil desktop, el default estable).
+   */
+  readonly mobileProfile?: boolean;
 }
 
 export class AudioManager implements ISfxEngine {
@@ -371,6 +397,9 @@ export class AudioManager implements ISfxEngine {
 
   /** Target de visibilidad para la recuperación (null = se asume visible). */
   private readonly visibilityTarget: VisibilityEventTarget | null;
+
+  /** true si el dron usa el perfil móvil (parlantes chicos, issue #4 H4). */
+  private readonly mobileProfile: boolean;
 
   /** Contexto creado lazy (primer unlock / primer play). */
   private context: AudioContextLike | null = null;
@@ -470,7 +499,25 @@ export class AudioManager implements ISfxEngine {
     this.onAudioBlocked = options.onAudioBlocked ?? showAudioBlockedHint;
     this.visibilityTarget =
       options.visibilityTarget === undefined ? defaultVisibilityTarget() : options.visibilityTarget;
+    this.mobileProfile = options.mobileProfile ?? defaultIsMobileProfile();
     this.muted = this.loadMuted();
+  }
+
+  /**
+   * Volumen, corte del lowpass y corte con turbo según el perfil vigente
+   * (desktop o móvil): seleccionados una sola vez por el flag, cero números
+   * mágicos afuera de `balance.ts`.
+   */
+  private get engineVolumeProfile(): number {
+    return this.mobileProfile ? AUDIO.engineVolumeMobile : AUDIO.engineVolume;
+  }
+
+  private get engineFilterProfile(): number {
+    return this.mobileProfile ? AUDIO.engineFilterHzMobile : AUDIO.engineFilterHz;
+  }
+
+  private get engineFilterTurboProfile(): number {
+    return this.mobileProfile ? AUDIO.engineFilterTurboHzMobile : AUDIO.engineFilterTurboHz;
   }
 
   /** Estado de silencio actual (refleja lo persistido + toggles de la sesión). */
@@ -861,18 +908,22 @@ export class AudioManager implements ISfxEngine {
       const t = ctx.currentTime;
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.value = ENGINE_FILTER_HZ;
+      filter.frequency.value = this.engineFilterProfile;
       filter.Q.value = 0.9;
 
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(ALMOST_ZERO, t);
-      gain.gain.exponentialRampToValueAtTime(AUDIO.engineVolume, t + ENGINE_ATTACK_SECONDS);
+      gain.gain.exponentialRampToValueAtTime(this.engineVolumeProfile, t + ENGINE_ATTACK_SECONDS);
 
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
       const sub = ctx.createOscillator();
       sub.type = 'sine';
-      this.scheduledEngineFreq = engineFrequencyForSpeed(this.latestSpeed, this.turboActive);
+      this.scheduledEngineFreq = engineFrequencyForSpeed(
+        this.latestSpeed,
+        this.turboActive,
+        this.mobileProfile,
+      );
       osc.frequency.value = this.scheduledEngineFreq;
       sub.frequency.value = this.scheduledEngineFreq / 2;
 
@@ -890,7 +941,9 @@ export class AudioManager implements ISfxEngine {
 
       // El filtro arranca en el brillo que corresponda al turbo vigente (y el
       // estado queda sincronizado para el guard de flancos de setTurboActive).
-      filter.frequency.value = this.turboActive ? ENGINE_FILTER_TURBO_HZ : ENGINE_FILTER_HZ;
+      filter.frequency.value = this.turboActive
+        ? this.engineFilterTurboProfile
+        : this.engineFilterProfile;
       this.filterTurboActive = this.turboActive;
     } catch {
       this.engineOsc = null;
@@ -952,7 +1005,7 @@ export class AudioManager implements ISfxEngine {
     try {
       if (this.engineFilter && this.context) {
         this.engineFilter.frequency.setTargetAtTime(
-          active ? ENGINE_FILTER_TURBO_HZ : ENGINE_FILTER_HZ,
+          active ? this.engineFilterTurboProfile : this.engineFilterProfile,
           this.context.currentTime,
           0.08,
         );
@@ -969,7 +1022,7 @@ export class AudioManager implements ISfxEngine {
     if (!engineOsc || !engineSub || !context) {
       return;
     }
-    const target = engineFrequencyForSpeed(this.latestSpeed, this.turboActive);
+    const target = engineFrequencyForSpeed(this.latestSpeed, this.turboActive, this.mobileProfile);
     if (Math.abs(target - this.scheduledEngineFreq) < ENGINE_FREQ_EPSILON) {
       return;
     }
@@ -1302,6 +1355,22 @@ function defaultVisibilityTarget(): VisibilityEventTarget | null {
     return typeof document === 'undefined' ? null : document;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Perfil default del dron (issue #4, H4): móvil si el user agent lo dice
+ * (`isMobileLikeDevice`, pura en `core/device`), desktop en cualquier otro
+ * caso (tests de Node, navegadores sin `navigator`, errores).
+ */
+function defaultIsMobileProfile(): boolean {
+  try {
+    if (typeof navigator === 'undefined') {
+      return false;
+    }
+    return isMobileLikeDevice(navigator);
+  } catch {
+    return false;
   }
 }
 

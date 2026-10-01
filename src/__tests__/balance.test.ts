@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIO,
   BASE_SPEED,
   COIN_SCORE,
   COIN_VALUE,
@@ -104,5 +105,33 @@ describe('balance', () => {
     const roadWidth = TRACK.roadRight - TRACK.roadLeft;
     // El auto mide 48 px (12 px × escala 4); el asfalto debe sobrepasarlo.
     expect(roadWidth).toBeGreaterThan(48);
+  });
+
+  it('audio: el dron del motor tiene parámetros positivos y turbo ≥ 1', () => {
+    expect(AUDIO.engineVolume).toBeGreaterThan(0);
+    expect(AUDIO.engineVolume).toBeLessThan(1);
+    expect(AUDIO.engineFreqMin).toBeGreaterThan(0);
+    expect(AUDIO.engineFreqMax).toBeGreaterThan(AUDIO.engineFreqMin);
+    expect(AUDIO.engineTurboBoost).toBeGreaterThanOrEqual(1);
+    // El lowpass deja pasar al menos la fundamental de punta.
+    expect(AUDIO.engineFilterHz).toBeGreaterThan(AUDIO.engineFreqMax);
+    expect(AUDIO.engineFilterTurboHz).toBeGreaterThan(AUDIO.engineFilterHz);
+  });
+
+  it('audio: el perfil móvil del dron es el desktop una octava arriba (issue #4)', () => {
+    // Los parlantes de un celular apenas reproducen < ~400 Hz: la banda
+    // desktop (55–235 Hz) puede ser físicamente inaudible ahí. El perfil
+    // móvil sube UNA octava exacta para entrar en banda reproducible.
+    expect(AUDIO.engineFreqMinMobile).toBe(AUDIO.engineFreqMin * 2);
+    expect(AUDIO.engineFreqMaxMobile).toBe(AUDIO.engineFreqMax * 2);
+    // La fundamental de punta móvil entra de lleno en la banda reproducible.
+    expect(AUDIO.engineFreqMinMobile).toBeGreaterThan(100);
+    expect(AUDIO.engineFreqMaxMobile).toBeGreaterThan(400);
+    // El parlante chico rinde menos: la ganancia móvil compensa (≥ desktop).
+    expect(AUDIO.engineVolumeMobile).toBeGreaterThanOrEqual(AUDIO.engineVolume);
+    expect(AUDIO.engineVolumeMobile).toBeLessThan(1);
+    // El lowpass móvil deja pasar los armónicos de la banda nueva.
+    expect(AUDIO.engineFilterHzMobile).toBeGreaterThan(AUDIO.engineFreqMaxMobile);
+    expect(AUDIO.engineFilterTurboHzMobile).toBeGreaterThan(AUDIO.engineFilterHzMobile);
   });
 });
