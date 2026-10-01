@@ -90,6 +90,38 @@ export const SPEED_COAST_DRAG = 60;
 export const SPEEDOMETER_KMH_PER_PX = 0.36;
 
 /* ------------------------------------------------------------------ */
+/* Salud del vehículo (issue #10, H1)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Salud del vehículo: daño gradual por choques (rival/piedra) y roce con
+ * pared, i-frames post-impacto y botiquín de reparación. La muerte ya no es
+ * instantánea por contacto: el HP llega a 0. Los consumidores (GameScene,
+ * HUD) llegan en fases H2+; H1 solo define la mecánica pura y el balance.
+ */
+export const HEALTH = {
+  /** HP máximo (y valor de arranque de cada carrera). */
+  max: 100,
+  /** Daño de un impacto puntual, por tipo de colisión. */
+  impactDamage: {
+    /** Choque contra un vehículo rival. */
+    rival: 35,
+    /** Impacto contra una piedra (debris). */
+    debris: 20,
+  },
+  /** Daño continuo por roce con pared (HP/s, sin i-frames). */
+  scrapePerSecond: 15,
+  /** Invulnerabilidad tras un impacto (s): bloquea daños puntual repetidos. */
+  invulnerabilitySeconds: 0.6,
+  /** HP reparado por el botiquín (tope `max`). */
+  repairAmount: 35,
+  /** Fracción de HP por debajo de la cual el auto está en estado crítico. */
+  criticalRatio: 0.25,
+  /** Pérdida de velocidad al recibir un impacto (px/s). */
+  impactSpeedLoss: 150,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* HUD de carrera (Fase 3)                                             */
 /* ------------------------------------------------------------------ */
 
@@ -113,6 +145,13 @@ export const RACE_HUD = {
   drsChipHeight: 48,
   /** Y del chip de DRS (centro). */
   drsChipY: 158,
+  /* Salud del vehículo (issue #10, H1): la barra va debajo del chip DRS
+   * (que termina en y ≈ 182), centrada como la barra de turbo y el chip. */
+  /** Tamaño de la barra de salud. */
+  healthBarWidth: 320,
+  healthBarHeight: 24,
+  /** Y de la barra de salud (centro). */
+  healthBarY: 212,
   /* Marcador de puntaje y contador de monedas (Fase 5): en las esquinas del
    * borde superior, dejando el centro para velocímetro/barra/chip. */
   /** X del puntaje (el texto ancla por su borde izquierdo). */
