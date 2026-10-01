@@ -3,6 +3,7 @@ import { getAudioEngine } from '../audio/AudioManager';
 import {
   BASE_SPEED,
   COUNTDOWN,
+  FIXED_VIRTUAL_STEP,
   GAMEOVER_TRANSITION_MS,
   MUTE_BUTTON,
   OIL_SLIP_SECONDS,
@@ -13,6 +14,7 @@ import {
   TRACK,
   TURBO_MAX,
   TURBO_PICKUP_REFILL,
+  VIRTUAL_SPEED,
 } from '../config/balance';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import type { ISaveRepository } from '../data/ISaveRepository';
@@ -20,18 +22,21 @@ import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { parseGameOverData } from '../data/types';
 import { PlayerCar } from '../entities/PlayerCar';
 import { TrackEntity } from '../entities/TrackEntity';
+import { parseMultiplayerInit, type MultiplayerInit } from '../net/protocol';
 import { CountdownSystem, type CountdownLabel } from '../systems/CountdownSystem';
-import { DifficultySystem } from '../systems/DifficultySystem';
+import type { DifficultySystem } from '../systems/DifficultySystem';
 import { InputSystem } from '../systems/InputSystem';
 import { KeyboardSource } from '../systems/KeyboardSource';
 import { PauseSystem } from '../systems/PauseSystem';
 import { TouchSource } from '../systems/TouchSource';
 import { ScoreSystem } from '../systems/ScoreSystem';
+import { buildRaceSystems } from '../systems/RaceSystems';
 import { SpawnSystem } from '../systems/SpawnSystem';
 import { SpeedSystem, composeEffectiveSpeed } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
 import { DrsSystem } from '../systems/DrsSystem';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { VirtualClock } from '../systems/VirtualClock';
 import { EnergyBar } from '../ui/EnergyBar';
 import { DrsIndicator } from '../ui/DrsIndicator';
 import { MenuButton } from '../ui/MenuButton';
@@ -100,6 +105,10 @@ export class GameScene extends Phaser.Scene {
   private difficulty!: DifficultySystem;
   private spawnSystem!: SpawnSystem;
 
+  /* M1 — multijugador: init data multi (null = modo solo) + reloj virtual. */
+  private multiInit: MultiplayerInit | null = null;
+  private virtualClock: VirtualClock | null = null;
+
   /* Estado de la carrera. */
   private currentSpeed = BASE_SPEED;
   private coins = 0;
@@ -137,6 +146,16 @@ export class GameScene extends Phaser.Scene {
 
   constructor() {
     super(GameScene.KEY);
+  }
+
+  /**
+   * M1 — init data de escena: en multijugador LobbyScene pasa
+   * `{mode:'multi', seed, players, myPeerId, roomWord}`. Un payload inválido
+   * o ausente degrada a modo solo (parseo defensivo, como GameOverScene):
+   * el modo de un jugador sigue siendo el MISMO código de siempre.
+   */
+  init(data: unknown): void {
+    this.multiInit = parseMultiplayerInit(data);
   }
 
   create(): void {
@@ -193,11 +212,28 @@ export class GameScene extends Phaser.Scene {
     this.drsSystem = new DrsSystem(() => this.speedSystem.speed);
 
     // Fase 4 — dificultad por distancia + generación procedural con pools.
-    this.difficulty = new DifficultySystem();
-    this.spawnSystem = new SpawnSystem(this, {
-      speedProvider: () => this.currentSpeed,
-      difficulty: this.difficulty,
-    });
+    // M1 — por modo (buildRaceSystems): solo = exactamente como siempre;
+    // multi = scheduler sembrado por seed + reloj virtual (pista determinista
+    // compartida) + rng por entidad. El crash en multi termina como en solo
+    // (la eliminación compartida llega en M2).
+    const race = buildRaceSystems(this.multiInit);
+    this.difficulty = race.difficulty;
+    this.virtualClock = race.virtualClock ?? null;
+    if (race.scheduler) {
+      this.spawnSystem = new SpawnSystem(
+        this,
+        {
+          speedProvider: () => this.currentSpeed,
+          difficulty: this.difficulty,
+        },
+        { scheduler: race.scheduler, entityRng: race.entityRng },
+      );
+    } else {
+      this.spawnSystem = new SpawnSystem(this, {
+        speedProvider: () => this.currentSpeed,
+        difficulty: this.difficulty,
+      });
+    }
     this.registerCollisions();
 
     this.createTurboEffects();
@@ -740,8 +776,15 @@ export class GameScene extends Phaser.Scene {
 
     // Fase 4 — la distancia alimenta la dificultad y el scheduler spawnea
     // oleadas (líneas de monedas, slaloms, obstáculos) fuera de pantalla.
-    this.difficulty.update(dt, speed);
-    this.spawnSystem.update(dt);
+    // M1 — en multijugador la GENERACIÓN corre por reloj virtual (función
+    // pura de la distancia: misma seed ⇒ misma pista en todos los clientes)
+    // y solo el MOVIMIENTO de sprites queda por frame real.
+    if (this.virtualClock) {
+      this.updateGenerationVirtual(dt, speed);
+    } else {
+      this.difficulty.update(dt, speed);
+      this.spawnSystem.update(dt);
+    }
 
     // Fase 5 — puntaje: distancia (escalada con la velocidad real) + bonus
     // de velocidad sostenida. dt inyectado; la emisión al HUD va por el bus.
@@ -777,5 +820,24 @@ export class GameScene extends Phaser.Scene {
       cooldownRatio: this.drsSystem.cooldownRatio,
       cooldownSeconds: this.drsSystem.cooldownSeconds,
     });
+  }
+
+  /**
+   * M1 — generación determinista por reloj virtual (multijugador). Cableado
+   * del test estrella de M0 (trackDeterminism): el avance real del frame se
+   * acumula como DISTANCIA en el VirtualClock; cada paso fijo emitido
+   * alimenta al scheduler con `FIXED_VIRTUAL_STEP` a `VIRTUAL_SPEED` y
+   * DESPUÉS avanza la dificultad (el scheduler consume los params del paso
+   * previo). El movimiento de sprites queda en `updateMovement()` con la
+   * velocidad real del frame (presentación).
+   */
+  private updateGenerationVirtual(dt: number, speed: number): void {
+    this.virtualClock?.addFrame(dt, speed);
+    const steps = this.virtualClock?.consumeSteps() ?? 0;
+    for (let i = 0; i < steps; i += 1) {
+      this.spawnSystem.consumeGenerationSteps(1, this.difficulty.params);
+      this.difficulty.update(FIXED_VIRTUAL_STEP, VIRTUAL_SPEED);
+    }
+    this.spawnSystem.updateMovement();
   }
 }

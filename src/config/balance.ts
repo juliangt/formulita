@@ -143,30 +143,45 @@ export const RACE_HUD = {
 /* Pantallas — menú y game over (Fase 5)                               */
 /* ------------------------------------------------------------------ */
 
-/** Layout de MenuScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
+/**
+ * Layout de MenuScene sobre el lienzo 720×1280 (de arriba hacia abajo).
+ *
+ * M1 — multijugador: se agregó el botón MULTIJUGADOR debajo de JUGAR y el
+ * bloque se reacomodó (título/auto/estadísticas más arriba) para que ambos
+ * botones + la ayuda quepan sin tocarse.
+ */
 export const MENU = {
   /** Velocidad de scroll de la pista de fondo (px/s). */
   roadScrollSpeed: 90,
   /** Opacidad del velo oscuro sobre la pista de fondo (0–1). */
   veilAlpha: 0.62,
   /** Y del título (centro). */
-  titleY: 240,
+  titleY: 220,
   /** Y del subtítulo (centro). */
-  subtitleY: 335,
+  subtitleY: 308,
   /** Y del auto decorativo (centro) y su escala. */
-  carY: 520,
+  carY: 452,
   carScale: 2.5,
   /** Y de la línea de récord (centro). */
-  recordY: 742,
+  recordY: 646,
   /** Y de la línea de monedas (centro). */
-  coinsY: 812,
+  coinsY: 714,
   /** Botón JUGAR: centro Y, tamaño y fuente de la etiqueta. */
-  playY: 980,
+  playY: 848,
   playWidth: 400,
-  playHeight: 120,
+  playHeight: 118,
   playFontSize: 52,
+  /* M1 — botón MULTIJUGADOR: debajo de JUGAR, mismo ancho, etiqueta más
+   * chica (13 caracteres de monospace tienen que entrar en 400 px). */
+  /** Centro Y del botón MULTIJUGADOR. */
+  multiY: 988,
+  /** Ancho/alto del botón MULTIJUGADOR (mismo ancho que JUGAR). */
+  multiWidth: 400,
+  multiHeight: 118,
+  /** Tamaño de fuente de la etiqueta MULTIJUGADOR (px). */
+  multiFontSize: 40,
   /** Y del centro del bloque de ayuda de controles. */
-  helpY: 1160,
+  helpY: 1150,
   /** Separación vertical entre líneas de ayuda (px). */
   helpLineHeight: 34,
   /** Tamaño de fuente de las líneas de récord/monedas (px). */
@@ -429,6 +444,87 @@ export const MUTE_BUTTON = {
   margin: 44,
   /** Profundidad en GameScene: sobre el HUD, bajo el HUD táctil. */
   gameDepth: 45,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Multijugador (M1 — Trystero + lobby)                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Constantes del multijugador online (M1). La palabra clave de la sala ES el
+ * roomId de Trystero (`joinRoom({appId}, 'PARRILLA')`): 5–9 letras A-Z la
+ * mantienen pronunciable por teléfono y libre de ambigüedad de acentos/Ñ.
+ */
+export const MULTIPLAYER = {
+  /** Capacidad máxima por sala (el 11º es rechazado con `roomFull`). */
+  maxPlayers: 10,
+  /** Jugadores mínimos para que el anfitrión pueda INICIAR. */
+  minPlayersToStart: 2,
+  /** Largo máximo del nombre del jugador (sanitizado antes de viajar). */
+  maxPlayerNameLength: 12,
+  /** Largo mínimo de la palabra de sala (letras). */
+  roomWordMinLength: 5,
+  /** Largo máximo de la palabra de sala (letras). */
+  roomWordMaxLength: 9,
+  /**
+   * Paleta fija de 10 colores (0xrrggbb), uno por jugador. La asignación es
+   * una FUNCIÓN PURA del roster (índice del peer en el roster ordenado por
+   * peerId — ver `net/lobbyState.ts`): determinista e idéntica en todos los
+   * clientes para un mismo roster, sin negociación. Elegidos para leerse
+   * sobre asfalto gris (#3a3a44) con contraste alto entre sí.
+   */
+  palette: [
+    0xd63c3c, // rojo
+    0x3c6cd6, // azul
+    0x1d8f43, // verde
+    0xf7c531, // amarillo
+    0xb04ee0, // violeta
+    0xf07f2c, // naranja
+    0x2cd6c9, // cian
+    0xe84c8b, // rosa
+    0x9aa5b4, // gris claro
+    0x8fce3c, // lima
+  ],
+} as const;
+
+/** Layout de LobbyScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
+export const LOBBY = {
+  /** Y del título SALA / UNIRSE (centro). */
+  titleY: 130,
+  /** Y del subtítulo de modo (centro). */
+  subtitleY: 205,
+  /** Y del rótulo "PALABRA DE SALA" (centro). */
+  wordLabelY: 300,
+  /** Y de la palabra gigante / campo de palabra (centro). */
+  wordY: 380,
+  /** Tamaño de fuente de la palabra gigante (px). */
+  wordFontSize: 80,
+  /** Y del rótulo del roster ("JUGADORES n/10"). */
+  rosterLabelY: 495,
+  /** Y de la primera fila del roster; una fila por jugador (hasta 10). */
+  rosterStartY: 560,
+  rosterLineHeight: 52,
+  rosterFontSize: 32,
+  /** Indicador cuadrado de color a la izquierda del nombre (px). */
+  swatchSize: 30,
+  /** Y del mensaje de estado ("ESPERANDO AL ANFITRIÓN…" / errores). */
+  statusY: 1078,
+  statusFontSize: 28,
+  /* Botones lado a lado abajo: SALIR a la izquierda, INICIAR/ENTRAR a la
+   * derecha (el primario cerca del pulgar derecho). */
+  /** Centro X del botón primario (INICIAR/ENTRAR). */
+  primaryX: 540,
+  /** Centro X del botón SALIR. */
+  exitX: 180,
+  /** Centro Y de ambos botones. */
+  buttonY: 1180,
+  buttonWidth: 300,
+  buttonHeight: 104,
+  buttonFontSize: 38,
+  /** Input DOM de palabra/nombre: ancho/alto en px de juego y fuente. */
+  inputWidth: 480,
+  inputHeight: 84,
+  inputFontSize: 44,
 } as const;
 
 /* ------------------------------------------------------------------ */

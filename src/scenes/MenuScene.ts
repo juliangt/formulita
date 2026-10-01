@@ -1,11 +1,14 @@
 import Phaser from 'phaser';
 import { getAudioEngine } from '../audio/AudioManager';
-import { MUTE_BUTTON, MENU, TRACK } from '../config/balance';
+import { MUTE_BUTTON, MENU, MULTIPLAYER, TRACK } from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
+import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
+import { sanitizePlayerName } from '../net/protocol';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { GameScene } from './GameScene';
+import { LobbyScene } from './LobbyScene';
 import { MenuButton } from '../ui/MenuButton';
 import { MuteButton } from '../ui/MuteButton';
 
@@ -38,6 +41,21 @@ const HELP_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
 const FS_LABEL_WINDOWED = 'PANTALLA COMPLETA';
 const FS_LABEL_FULLSCREEN = 'VENTANA';
 
+/** Input DOM del nombre multijugador (overlay simple sobre el menú). */
+const NAME_INPUT_CSS = {
+  'font-family': 'monospace',
+  'font-size': '44px',
+  width: '440px',
+  height: '80px',
+  'text-align': 'center',
+  color: '#f2f2f2',
+  'background-color': '#0c0c14',
+  border: '4px solid #3a3a44',
+  'border-radius': '8px',
+  outline: 'none',
+  'pointer-events': 'auto',
+};
+
 /**
  * MenuScene — pantalla principal (Fase 5).
  *
@@ -61,6 +79,10 @@ export class MenuScene extends Phaser.Scene {
   private road!: Phaser.GameObjects.TileSprite;
   private muteButton!: MuteButton;
   private fullscreenButton: MenuButton | null = null;
+
+  /* M1 — overlay multijugador (nombre + crear/unirse), null si cerrado. */
+  private multiOverlay: Phaser.GameObjects.Container | null = null;
+  private multiNameInput: Phaser.GameObjects.DOMElement | null = null;
 
   constructor() {
     super(MenuScene.KEY);
@@ -131,6 +153,21 @@ export class MenuScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-ENTER', this.startGame);
     this.input.keyboard?.on('keydown-SPACE', this.startGame);
 
+    // M1 — MULTIJUGADOR: abre el overlay de nombre + crear/unirse (el flujo
+    // pide el nombre UNA vez acá, persistido en PlayerProfileRepository, y
+    // luego pasa a LobbyScene con el modo elegido).
+    new MenuButton(this, {
+      x: centerX,
+      y: MENU.multiY,
+      width: MENU.multiWidth,
+      height: MENU.multiHeight,
+      label: 'MULTIJUGADOR',
+      tint: 0xb04ee0,
+      fontSize: MENU.multiFontSize,
+      bus,
+      onPress: this.openMultiplayerOverlay,
+    });
+
     // Ayuda de controles y extras según el dispositivo. El fullscreen (Fase
     // 7) es OPCIONAL y solo desktop: en móvil el HUD táctil ya ocupa los
     // pulgares y el navegador maneja la pantalla completa a su manera.
@@ -198,7 +235,127 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private readonly startGame = (): void => {
+    // Con el overlay multijugador abierto, Enter/Espacio son del input de
+    // nombre: no arrancan una carrera solo atravesada.
+    if (this.multiOverlay) {
+      return;
+    }
     this.scene.start(GameScene.KEY);
+  };
+
+  /* ---------------------------------------------------------------- */
+  /* M1 — overlay multijugador: nombre + crear/unirse                   */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Overlay DOM/Phaser sobre el menú: pide el nombre (una sola vez — se
+   * precarga el guardado) y ofrece CREAR SALA / UNIRSE. La capa oscura es
+   * interactiva y corta la propagación para que los botones de abajo no
+   * disparen taps atravesados.
+   */
+  private readonly openMultiplayerOverlay = (): void => {
+    if (this.multiOverlay) {
+      return;
+    }
+    const centerX = this.scale.width / 2;
+    const bus = getSessionEventBus(this.registry);
+    const storedName = getPlayerProfileRepository(this.registry).load().name;
+
+    const overlay = this.add.container(0, 0).setDepth(100);
+    const dim = this.add
+      .rectangle(centerX, this.scale.height / 2, this.scale.width, this.scale.height, 0x000000, 0.86)
+      .setInteractive();
+    dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+      event.stopPropagation();
+    });
+    const panel = this.add.rectangle(centerX, 660, 620, 820, 0x14141c).setStrokeStyle(6, 0x3a3a44);
+    overlay.add([dim, panel]);
+
+    overlay.add(
+      this.add
+        .text(centerX, 340, 'MULTIJUGADOR', {
+          fontFamily: 'monospace',
+          fontSize: '56px',
+          color: '#f2f2f2',
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 8),
+    );
+    overlay.add(
+      this.add
+        .text(centerX, 470, 'TU NOMBRE', {
+          fontFamily: 'monospace',
+          fontSize: '28px',
+          color: '#9aa0a8',
+        })
+        .setOrigin(0.5),
+    );
+
+    this.multiNameInput = this.add.dom(centerX, 570, 'input', NAME_INPUT_CSS) as Phaser.GameObjects.DOMElement;
+    const inputNode = this.multiNameInput.node as HTMLInputElement;
+    inputNode.maxLength = MULTIPLAYER.maxPlayerNameLength;
+    inputNode.value = storedName;
+    inputNode.placeholder = 'PILOTO';
+    this.multiNameInput.setOrigin(0.5).setDepth(101);
+
+    const goLobby = (mode: 'create' | 'join'): void => {
+      const name = sanitizePlayerName(inputNode.value);
+      if (name.length === 0) {
+        return; // Sin nombre no hay lobby: el input queda enfocado.
+      }
+      getPlayerProfileRepository(this.registry).save({ name });
+      this.closeMultiplayerOverlay();
+      this.scene.start(LobbyScene.KEY, { mode, name });
+    };
+
+    overlay.add(
+      new MenuButton(this, {
+        x: centerX,
+        y: 740,
+        width: 440,
+        height: 110,
+        label: 'CREAR SALA',
+        tint: 0x1d8f43,
+        fontSize: 42,
+        bus,
+        onPress: () => goLobby('create'),
+      }).container,
+    );
+    overlay.add(
+      new MenuButton(this, {
+        x: centerX,
+        y: 880,
+        width: 440,
+        height: 110,
+        label: 'UNIRSE',
+        tint: 0x3c6cd6,
+        fontSize: 42,
+        bus,
+        onPress: () => goLobby('join'),
+      }).container,
+    );
+    overlay.add(
+      new MenuButton(this, {
+        x: centerX,
+        y: 1020,
+        width: 300,
+        height: 96,
+        label: 'CERRAR',
+        tint: 0x525868,
+        fontSize: 34,
+        bus,
+        onPress: this.closeMultiplayerOverlay,
+      }).container,
+    );
+
+    this.multiOverlay = overlay;
+  };
+
+  private readonly closeMultiplayerOverlay = (): void => {
+    this.multiNameInput?.destroy();
+    this.multiNameInput = null;
+    this.multiOverlay?.destroy();
+    this.multiOverlay = null;
   };
 
   /**

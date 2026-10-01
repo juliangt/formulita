@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { BootScene } from '../scenes/BootScene';
 import { PreloadScene } from '../scenes/PreloadScene';
 import { MenuScene } from '../scenes/MenuScene';
+import { LobbyScene } from '../scenes/LobbyScene';
 import { GameScene } from '../scenes/GameScene';
 import { GameOverScene } from '../scenes/GameOverScene';
 import { PauseScene } from '../scenes/PauseScene';
@@ -59,11 +60,20 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
       activePointers: 5,
       touch: true,
     },
-    // Flujo completo (Fase 5 + pausa de Fase 7): Boot → Preload (texturas) →
-    // Menu → Game → GameOver; REINTENTAR vuelve a Game y MENÚ a Menu.
-    // PauseScene es un OVERLAY: no está en el flujo, se lanza encima de Game
-    // (pausada) y se detiene al reanudar. El orden del array es el flujo:
-    // Phaser arranca la primera escena.
-    scene: [BootScene, PreloadScene, MenuScene, GameScene, GameOverScene, PauseScene],
+    // M1 — multijugador: contenedor DOM para los inputs de LobbyScene
+    // (palabra de sala / nombre). `add.dom()` solo funciona con
+    // `createContainer: true`; los elementos quedan sobre el canvas y se
+    // destruyen con la escena.
+    dom: {
+      createContainer: true,
+    },
+    // Flujo completo (Fase 5 + pausa de Fase 7 + lobby de M1): Boot →
+    // Preload (texturas) → Menu → Game → GameOver; REINTENTAR vuelve a Game
+    // y MENÚ a Menu. LobbyScene (M1) vive entre Menu y Game: se arranca con
+    // init data {mode:'create'|'join', name} desde el menú y arranca Game
+    // con los datos de la sala. PauseScene es un OVERLAY: no está en el
+    // flujo, se lanza encima de Game (pausada) y se detiene al reanudar. El
+    // orden del array es el flujo: Phaser arranca la primera escena.
+    scene: [BootScene, PreloadScene, MenuScene, LobbyScene, GameScene, GameOverScene, PauseScene],
   };
 }

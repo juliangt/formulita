@@ -12,7 +12,9 @@
     "serve": "node scripts/serve-dist.mjs 5200"
   },
   "dependencies": {
-    "phaser": "^4.2.1"
+    "@trystero-p2p/torrent": "^0.25.4",
+    "phaser": "^4.2.1",
+    "trystero": "^0.25.4"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^5.0.3",

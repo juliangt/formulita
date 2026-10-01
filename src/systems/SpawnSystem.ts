@@ -2,9 +2,11 @@ import Phaser from 'phaser';
 import {
   BASE_SPEED,
   ENTITY_POOL_LIMITS,
+  FIXED_VIRTUAL_STEP,
   MIN_SPEED,
   PLAYER_START_Y,
   SPAWN,
+  VIRTUAL_SPEED,
   laneCenterX,
 } from '../config/balance';
 import {
@@ -664,6 +666,42 @@ export class SpawnSystem {
       this.dispatch(request);
     }
 
+    this.moveActives(speed, difficulty.rivalSpeedFactor);
+  }
+
+  /**
+   * M1 — generación por RELOJ VIRTUAL (multijugador): consume `steps` pasos
+   * fijos de `FIXED_VIRTUAL_STEP` a `VIRTUAL_SPEED` (los que emitió el
+   * `VirtualClock` del frame) y despacha las oleadas resultantes. Así la
+   * generación es función pura de la DISTANCIA (idéntica en todos los
+   * clientes con la misma seed), mientras el movimiento de los sprites
+   * sigue por frame con velocidad real (`updateMovement`). `steps` ≤ 0 o no
+   * entero es no-op.
+   */
+  consumeGenerationSteps(steps: number, difficulty: DifficultyParams): void {
+    if (!this.running) {
+      return;
+    }
+    const count = Math.floor(steps);
+    for (let i = 0; i < count; i += 1) {
+      for (const request of this.scheduler.update(FIXED_VIRTUAL_STEP, VIRTUAL_SPEED, difficulty)) {
+        this.dispatch(request);
+      }
+    }
+  }
+
+  /**
+   * M1 — movimiento y reciclaje por frame SIN generar oleadas. Ruta de
+   * presentación del multijugador: la generación corre por pasos virtuales
+   * (`consumeGenerationSteps`), pero los sprites se mueven cada frame real
+   * con la velocidad real de carrera.
+   */
+  updateMovement(): void {
+    if (!this.running) {
+      return;
+    }
+    const speed = this.deps.speedProvider();
+    const difficulty = this.deps.difficulty.params;
     this.moveActives(speed, difficulty.rivalSpeedFactor);
   }
 
