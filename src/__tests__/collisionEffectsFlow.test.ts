@@ -42,7 +42,7 @@ const ALWAYS_ABOVE_DRS = MAX_SPEED * 2 * TURBO_MULTIPLIER * DRS_MULTIPLIER;
 /** Registro de lo emitido por el bus durante la carrera. */
 type Emission =
   | { event: 'coins'; coins: number }
-  | { event: 'pickup'; kind: 'turbo' | 'drs' }
+  | { event: 'pickup'; kind: 'turbo' | 'drs' | 'repair' }
   | { event: 'health'; hp: number; ratio: number }
   | { event: 'damage' }
   | { event: 'game-over'; summary: GameEvents['game-over'] };
@@ -64,7 +64,12 @@ class RaceCollisions {
   gameOver = false;
   /** Piedras recicladas al pool (`spawnSystem.release` en GameScene). */
   debrisReleased = 0;
+  /** Pickups reciclados al pool (`spawnSystem.release` en GameScene). */
+  pickupsReleased = 0;
   readonly emissions: Emission[] = [];
+
+  /** Espejo del guard `lastEmittedHp` de `GameScene.emitHealth`. */
+  private lastEmittedHp: number = HEALTH.max;
 
   constructor() {
     this.bus.on('coins', (coins) => this.emissions.push({ event: 'coins', coins }));
@@ -90,11 +95,19 @@ class RaceCollisions {
         break;
       case 'collect-turbo':
         this.turbo.refill(TURBO_PICKUP_REFILL);
+        this.pickupsReleased += 1;
         this.bus.emit('pickup', 'turbo');
         break;
       case 'collect-drs':
         this.drs.resetCooldown();
+        this.pickupsReleased += 1;
         this.bus.emit('pickup', 'drs');
+        break;
+      case 'collect-repair':
+        this.health.heal(HEALTH.repairAmount);
+        this.pickupsReleased += 1;
+        this.bus.emit('pickup', 'repair');
+        this.emitHealth();
         break;
       case 'slip':
         // playerCar.slip(OIL_SLIP_SECONDS): el derrape no toca el puntaje.
@@ -137,6 +150,10 @@ class RaceCollisions {
 
   /** `GameScene.emitHealth`: emite el estado de salud cuando el HP cambia. */
   private emitHealth(): void {
+    if (this.health.hp === this.lastEmittedHp) {
+      return; // mismo guard que GameScene: a vida llena el botiquín no emite
+    }
+    this.lastEmittedHp = this.health.hp;
     this.bus.emit('health', { hp: this.health.hp, ratio: this.health.ratio });
   }
 
@@ -459,5 +476,57 @@ describe('integración colisiones → roce con pared (issue #10, H2)', () => {
       .reverse()
       .find((e) => e.event === 'health');
     expect(lastHealth).toEqual({ event: 'health', hp: 0, ratio: 0 });
+  });
+});
+
+describe('integración colisiones → botiquín (issue #10, H3)', () => {
+  it('el botiquín cura +35 con anuncio por el bus y el pickup se libera', () => {
+    const race = new RaceCollisions();
+    race.contact('rivalBlue'); // 100 → 65
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('debris'); // 65 → 45
+    race.emissions.length = 0;
+
+    race.contact('repair');
+
+    expect(race.health.hp).toBe(45 + HEALTH.repairAmount);
+    expect(race.pickupsReleased).toBe(1);
+    expect(race.emissions).toEqual([
+      { event: 'pickup', kind: 'repair' },
+      { event: 'health', hp: 45 + HEALTH.repairAmount, ratio: 0.8 },
+    ]);
+  });
+
+  it('dos botiquines segundan curan parcial y luego al tope: 45 → 80 → 100 (clamp)', () => {
+    const race = new RaceCollisions();
+    race.contact('rivalBlue'); // 100 → 65
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('debris'); // 65 → 45
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.emissions.length = 0;
+
+    race.contact('repair');
+    expect(race.health.hp).toBe(45 + HEALTH.repairAmount); // 80
+
+    race.contact('repair');
+    expect(race.health.hp).toBe(HEALTH.max); // 80 + 35 = 115 → clamp al tope
+    expect(race.pickupsReleased).toBe(2);
+    const healthEvents = race.emissions.filter((e) => e.event === 'health');
+    expect(healthEvents).toEqual([
+      { event: 'health', hp: 45 + HEALTH.repairAmount, ratio: 0.8 },
+      { event: 'health', hp: HEALTH.max, ratio: 1 },
+    ]);
+  });
+
+  it('a vida llena es un no-op de curación (cura 0) pero se consume y anuncia pickup', () => {
+    const race = new RaceCollisions();
+
+    race.contact('repair');
+
+    expect(race.health.hp).toBe(HEALTH.max);
+    expect(race.pickupsReleased).toBe(1); // el pickup igual se consume
+    // SFX (por `pickup`) y burst ocurren en GameScene; el bus NO emite
+    // `health` (guard de emitHealth: el HP mostrado no cambió).
+    expect(race.emissions).toEqual([{ event: 'pickup', kind: 'repair' }]);
   });
 });

@@ -411,7 +411,7 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Contacto jugador ↔ entidad (data-driven por `CollisionEffect`):
-   * - collect-coin/turbo/drs → efecto + reciclaje al pool.
+   * - collect-coin/turbo/drs/repair → efecto + reciclaje al pool.
    * - slip (aceite) → derrape breve; la mancha permanece en la pista.
    * - crash (rival/resto) → daño gradual al chasis (issue #10, H2); con HP 0
    *   deriva en crash() (explosión + shake + game-over / eliminación multi).
@@ -451,6 +451,16 @@ export class GameScene extends Phaser.Scene {
         this.burstCollect(entity);
         this.spawnSystem.release(entity);
         this.bus.emit('pickup', 'drs');
+        break;
+      case 'collect-repair':
+        // Issue #10 (H3) — el botiquín sana `HEALTH.repairAmount` con clamp
+        // al tope: a vida llena cura 0 (no-op) pero el pickup se consume y
+        // el feedback (burst + SFX vía bus) ocurre igual que en los demás.
+        this.healthSystem.heal(HEALTH.repairAmount);
+        this.burstCollect(entity);
+        this.spawnSystem.release(entity);
+        this.bus.emit('pickup', 'repair');
+        this.emitHealth();
         break;
       case 'slip':
         // La mancha sigue en la pista: overlapando de nuevo refresca el derrape.

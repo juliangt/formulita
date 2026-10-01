@@ -41,9 +41,19 @@ function mulberry32(seed: number): () => number {
 }
 
 describe('ENTITY_DEFINITIONS — sanidad data-driven (OCP)', () => {
-  it('define los 8 kinds requeridos por la Fase 4', () => {
+  it('define los 9 kinds requeridos por la Fase 4 + issue #10 (H3)', () => {
     expect(ALL_KINDS.sort()).toEqual(
-      ['coin', 'debris', 'drs', 'oil', 'rivalBlue', 'rivalGreen', 'rivalYellow', 'turbo'].sort(),
+      [
+        'coin',
+        'debris',
+        'drs',
+        'oil',
+        'repair',
+        'rivalBlue',
+        'rivalGreen',
+        'rivalYellow',
+        'turbo',
+      ].sort(),
     );
   });
 
@@ -100,9 +110,13 @@ describe('ENTITY_DEFINITIONS — sanidad data-driven (OCP)', () => {
     expect(ENTITY_DEFINITIONS.oil.effect).toBe('slip');
   });
 
-  it('pickups: turbo recarga medidor y drs resetea cooldown', () => {
+  it('pickups: turbo recarga medidor, drs resetea cooldown y repair sana el chasis', () => {
     expect(ENTITY_DEFINITIONS.turbo.effect).toBe('collect-turbo');
     expect(ENTITY_DEFINITIONS.drs.effect).toBe('collect-drs');
+    expect(ENTITY_DEFINITIONS.repair.effect).toBe('collect-repair');
+    // El botiquín vive en la familia pickup con la misma hitbox que sus pares.
+    expect(ENTITY_DEFINITIONS.repair.family).toBe('pickup');
+    expect(entityKindsByFamily('pickup')).toContain('repair');
   });
 });
 
@@ -111,6 +125,30 @@ describe('pesos de spawn', () => {
     for (const family of Object.keys(ENTITY_KINDS_BY_FAMILY) as EntityFamily[]) {
       expect(totalFamilyWeight(family)).toBeGreaterThan(0);
     }
+  });
+
+  it('la familia pickup suma 12 con el botiquín (turbo 5 + drs 4 + repair 3)', () => {
+    expect(totalFamilyWeight('pickup')).toBe(12);
+  });
+
+  it('la ruleta pickup reparte ~42% turbo / ~33% drs / ~25% repair (rng semillado)', () => {
+    const rng = mulberry32(20261001);
+    const draws = 30000;
+    const counts = new Map<EntityKind, number>();
+
+    for (let i = 0; i < draws; i += 1) {
+      const kind = pickWeightedKind('pickup', rng);
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    }
+
+    const total = totalFamilyWeight('pickup');
+    for (const kind of entityKindsByFamily('pickup')) {
+      const expected = entityDefinition(kind).spawnWeight / total;
+      const observed = (counts.get(kind) ?? 0) / draws;
+      expect(Math.abs(observed - expected), `${kind}: peso ${expected}`).toBeLessThan(0.02);
+    }
+    // ~25% de los pickups son botiquines (DoD del issue #10).
+    expect((counts.get('repair') ?? 0) / draws).toBeCloseTo(3 / 12, 1);
   });
 
   it('pickWeightedKind respeta los límites de la ruleta (extremos determinísticos)', () => {
@@ -142,7 +180,7 @@ describe('pesos de spawn', () => {
 
 describe('closingSpeed — cierre de entidades hacia el jugador', () => {
   it('las entidades estáticas cierran a la velocidad del jugador', () => {
-    for (const kind of ['coin', 'debris', 'oil', 'turbo', 'drs'] as EntityKind[]) {
+    for (const kind of ['coin', 'debris', 'oil', 'turbo', 'drs', 'repair'] as EntityKind[]) {
       expect(closingSpeed(kind, 300)).toBe(300);
     }
   });
