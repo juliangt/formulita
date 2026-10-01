@@ -17,8 +17,10 @@
  * consigo mismo, y la UI no necesita filtrar.
  *
  * Los métodos de C3 (`sendDm`/`onDm`/`sendInvite`/`onInvite`) ya están
- * declarados para que el protocolo no cambie cuando lleguen; la implementación
- * actual los registra/lanza como placeholders documentados.
+ * implementados por `TrysteroChatClient`: acciones DIRIGIDAS de la sala
+ * pública (solo al destinatario), con el payload sanitizado en ambos
+ * extremos. Sin disponibilidad (`setAvailable` OFF) los envíos son no-op:
+ * sin sala pública no hay a quién enviarle.
  */
 
 import type { DmPayload, InvitePayload } from './protocol';
@@ -78,24 +80,34 @@ export interface ChatClient {
   /** La lista de disponibles cambió (entrada, meta, salida o stale). */
   onAvailablePeers(handler: (peers: AvailablePeer[]) => void): () => void;
 
-  /* ---------------- C3 (declarados, llegan con el DM) ---------------- */
+  /* ---------------- C3 — DM e invitaciones (acciones dirigidas) ---------------- */
 
   /**
-   * Envía un mensaje directo a un peer de la sala pública (C3): la acción
-   * `dm {text, targetPeerId}` de la sala pública. Placeholder en C2.
+   * Envía un mensaje directo a un peer de la sala pública: la acción
+   * `dm {text, targetPeerId}` DIRIGIDA al destinatario. El texto viaja
+   * sanitizado (trim/colapso/máx `CHAT_MAX_LEN`); un texto vacío no viaja.
+   * No-op sin disponibilidad.
    */
   sendDm(peerId: string, text: string): void;
 
   /**
-   * Un peer de la sala pública me envió un DM (C3): llega con SU peerId y el
-   * payload sanitizado. Placeholder en C2 (se puede suscribir, nunca dispara).
+   * Un peer de la sala pública me envió un DM: llega con SU peerId y el
+   * payload ya sanitizado. El cliente solo despacha los mensajes dirigidos
+   * a MI peerId (terceros nunca ven el dm).
    */
   onDm(handler: (fromPeerId: string, payload: DmPayload) => void): () => void;
 
-  /** Invita a un peer a la partida por palabra de sala (C3). Placeholder. */
+  /**
+   * Invita a un peer a la partida por palabra de sala: la acción
+   * `invite {keyword}` DIRIGIDA. Una keyword que queda inválida (A–Z 5–9)
+   * no viaja. No-op sin disponibilidad.
+   */
   sendInvite(peerId: string, keyword: string): void;
 
-  /** Un peer me invitó a su partida (C3). Placeholder en C2. */
+  /**
+   * Un peer me invitó a su partida: llega con SU peerId y la keyword ya
+   * sanitizada/validada (lista para el flujo UNIRSE del lobby).
+   */
   onInvite(handler: (fromPeerId: string, payload: InvitePayload) => void): () => void;
 
   /* ---------------- lifecycle / errores ---------------- */

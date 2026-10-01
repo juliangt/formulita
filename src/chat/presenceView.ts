@@ -106,10 +106,13 @@ export interface AvailablePeerRow {
  * Formatea un peer disponible como fila de la lista: su nombre con el color
  * derivado del conjunto de presentes (la escena dibuja el swatch al lado).
  * Nombre vacío (meta corrupta) degrada a "PILOTO", igual que el chat de sala.
+ * C3: `unreadCount > 0` agrega el badge de no leídos del hilo de DM con ese
+ * peer ("BETO · 2") — la lista es el índice de hilos de la tab PÚBLICO.
  */
-export function formatAvailablePeerRow(peer: AvailablePeer): AvailablePeerRow {
+export function formatAvailablePeerRow(peer: AvailablePeer, unreadCount = 0): AvailablePeerRow {
+  const name = peer.name.length > 0 ? peer.name : 'PILOTO';
   return {
-    text: peer.name.length > 0 ? peer.name : 'PILOTO',
+    text: unreadCount > 0 ? `${name} · ${unreadCount}` : name,
     color: colorNumberToCss(peer.color),
   };
 }

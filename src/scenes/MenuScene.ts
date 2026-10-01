@@ -5,6 +5,8 @@ import { prefersTouchControls } from '../core/device';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
+import { chatMenuButtonLabel } from '../chat/dmView';
+import { getSocialChatSession } from '../chat/socialChatSession';
 import { sanitizePlayerName } from '../net/protocol';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { ChatScene } from './ChatScene';
@@ -80,6 +82,10 @@ export class MenuScene extends Phaser.Scene {
   private road!: Phaser.GameObjects.TileSprite;
   private muteButton!: MuteButton;
   private fullscreenButton: MenuButton | null = null;
+  /** C3 — botón CHAT con badge de no leídos de la sesión social. */
+  private chatButton: MenuButton | null = null;
+  /** Último label del badge (evita repintar el texto en cada frame). */
+  private lastChatLabel = '';
 
   /* M1 — overlay multijugador (nombre + crear/unirse), null si cerrado. */
   private multiOverlay: Phaser.GameObjects.Container | null = null;
@@ -172,12 +178,16 @@ export class MenuScene extends Phaser.Scene {
     // C2 (issue #2) — CHAT: abre el overlay social con la tab PÚBLICO por
     // default (en el menú no hay sala de partida: SALA llega deshabilitada).
     // El overlay NO está en gameConfig: se registra on-demand como en C1.
-    new MenuButton(this, {
+    // C3 — el label lleva el BADGE de no leídos de la sesión (sala + DMs):
+    // resolver la sesión social crea el store on-demand (nunca conecta).
+    const social = getSocialChatSession(this.registry);
+    this.lastChatLabel = chatMenuButtonLabel(social.store.totalUnread);
+    this.chatButton = new MenuButton(this, {
       x: centerX,
       y: MENU.chatY,
       width: MENU.chatWidth,
       height: MENU.chatHeight,
-      label: 'CHAT',
+      label: this.lastChatLabel,
       tint: 0xb04ee0,
       fontSize: MENU.chatFontSize,
       bus,
@@ -214,6 +224,13 @@ export class MenuScene extends Phaser.Scene {
       0,
       TRACK.tileHeight,
     );
+    // C3 — badge en vivo: los DM pueden llegar con el menú abierto (la sala
+    // pública sigue viva detrás); el label solo se toca si cambió de verdad.
+    const label = chatMenuButtonLabel(getSocialChatSession(this.registry).store.totalUnread);
+    if (label !== this.lastChatLabel) {
+      this.lastChatLabel = label;
+      this.chatButton?.setLabel(label);
+    }
   }
 
   /** Ayuda de controles según el dispositivo (táctil vs teclado). */
