@@ -488,6 +488,28 @@ export const SPEED_VIGNETTE = {
   lerpRate: 7,
 } as const;
 
+/* ------------------------------------------------------------------ */
+/* Reloj virtual de generación (M0 — pista determinista)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Velocidad de referencia del reloj virtual de generación (px/s). La pista
+ * del multijugador se genera como función pura de la DISTANCIA recorrida:
+ * cada cliente acumula su avance real y lo convierte a tiempo virtual a
+ * esta velocidad constante (= BASE_SPEED). Dos clientes con la misma seed
+ * que recorran la misma distancia ven exactamente las mismas oleadas, sin
+ * importar cuán rápido o frenado haya ido cada uno en cada tramo.
+ */
+export const VIRTUAL_SPEED = BASE_SPEED;
+
+/**
+ * Paso fijo del reloj virtual (s): el acumulador de generación emite pasos
+ * discretos de esta duración y preserva el resto fraccionario para el
+ * próximo frame. Elimina el drift de punto flotante entre dispositivos con
+ * framerates distintos (misma distancia ⇒ mismos pasos, ±1 por redondeo).
+ */
+export const FIXED_VIRTUAL_STEP = 1 / 30;
+
 /**
  * Layout horizontal de la pista, de afuera hacia adentro:
  * barrera (barrierWidth) → kerb/rumble (kerbWidth) → asfalto jugable.
