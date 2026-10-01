@@ -681,6 +681,20 @@ describe('AudioManager — hint de audio bloqueado (una vez por sesión)', () =>
     expect(hintCalls()).toBe(0);
   });
 
+  it('el flag de sesión del hint vive solo en memoria: nunca toca el storage', async () => {
+    const storage = new FakeStorage();
+    const { manager, ctx, hintCalls } = makeHarness({ storage });
+    ctx.resume = () => Promise.reject(new Error('resume bloqueado (fake)'));
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(1);
+    // El flag "ya mostrado" es estado de sesión en memoria: el storage solo
+    // guarda el mute (formulita.audio.v1), jamás el flag del hint.
+    expect(storage.length).toBe(0);
+  });
+
   it('sin contexto (Web Audio ausente) → sin hint', async () => {
     let hints = 0;
     const manager = new AudioManager({
