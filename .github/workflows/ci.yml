@@ -1,0 +1,43 @@
+# CI — verificación de cada PR a main (M3).
+#
+# Corre la suite completa y el build de producción SIN VITE_TRYSTERO_APP_ID:
+# el appId es un requisito de RUNTIME (fail-fast al abrir el multijugador,
+# ver src/net/TrysteroNetClient.ts), no de build — que el build dependa de la
+# variable sería un bug, y este job lo garantiza en cada PR.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test + Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tests (Vitest)
+        run: npm test
+
+      - name: Build de producción (sin appId — fail-fast es runtime)
+        run: npm run build

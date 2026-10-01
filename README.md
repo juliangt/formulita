@@ -2,9 +2,9 @@
 
 Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 4 + Vite + TypeScript strict.**
 
-Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado).
+Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor).
 
-> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7).**
+> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1).**
 
 ---
 
@@ -70,6 +70,66 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 
 ---
 
+## Multijugador (battle royale por monedas)
+
+**Battle royale de 2 a 10 jugadores por monedas, P2P sin servidor.** Todos corren la MISMA pista — la **palabra de sala** es la clave que la define — y gana el que **más monedas juntó** al cierre: sobrevivir solo da más tiempo para juntar, no la corona (desempate por kilómetros y luego por puntaje). Si chocás quedás **eliminado como espectador**: seguís viendo la carrera de los demás hasta que queda un solo vivo, y entonces todos ven el **leaderboard final** — idéntico en todos los dispositivos, mismo orden y mismo ganador.
+
+### Cómo se juega
+
+1. Menú → **MULTIJUGADOR** → crear sala (el juego te da una **palabra de sala** de 5–9 letras, pronunciable por teléfono) o **unirse** con la palabra que te pasó el anfitrión.
+2. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna solo en función del roster (determinista e idéntico para todos).
+3. Con 2 o más en sala, el **anfitrión** aprieta **INICIAR**: se difunde la semilla de la pista y el countdown 3-2-1-GO! arranca en todos.
+4. Corré, esquivá y juntá monedas. Cada choque te elimina (pasás a espectador); la partida termina al quedar 1 vivo.
+5. Leaderboard final: **monedas DESC → km DESC → puntaje DESC**. ¡GANASTE! si tu fila es la 1.
+
+### Arquitectura (una línea)
+
+**P2P sin servidor** (Trystero sobre WebRTC, señalización BitTorrent — `@trystero-p2p/torrent`): pista **determinista por seed de sala + reloj virtual** de generación (misma distancia ⇒ mismas oleadas en todos), rivales como **autos fantasma interpolados** (estado propio a 10 Hz, render a t−100 ms, semitransparentes y atravesables) y **stats congeladas** al crash/fin, de modo que cada cliente computa el MISMO leaderboard sin negociar nada por la red.
+
+### Configuración — `VITE_TRYSTERO_APP_ID`
+
+| Dónde | Cómo |
+| --- | --- |
+| Desarrollo local | `cp .env.example .env.local` y ajustá el valor (`.env.local` está gitignored) |
+| Producción (Pages) | Variable de repo `VITE_TRYSTERO_APP_ID` en **Settings → Secrets and variables → Actions → Variables** (la lee el workflow de deploy al buildtear) |
+
+- **Qué es**: el namespace de matchmaking de Trystero — un string público que agrupa las salas de ESTA aplicación dentro de los trackers de señalización. **NO es un secreto ni una API key**: queda visible en el bundle, y dos navegadores solo se encuentran si usan el mismo appId + la misma palabra de sala.
+- **Si falta**: el build funciona igual (el requisito es de RUNTIME, no de build); al abrir el multijugador el lobby **falla rápido** con el error visible "falta VITE_TRYSTERO_APP_ID" en vez de conectar en silencio.
+
+### Probar el multijugador local
+
+1. `npm run dev` y abrí **dos pestañas** de la misma URL (o dos dispositivos de la red por la IP LAN — ver [Probar desde el celular](#probar-desde-el-celular-lan)).
+2. Pestaña 1: MULTIJUGADOR → crear sala, anotá la palabra.
+3. Pestaña 2 (o el celular): MULTIJUGADOR → unirse con esa palabra.
+4. **INICIAR** desde la pestaña del anfitrión.
+
+### Publicación (GitHub Pages)
+
+Al pushear a `main`, el workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) corre la suite completa, buildtea con `--base=/formulita/` (Pages sirve los sitios de proyecto bajo subpath) y publica en:
+
+**<https://juliangt.github.io/formulita/>**
+
+Los PRs a `main` corren CI (tests + build, sin deploy) en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+
+Requisitos (una sola vez, quien administra el repo):
+
+1. **Settings → Pages → Source: "GitHub Actions"**.
+2. **Settings → Secrets and variables → Actions → Variables** (no Secrets): `VITE_TRYSTERO_APP_ID` (p. ej. `formulita`).
+
+> Sin la variable el sitio se publica igual (el appId es runtime, no build-time), pero el multijugador mostrará el error de configuración faltante al entrar al lobby.
+
+### Límites de la v1 multijugador
+
+- **Sin reconexión**: te caés, recargás o cerrás = eliminado, con las stats hasta ese momento.
+- **Autos fantasma sin colisión entre sí** (y atravesables respecto del propio): solo tu pista local te elimina.
+- **Sin anti-cheat**: cada cliente reporta sus propias stats (confianza P2P).
+- **Background del navegador te elimina** por staleness (>20 s sin difundir estado).
+- **Monedas por instancia local**: dos jugadores pueden tomar la misma moneda (cada uno la ve en su propia pista).
+- **NAT/4G restrictivos pueden fallar**: WebRTC directo sin TURN propio; si el handshake no cruza, la sala no conecta (error visible en el lobby).
+- **Los récords del modo solo NO se mezclan** con las partidas multi.
+
+---
+
 ## Arquitectura (por capas)
 
 Principios SOLID: escenas que solo orquestan, lógica pura testeable, input/audio/persistencia detrás de interfaces.
@@ -84,8 +144,12 @@ src/
 ├── scenes/               # Boot → Preload → Menu → Game → GameOver (+ Pause overlay)
 ├── systems/              # lógica pura: Speed, Turbo, Drs, Countdown, Pause,
 │                         #   Spawn (scheduler + ObjectPool), Difficulty, Score,
-│                         #   Input (Keyboard/Touch), TextureFactory (pixel art)
-├── entities/             # PlayerCar, RivalCar, Hazard, Coin, Pickup (+ defs data-driven)
+│                         #   Input (Keyboard/Touch), TextureFactory (pixel art),
+│                         #   VirtualClock (pista determinista), MatchTracker (multi)
+├── entities/             # PlayerCar, RivalCar, Hazard, Coin, Pickup, GhostCar (+ defs)
+├── net/                  # multijugador P2P: NetClient + TrysteroNetClient, protocolo,
+│                         #   lobby (roster/colores/anfitrión), roomRng (seed por sala),
+│                         #   interpolación de fantasmas, handoff lobby → carrera
 ├── ui/                   # HUD: Speedometer, EnergyBar, DrsIndicator, ScoreHud,
 │                         #   botones (MenuButton, PixelButton, MuteButton)
 ├── audio/                # AudioManager (ISfxEngine): SFX sintéticos Web Audio + dron
@@ -106,9 +170,10 @@ Decisiones clave:
 
 ## Tests
 
-- 28 archivos / 392 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- 50 archivos / 624 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
 - Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), steering del derrape (`slipSteer`), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
 - Tests de integración sin runtime de Phaser: input → steering (fusión consumida por el auto, con derrape), SpawnScheduler × DifficultySystem (ritmo, patrones y cierre conjuntos), colisiones → economía (monedas/pickups → Score/Turbo/DRS/bus) y carrera → guardado → recarga.
+- Multijugador: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`, misma semántica que Trystero) — roster/colores/anfitrión, pista determinista por seed con perfiles de velocidad distintos, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes (lobby → start → carrera con perfiles distintos → 2 choques → match-over) que exige el MISMO ranking en los tres, con el de más monedas de ganador aunque otro haya sobrevivido más.
 
 ---
 
@@ -146,6 +211,24 @@ Criterio de aceptación global: **sesión de 10 minutos sin errores de consola**
 - [ ] El audio suena desde el primer toque (desbloqueo de autoplay) y el mute persiste entre sesiones; el motor sube de tono con la velocidad y se calla en pausa.
 - [ ] Long-press sobre la pantalla no abre menú contextual ni selecciona texto; double-tap no hace zoom.
 - [ ] Sesión de 10 minutos: sin errores de consola, sin fugas evidentes (el pool recicla: la densidad de entidades no crece con el tiempo).
+
+### Multijugador (multi-dispositivo: Wi-Fi + 4G mezclados)
+
+Criterio de aceptación del issue #1 (M3): partida de ~10 minutos con dispositivos REALES en redes mezcladas (uno en Wi-Fi, otro en 4G) sin errores de consola, mismo trazado en todos y leaderboard idéntico. Se prueba contra la versión publicada (<https://juliangt.github.io/formulita/>) o con `npm run dev`/`npm run serve` en la LAN.
+
+- [ ] Dos o más dispositivos crean/unen por palabra y ven el MISMO roster (nombres, colores, contador n/10) en todas las pantallas.
+- [ ] INICIAR (anfitrión) arranca el countdown en todos casi a la vez; nadie ve la pista moverse antes del GO!.
+- [ ] **Mismo trazado en todos**: a la misma distancia, las mismas oleadas/monedas/rivales en cada dispositivo (pista determinista por seed de sala).
+- [ ] El auto fantasma de cada rival se mueve suave (interpolado, sin teletransportes), es semitransparente y NO colisiona con el propio.
+- [ ] Choque en un dispositivo: ese jugador pasa a espectador (cartel ELIMINADO — PUESTO N) y los demás ven VIVOS bajar de inmediato.
+- [ ] **Eliminaciones en orden correcto**: el PUESTO N de cada cartel coincide con el orden real de los choques.
+- [ ] Al quedar 1 vivo: **leaderboard final en TODOS los dispositivos — idéntico** (mismo orden, mismas stats fila por fila, mismo ganador marcado).
+- [ ] El ganador es el de **más monedas**, aunque otro jugador haya sobrevivido más tiempo (y kilómetros).
+- [ ] Redes mezcladas (Wi-Fi + 4G): la partida se completa; si un jugador pierde conexión, los demás lo ven eliminado (desconexión inmediata o stale a los ~20 s) y la partida concluye bien.
+- [ ] Mandar un dispositivo al background/bloquear pantalla: ese jugador queda eliminado por stale (>20 s sin estado) y el resto sigue sin errores.
+- [ ] Partida de ~10 min con 2–10 jugadores sin errores de consola ni degradación de FPS en ningún dispositivo.
+- [ ] **Reconexión NO soportada (límite v1)**: recargar (F5) a mitad de partida elimina al que recargó (puede crear/unirse a otra sala); los demás concluyen la partida en curso sin romperse.
+- [ ] Los récords/monedas del modo solo no cambian por jugar partidas multi.
 
 ---
 
