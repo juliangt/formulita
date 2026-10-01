@@ -112,8 +112,14 @@ export type AudioContextFactory = () => AudioContextLike | null;
 
 /** Objetivo de listeners para el desbloqueo (window lo satisface). */
 export interface UnlockEventTarget {
-  addEventListener(type: 'pointerdown' | 'keydown', handler: () => void): void;
-  removeEventListener(type: 'pointerdown' | 'keydown', handler: () => void): void;
+  addEventListener(
+    type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown',
+    handler: () => void,
+  ): void;
+  removeEventListener(
+    type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown',
+    handler: () => void,
+  ): void;
 }
 
 interface WindowWithWebAudio {
@@ -164,6 +170,8 @@ const ENGINE_FILTER_TURBO_HZ = 2200;
 const ENGINE_FREQ_EPSILON = 0.75;
 /** Duración del buffer de ruido blanco compartido (s). */
 const NOISE_BUFFER_SECONDS = 1;
+/** Duración del buffer silencioso del desbloqueo iOS (s). */
+const UNLOCK_PRIMER_SECONDS = 0.06;
 /** Valor "casi cero" para ramps exponenciales (no admiten 0). */
 const ALMOST_ZERO = 0.0001;
 
@@ -238,6 +246,15 @@ export class AudioManager implements ISfxEngine {
 
   /* --- Listeners de desbloqueo --- */
   private unlockTarget: UnlockEventTarget | null = null;
+
+  /**
+   * El primer buffer silencioso ya se sirvió para el contexto vigente. iOS
+   * Safari necesita UNA reproducción de buffer dentro de un gesto para abrir
+   * el pipeline de audio de verdad (un `resume()` a estado `running` no
+   * alcanza: los nodos sintéticos quedan mudos); después no hace falta
+   * repetirlo (tras una interrupción, el `resume` alcanza).
+   */
+  private primedContext = false;
 
   private readonly handleGestureUnlock = (): void => {
     this.unlock();
@@ -450,9 +467,11 @@ export class AudioManager implements ISfxEngine {
 
   /**
    * Desbloquea el audio (política de autoplay móvil): crea el contexto si
-   * falta y hace `resume()` si no está operativo (suspendido, o interrumpido
-   * — estado `'interrupted'` de Safari tras una llamada). Idempotente:
-   * llamarlo en cada gesto es barato y seguro.
+   * falta, hace `resume()` si no está operativo (suspendido, o interrumpido
+   * — estado `'interrupted'` de Safari tras una llamada) y, la primera vez,
+   * sirve un buffer silencioso: iOS Safari deja los nodos sintéticos mudos
+   * hasta que UN buffer suena dentro de un gesto, aunque el contexto esté
+   * `running`. Idempotente: llamarlo en cada gesto es barato y seguro.
    */
   unlock(): void {
     const ctx = this.ensureContext();
@@ -463,8 +482,33 @@ export class AudioManager implements ISfxEngine {
       void ctx.resume().catch(() => {
         // El resume puede rechazar (pestaña oculta, política estricta): no importa.
       });
+      if (!this.primedContext) {
+        this.playUnlockPrimer(ctx);
+        this.primedContext = true;
+      }
     } catch {
       // Degradación: el juego sigue sin sonido.
+    }
+  }
+
+  /**
+   * Reproduce un buffer de silencio a destination DENTRO del gesto: es la
+   * segunda mitad del ritual de desbloqueo de iOS (la primera es `resume`).
+   * Sin buffer de ruido compartido: este buffer es desechable y de ceros,
+   * así no ensucia el pool que usan los SFX (los tests cuentan nodos).
+   */
+  private playUnlockPrimer(ctx: AudioContextLike): void {
+    try {
+      const length = Math.max(1, Math.floor(ctx.sampleRate * UNLOCK_PRIMER_SECONDS));
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const t = ctx.currentTime;
+      source.start(t);
+      source.stop(t + UNLOCK_PRIMER_SECONDS);
+    } catch {
+      // Sin primer el ritual puede no alcanzar en iOS viejo: degradación.
     }
   }
 
@@ -498,6 +542,7 @@ export class AudioManager implements ISfxEngine {
     this.masterGain = null;
     this.noiseBuffer = null;
     this.contextFailed = false;
+    this.primedContext = false;
     if (ctx) {
       try {
         void ctx.close().catch(() => {
@@ -726,8 +771,11 @@ export class AudioManager implements ISfxEngine {
 
   /**
    * Instala los listeners de desbloqueo (política de autoplay móvil): el
-   * primer `pointerdown`/`keydown` del documento hace `unlock()`.
-   * Idempotente; el target es inyectable para testear sin window real.
+   * primer gesto del documento hace `unlock()`. Se cubren los CUATRO gestos
+   * relevantes: `pointerdown`/`keydown` (desktop) y `touchend`/`pointerup` —
+   * iOS Safari libera el audio recién en el fin del toque en algunas
+   * versiones, y iOS < 13 no emite eventos pointer en absoluto. Idempotente;
+   * el target es inyectable para testear sin window real.
    */
   attachUnlockListeners(target: UnlockEventTarget | null = defaultUnlockTarget()): void {
     if (!target || this.unlockTarget) {
@@ -735,6 +783,8 @@ export class AudioManager implements ISfxEngine {
     }
     try {
       target.addEventListener('pointerdown', this.handleGestureUnlock);
+      target.addEventListener('pointerup', this.handleGestureUnlock);
+      target.addEventListener('touchend', this.handleGestureUnlock);
       target.addEventListener('keydown', this.handleGestureUnlock);
       this.unlockTarget = target;
     } catch {
@@ -751,6 +801,8 @@ export class AudioManager implements ISfxEngine {
     this.unlockTarget = null;
     try {
       target.removeEventListener('pointerdown', this.handleGestureUnlock);
+      target.removeEventListener('pointerup', this.handleGestureUnlock);
+      target.removeEventListener('touchend', this.handleGestureUnlock);
       target.removeEventListener('keydown', this.handleGestureUnlock);
     } catch {
       // Nada que hacer: el target ya no sirve.

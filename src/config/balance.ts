@@ -370,18 +370,24 @@ export function laneIndexAtX(x: number, laneCount: number = SPAWN.laneCount): nu
  * Dos clusters en el borde inferior: ◀ ▶ abajo-izquierda y GAS / BRK /
  * TURBO / DRS en grilla 2×2 abajo-derecha (el acelerador en la esquina,
  * donde llega el pulgar derecho).
+ *
+ * Tamaño calibrado para pantallas chicas: el canvas escala ~0.54 en un
+ * iPhone (720 → 390 CSS px), así que 124 px de juego son ≈ 67 CSS px por
+ * botón — cómodo para el pulgar — y el hueco central deja lugar al botón de
+ * mute sin que los hit areas se pisen (hitPadding ≤ gap/2).
  */
 export const TOUCH_HUD = {
   /** Lado de cada botón (px). */
-  buttonSize: 116,
+  buttonSize: 124,
   /** Separación entre botones (px). */
-  gap: 20,
+  gap: 24,
   /** Margen horizontal de los clusters (px). */
-  marginX: 44,
+  marginX: 40,
   /** Margen inferior de la fila de abajo (px). */
   marginBottom: 44,
-  /** Margen extra del hit-test (px): los dedos son imprecisos. */
-  hitPadding: 12,
+  /** Margen extra del hit-test (px): los dedos son imprecisos. Debe quedar
+   * por debajo de gap/2 para que los hits de botones vecinos no se pisen. */
+  hitPadding: 8,
   /** Profundidad del HUD (por encima del auto, depth 10). */
   depth: 50,
   /** Alfa en reposo (HUD translúcido). */

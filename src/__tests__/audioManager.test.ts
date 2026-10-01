@@ -421,17 +421,23 @@ describe('AudioManager — listeners de desbloqueo por gesto', () => {
     readonly listeners = new Map<string, () => void>();
     removed = 0;
 
-    addEventListener(type: 'pointerdown' | 'keydown', handler: () => void): void {
+    addEventListener(
+      type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown',
+      handler: () => void,
+    ): void {
       this.listeners.set(type, handler);
     }
 
-    removeEventListener(type: 'pointerdown' | 'keydown', _handler: () => void): void {
+    removeEventListener(
+      type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown',
+      _handler: () => void,
+    ): void {
       this.listeners.delete(type);
       this.removed += 1;
     }
 
     /** Simula el gesto del usuario. */
-    gesture(type: 'pointerdown' | 'keydown'): void {
+    gesture(type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown'): void {
       this.listeners.get(type)?.();
     }
   }
@@ -450,6 +456,38 @@ describe('AudioManager — listeners de desbloqueo por gesto', () => {
     expect(ctx.resumeCount).toBe(1);
   });
 
+  it('touchend y pointerup también desbloquean (iOS libera el audio al soltar)', () => {
+    const { manager, ctx, factoryCalls } = makeHarness();
+    const target = new FakeEventTarget();
+
+    manager.attachUnlockListeners(target);
+
+    target.gesture('touchend');
+    expect(factoryCalls()).toBe(1);
+    expect(ctx.resumeCount).toBe(1);
+
+    // Contexto ya corriendo: el segundo gesto no vuelve a resume.
+    target.gesture('pointerup');
+    expect(ctx.resumeCount).toBe(1);
+  });
+
+  it('el desbloqueo sirve el primer buffer silencioso UNA vez (ritual iOS)', () => {
+    const { manager, ctx } = makeHarness();
+
+    manager.unlock();
+    manager.unlock();
+
+    // Un buffer de silencio de 1 canal, conectado a destination y arrancado.
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].connections.length).toBeGreaterThan(0);
+    expect(ctx.sources[0].started.length).toBe(1);
+    // Con el contexto ya corriendo no vuelve a primar ni a resume.
+    manager.unlock();
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.resumeCount).toBe(1);
+  });
+
   it('dispose quita los listeners instalados', () => {
     const { manager } = makeHarness();
     const target = new FakeEventTarget();
@@ -457,7 +495,7 @@ describe('AudioManager — listeners de desbloqueo por gesto', () => {
     manager.attachUnlockListeners(target);
     manager.dispose();
 
-    expect(target.removed).toBe(2);
+    expect(target.removed).toBe(4);
     target.gesture('pointerdown'); // ya no llega a nada
     expect(target.listeners.size).toBe(0);
   });
@@ -626,8 +664,10 @@ describe('AudioManager — integración por EventBus', () => {
 
     bus.emit('game-over', { score: 100, distance: 500, coins: 2 });
 
-    // El crash suma su oscilador de caída de tono y un source de ruido.
-    expect(ctx.sources.length).toBe(1);
+    // El crash suma su oscilador de caída de tono y un source de ruido; hay
+    // que sumar también el PRIMER de desbloqueo iOS (game-start → startEngine
+    // → unlock resume por primera vez y sirve el buffer de silencio).
+    expect(ctx.sources.length).toBe(2);
     expect(ctx.oscillators.length).toBe(3);
     // Los osciladores del dron quedaron con stop programado a futuro.
     expect(ctx.oscillators[0].stopped.length).toBe(1);
@@ -693,7 +733,8 @@ describe('AudioManager — integración por EventBus', () => {
     bus.emit('game-start', undefined);
     bus.emit('drs', { state: 'active', cooldownRatio: 0, cooldownSeconds: 0 });
 
-    expect(ctx.sources.length).toBe(2);
+    // Dos hisses + el primer silencioso del unlock que dispara game-start.
+    expect(ctx.sources.length).toBe(3);
   });
 
   it('el detacher de attachBus corta la conexión', () => {

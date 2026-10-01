@@ -8,9 +8,17 @@
  * visual que EnergyBar/DrsIndicator, y feedback de presión (escala + color
  * de etiqueta).
  *
- * El callback `onPress` dispara en `pointerup` SOLO si el pointer sigue
- * sobre el botón (patrón táctil estándar: si el dedo se desliza fuera, no
- * hay acción). El teclado (Enter/Espacio) lo maneja cada escena.
+ * La acción dispara en `pointerdown`, no en `pointerup`: en pantalla táctil
+ * el patrón "soltar encima" hace que un micro-deslizamiento del dedo dispare
+ * `pointerout` y cancele el tap (botones que "no responden"), y además suma
+ * la latencia de esperar el release. En un menú de juego no hay nada que
+ * proteger de una activación inmediata: disparar al presionar es lo que
+ * espera el pulgar. `pointerup`/`pointerupoutside`/`pointerout` solo sueltan
+ * el feedback visual. El teclado (Enter/Espacio) lo maneja cada escena.
+ *
+ * El hit area coincide exactamente con el borde visual del botón
+ * (`width + BORDER_PX * 2` × `height + BORDER_PX * 2`) y centrado en (0, 0)
+ * local (Phaser normaliza con displayOrigin = width/2, height/2).
  */
 
 import Phaser from 'phaser';
@@ -56,7 +64,6 @@ export class MenuButton {
   private readonly bus: EventBus<GameEvents> | null;
   private readonly label: Phaser.GameObjects.Text;
   private readonly textColor: string;
-  private pressed = false;
 
   constructor(scene: Phaser.Scene, config: MenuButtonConfig) {
     const {
@@ -90,12 +97,17 @@ export class MenuButton {
 
     this.container.add([border, fill, this.label]);
 
-    // Hit area explícito: los Container no computan bounds de sus hijos.
+    // Hit area que coincide exactamente con el borde visual del botón
+    // (width + BORDER_PX * 2 × height + BORDER_PX * 2). En Phaser, los
+    // Containers tienen displayOrigin = width * 0.5, height * 0.5 y el hit-test
+    // suma displayOrigin a las coordenadas locales (pointWithinHitArea):
+    // el Rectangle debe originarse en (0, 0) para quedar perfectamente centrado
+    // sobre los hijos colocados en (0, 0).
     const hitWidth = width + BORDER_PX * 2;
     const hitHeight = height + BORDER_PX * 2;
     this.container.setSize(hitWidth, hitHeight);
     this.container.setInteractive(
-      new Phaser.Geom.Rectangle(-hitWidth / 2, -hitHeight / 2, hitWidth, hitHeight),
+      new Phaser.Geom.Rectangle(0, 0, hitWidth, hitHeight),
       Phaser.Geom.Rectangle.Contains,
     );
     if (this.container.input) {
@@ -103,33 +115,23 @@ export class MenuButton {
     }
 
     this.container.on('pointerdown', this.handleDown);
-    this.container.on('pointerup', this.handleUp);
+    this.container.on('pointerup', this.handleRelease);
     this.container.on('pointerupoutside', this.handleRelease);
     this.container.on('pointerout', this.handleRelease);
   }
 
-  /** Feedback de presión: encoge y "invierte" la etiqueta. */
+  /** Presión: feedback visual inmediato + acción (dispara una vez por gesto). */
   private handleDown = (): void => {
-    this.pressed = true;
     this.container.setScale(0.94);
     this.label.setColor('#1d1d24');
+    // Fase 6: el SFX de click viaja por el bus (si la escena lo inyectó),
+    // antes de la acción para que se escuche aunque la escena cambie.
+    this.bus?.emit('ui-click', undefined);
+    this.onPress();
   };
 
-  /** Suelta y dispara la acción solo si el pointer sigue sobre el botón. */
-  private handleUp = (): void => {
-    const wasPressed = this.pressed;
-    this.handleRelease();
-    if (wasPressed) {
-      // Fase 6: el SFX de click viaja por el bus (si la escena lo inyectó),
-      // antes de la acción para que se escuche aunque la escena cambie.
-      this.bus?.emit('ui-click', undefined);
-      this.onPress();
-    }
-  };
-
-  /** Suelta sin accionar (el dedo se deslizó fuera o se soltó afuera). */
+  /** Suelta el feedback visual (la acción ya disparó en el pointerdown). */
   private handleRelease = (): void => {
-    this.pressed = false;
     this.container.setScale(1);
     this.label.setColor(this.textColor);
   };

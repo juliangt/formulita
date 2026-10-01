@@ -55,7 +55,6 @@ export class MuteButton {
   private readonly bus: EventBus<GameEvents>;
   private readonly icon: Phaser.GameObjects.Image;
   private muted: boolean;
-  private pressed = false;
 
   constructor(scene: Phaser.Scene, config: MuteButtonConfig) {
     const { x, y, bus, initiallyMuted, size = MUTE_BUTTON.size, depth = 0 } = config;
@@ -74,21 +73,24 @@ export class MuteButton {
     this.icon = scene.add.image(0, 0, TEXTURE_KEYS.hudAudioOn);
     this.container.add([border, panel, this.icon]);
 
-    // Hit area explícito (los Container no computan bounds de sus hijos).
+    // Hit area que coincide exactamente con el borde visual del botón
+    // (size + BORDER_PX * 2). Phaser normaliza con displayOrigin = hit * 0.5,
+    // por lo que el Rectangle debe originarse en (0, 0).
     const hit = size + BORDER_PX * 2;
     this.container.setSize(hit, hit);
     this.container.setInteractive(
-      new Phaser.Geom.Rectangle(-hit / 2, -hit / 2, hit, hit),
+      new Phaser.Geom.Rectangle(0, 0, hit, hit),
       Phaser.Geom.Rectangle.Contains,
     );
     if (this.container.input) {
       this.container.input.cursor = 'pointer';
     }
 
-    // Patrón táctil de MenuButton: la acción dispara solo si el pointer
-    // sigue sobre el botón al soltar.
+    // Patrón táctil de MenuButton: la acción dispara en `pointerdown` (en
+    // pantalla táctil, "soltar encima" cancela con cualquier micro-
+    // deslizamiento del dedo); los pointerup/out solo sueltan el feedback.
     this.container.on('pointerdown', this.handleDown);
-    this.container.on('pointerup', this.handleUp);
+    this.container.on('pointerup', this.handleRelease);
     this.container.on('pointerupoutside', this.handleRelease);
     this.container.on('pointerout', this.handleRelease);
 
@@ -114,27 +116,19 @@ export class MuteButton {
     this.container.setAlpha(muted ? ALPHA_OFF : ALPHA_ON);
   }
 
+  /** Presión: feedback + toggle (orden: 1) mute, 2) click de confirmación). */
   private handleDown = (): void => {
-    this.pressed = true;
     this.container.setScale(0.92);
-  };
-
-  /** Suelta y dispara el toggle solo si el pointer sigue sobre el botón. */
-  private handleUp = (): void => {
-    const wasPressed = this.pressed;
-    this.handleRelease();
-    if (!wasPressed) {
-      return;
-    }
     // 1) El mute (AudioManager lo aplica y persiste; este botón se repinta
-    // por su propia suscripción a `mute`). 2) El click de confirmación.
+    // por su propia suscripción a `mute`). 2) El click de confirmación,
+    // DESPUÉS, para que suene al REACTIVAR el audio y haya silencio al
+    // silenciar.
     this.bus.emit('mute', !this.muted);
     this.bus.emit('ui-click', undefined);
   };
 
-  /** Suelta sin accionar (el dedo se deslizó fuera o se soltó afuera). */
+  /** Suelta el feedback visual (el toggle ya disparó en el pointerdown). */
   private handleRelease = (): void => {
-    this.pressed = false;
     this.container.setScale(1);
   };
 }

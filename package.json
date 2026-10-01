@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "serve": "node scripts/serve-dist.mjs 5200"
   },
   "dependencies": {
     "phaser": "^4.2.1"

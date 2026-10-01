@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { createGameConfig } from './config/gameConfig';
+import { createGameConfig, GAME_HEIGHT, GAME_WIDTH } from './config/gameConfig';
 
 /** Contenedor DOM donde Phaser monta el canvas. */
 const GAME_CONTAINER_ID = 'game';
@@ -28,12 +28,134 @@ function installGestureGuards(): void {
   document.addEventListener('selectstart', block);
 }
 
+/**
+ * Mantiene el mapeo de toques → coordenadas de juego fresco (iOS Safari).
+ *
+ * Phaser cachea el rect del canvas y solo lo actualiza en window.resize y
+ * orientationchange. Al colapsar/expander la barra de URL, iOS cambia el
+ * layout viewport SIN disparar resize (página sin scroll): el canvas se
+ * re-centra por CSS pero las bounds cacheadas quedan viejas y los toques
+ * caen desplazados — la mitad de un botón "no responde". Dos redes:
+ * - `visualViewport` resize/scroll: iOS lo dispara en cada cambio de barra.
+ * - refresh en fase de CAPTURA por touchstart/pointerdown: cada toque se
+ *   mapea con el rect recién leído, dispare o no ningún evento.
+ */
+function installViewportSync(game: Phaser.Game): void {
+  const refresh = (): void => {
+    try {
+      game.scale.refresh();
+    } catch {
+      // Sin refresh el mapeo cae al último estado conocido: el juego sigue.
+    }
+  };
+  window.visualViewport?.addEventListener('resize', refresh);
+  window.visualViewport?.addEventListener('scroll', refresh);
+  document.addEventListener('visibilitychange', refresh);
+  window.addEventListener('touchstart', refresh, true);
+  window.addEventListener('pointerdown', refresh, true);
+}
+
 function bootstrap(): Phaser.Game {
   const container = document.getElementById(GAME_CONTAINER_ID);
   if (!container) {
     throw new Error(`No se encontró el contenedor #${GAME_CONTAINER_ID} en el DOM`);
   }
-  return new Phaser.Game(createGameConfig(container));
+  const game = new Phaser.Game(createGameConfig(container));
+  installViewportSync(game);
+  installTransformGuard(game);
+  installBuildTag();
+  return game;
+}
+
+/**
+ * Guardia del mapeo toque → coordenadas de juego (SOLUCIÓN de raíz).
+ *
+ * Phaser transforma las coordenadas del toque con el rect del canvas y la
+ * escala cacheados por el ScaleManager; en iOS Safari esos valores quedan
+ * viejos (la barra de URL cambia el viewport sin disparar resize, el canvas
+ * se re-centra por CSS, etc.) y los toques se registran desplazados: media
+ * superficie del botón "no responde" aunque el hit area sea correcto.
+ *
+ * Acá se envuelve `InputManager.transformPointer` — el ÚNICO punto por el
+ * que pasa todo input (mouse/touch, down/move/up) — para que CADA evento:
+ * 1. refresque el rect y la escala con `game.scale.refresh()` (lectura en
+ *    vivo de getBoundingClientRect, cero caché), y
+ * 2. deje un anillo en pantalla exactamente donde el juego registró el
+ *    toque (proyección del mapeo de vuelta a CSS px). Si el anillo no
+ *    aparece debajo del dedo, el desvío queda a la vista — diagnóstico sin
+ *    conjeturas. (ECO DE DIAGNÓSTICO: quitar cuando el input esté estable.)
+ */
+function installTransformGuard(game: Phaser.Game): void {
+  const inputManager = game.input;
+  const baseTransform = inputManager.transformPointer.bind(inputManager);
+
+  const echo = document.createElement('div');
+  echo.style.cssText = [
+    'position:fixed',
+    'width:18px',
+    'height:18px',
+    'border:2px solid rgba(255,255,255,0.9)',
+    'border-radius:50%',
+    'box-shadow:0 0 5px rgba(0,0,0,0.7)',
+    'pointer-events:none',
+    'z-index:30',
+    'opacity:0',
+    'transform:translate(-50%,-50%)',
+    'transition:opacity 0.25s ease-out',
+  ].join(';');
+  document.body.appendChild(echo);
+
+  let echoTimer: ReturnType<typeof setTimeout> | undefined;
+
+  inputManager.transformPointer = (
+    pointer: Phaser.Input.Pointer,
+    pageX: number,
+    pageY: number,
+    wasMove: boolean,
+  ): void => {
+    try {
+      game.scale.refresh();
+    } catch {
+      // Sin refresh el mapeo cae al último estado conocido: el juego sigue.
+    }
+    baseTransform(pointer, pageX, pageY, wasMove);
+
+    if (wasMove || !Number.isFinite(pointer.x) || !Number.isFinite(pointer.y)) {
+      return;
+    }
+    try {
+      const rect = game.canvas.getBoundingClientRect();
+      echo.style.left = `${rect.left + (pointer.x / GAME_WIDTH) * rect.width}px`;
+      echo.style.top = `${rect.top + (pointer.y / GAME_HEIGHT) * rect.height}px`;
+      echo.style.opacity = '1';
+      if (echoTimer !== undefined) {
+        clearTimeout(echoTimer);
+      }
+      echoTimer = setTimeout(() => {
+        echo.style.opacity = '0';
+      }, 250);
+    } catch {
+      // El eco es solo diagnóstico: su fallo no toca el input.
+    }
+  };
+}
+
+/**
+ * Marcador de build visible (DIAGNÓSTICO — quitar al estabilizar el input
+ * móvil): muestra el hash del bundle servido en una esquina, para poder
+ * confirmar SIN ambigüedad qué versión corre cada dispositivo. En dev muestra
+ * "dev" (import.meta.url no lleva hash). pointer-events: none → no interfiere.
+ */
+function installBuildTag(): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const hash = import.meta.url.split('/').pop()?.match(/index-([\w-]+)\.js/)?.[1] ?? 'dev';
+  const tag = document.createElement('div');
+  tag.textContent = `build ${hash}`;
+  tag.style.cssText =
+    'position:fixed;right:8px;bottom:6px;font:11px monospace;color:rgba(255,255,255,0.35);pointer-events:none;z-index:20;letter-spacing:0.5px';
+  document.body.appendChild(tag);
 }
 
 // El script es un módulo (defer), por lo que el DOM ya está disponible.

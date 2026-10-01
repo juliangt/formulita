@@ -12,6 +12,7 @@ import {
   type TouchButtonVisual,
 } from '../systems/TouchButton';
 import type { IInputSource, IInputState } from '../systems/InputSystem';
+import { TOUCH_HUD } from '../config/balance';
 
 /**
  * Tests del TouchSource (Fase 2): HUD táctil multi-touch con FAKE de pointer
@@ -286,8 +287,13 @@ describe('TouchSource — multi-touch real (tracking por pointerId)', () => {
     source.attach();
 
     const r = LAYOUT.drs;
-    // Unos px por fuera del borde derecho del botón DRS (dentro del padding).
-    emitter.emit('pointerdown', { id: 9, x: r.x + r.width + 8, y: r.y + r.height / 2 });
+    // Unos px por fuera del borde derecho del botón DRS (dentro del padding,
+    // que sale del balance para que el test no dependa de su valor exacto).
+    emitter.emit('pointerdown', {
+      id: 9,
+      x: r.x + r.width + (TOUCH_HUD.hitPadding - 2),
+      y: r.y + r.height / 2,
+    });
 
     expect(source.getState().drs).toBe(true);
 
