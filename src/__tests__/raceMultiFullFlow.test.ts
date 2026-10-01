@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MATCH_OVER_GRACE_MS, SNAPSHOT_BUFFER_SIZE, STATE_HZ } from '../config/balance';
+import type { ISaveRepository } from '../data/ISaveRepository';
+import { defaultSaveData, type SaveData } from '../data/types';
 import { SnapshotBuffer } from '../net/interpolation';
 import {
   parseMultiplayerInit,
@@ -11,6 +13,7 @@ import {
 } from '../net/protocol';
 import { hashStringToSeed } from '../net/roomRng';
 import { MatchTracker } from '../systems/MatchTracker';
+import { shouldPersistProgress } from '../systems/RaceSystems';
 import { SpeedSystem, composeEffectiveSpeed } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
 import { FakeNetClient, FakeNetHub } from './fakes/FakeNetClient';
@@ -402,5 +405,106 @@ describe('QA M3 — flujo completo de partida con 3 clientes (lobby → start �
       expect(race.tracker.getPlayer(anaRace.peerId)!.eliminationOrder).toBe(1);
       expect(race.tracker.getPlayer(betoRace.peerId)!.eliminationOrder).toBe(2);
     }
+  });
+});
+
+/** ISaveRepository que graba cada escritura (para assertar quién persistió). */
+class RecordingSaveRepository implements ISaveRepository {
+  readonly writes: SaveData[] = [];
+  private data: SaveData = defaultSaveData();
+
+  load(): SaveData {
+    return { ...this.data };
+  }
+
+  save(data: SaveData): void {
+    this.writes.push({ ...data });
+    this.data = data;
+  }
+}
+
+describe('QA auditoría — el flujo multi NO escribe en el save del modo solo (límite v1 §9)', () => {
+  it('crash + match-over + blur en multi: CERO escrituras; en solo sí persiste', () => {
+    // NOTA DE ALCANCE: GameScene.persistProgress es el único escritor del
+    // save y vive dentro de la escena (Phaser): el wiring de escena no es
+    // alcanzable sin runtime de Phaser, así que este test ejercita el MISMO
+    // cableado a nivel sistemas (como el resto del archivo): la decisión de
+    // modo (`shouldPersistProgress`, la primera línea de persistProgress) +
+    // un ISaveRepository que captura escrituras, disparado en los mismos
+    // puntos que la escena (eliminateSelf, concludeMatch y los listeners
+    // HIDDEN/BLUR del document).
+    const clock = sharedClock();
+    const hub = new FakeNetHub();
+    const ana = new FakeNetClient(hub, { peerId: 'sv-1-ana' });
+    ana.create({ appId: 'formulita-dev', name: 'Ana' });
+    const beto = new FakeNetClient(hub, { peerId: 'sv-2-beto' });
+    beto.join({ appId: 'formulita-dev', roomWord: ana.roomWord ?? '', name: 'Beto' });
+
+    const startPayload: StartPayload = {
+      seed: ROOM_SEED,
+      players: ana.getRoster(),
+      startAt: 1700000000000,
+    };
+    const raceClients: FullFlowClient[] = [];
+    beto.onStart((payload) => {
+      raceClients.push(FullFlowClient.fromStart(beto, payload, BRAKE_PROFILE, clock));
+    });
+    ana.start(startPayload);
+    raceClients.unshift(FullFlowClient.fromStart(ana, startPayload, TURBO_PROFILE, clock));
+    const [anaRace, betoRace] = raceClients;
+
+    // Réplica exacta del persistProgress de GameScene: la guarda de modo es
+    // la primera línea y usa el mismo campo (`init !== null` en la escena).
+    const repository = new RecordingSaveRepository();
+    let bankedCoins = 0;
+    const persistProgress = (isMulti: boolean, coins: number, score: number, distance: number): void => {
+      if (!shouldPersistProgress(isMulti)) {
+        return;
+      }
+      const current = repository.load();
+      const unbankedCoins = Math.max(0, coins - bankedCoins);
+      repository.save({
+        totalCoins: current.totalCoins + unbankedCoins,
+        bestScore: Math.max(current.bestScore, score),
+        bestDistance: Math.max(current.bestDistance, distance),
+      });
+      bankedCoins = coins;
+    };
+
+    // La partida corre, Ana choca (eliminateSelf → persistProgress en la
+    // escena), queda 1 vivo y concluye (concludeMatch → persistProgress), y
+    // encima el jugador pierde el foco (HIDDEN/BLUR → persistProgress).
+    runTicks(raceClients, clock, 30);
+    anaRace.crash();
+    persistProgress(true, anaRace.coins, anaRace.score, Math.round(anaRace.distance));
+    runTicks(raceClients, clock, 45);
+    betoRace.crash();
+    runTicks(raceClients, clock, 1);
+    expect(anaRace.concluded).not.toBeNull();
+    expect(betoRace.concluded).not.toBeNull();
+    persistProgress(true, betoRace.coins, betoRace.score, Math.round(betoRace.distance));
+    persistProgress(true, betoRace.coins, betoRace.score, Math.round(betoRace.distance)); // blur
+
+    // MULTI: ni monedas ni récords tocan el save del modo solo.
+    expect(repository.writes).toEqual([]);
+
+    // Contra-caso SOLO (mismo cableado, isMulti=false): SÍ persiste. El blur
+    // repetido vuelve a guardar pero con valores idempotentes (las monedas
+    // ya bancadas no se suman dos veces — mismo comportamiento que la escena).
+    const soloCoins = 7;
+    const soloScore = 1234;
+    const soloDistance = 5678;
+    persistProgress(false, soloCoins, soloScore, soloDistance);
+    persistProgress(false, soloCoins, soloScore, soloDistance); // blur repetido
+    expect(repository.writes).toEqual([
+      { totalCoins: soloCoins, bestScore: soloScore, bestDistance: soloDistance },
+      { totalCoins: soloCoins, bestScore: soloScore, bestDistance: soloDistance },
+    ]);
+    // Y el estado final quedó estable (sin doble cómputo de monedas).
+    expect(repository.load()).toEqual({
+      totalCoins: soloCoins,
+      bestScore: soloScore,
+      bestDistance: soloDistance,
+    });
   });
 });

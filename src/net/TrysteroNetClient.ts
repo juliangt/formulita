@@ -18,15 +18,25 @@
  *   estructural de la room (makeAction/onPeerJoin/onPeerLeave/getPeers/leave).
  * - `selfIdProvider`: default = `selfId` de trystero.
  * - `env`: default = `import.meta.env` (para `resolveAppId` en tests).
+ * - `settleScheduler`: default = `setTimeout` (vence la ventana de
+ *   asentamiento del join/creación; los tests la disparan a mano).
  *
  * Intercambio de meta (patrón Trystero): no hay metadata de join en el
  * protocolo — cada peer, al ver `onPeerJoin` (que dispara en AMBOS extremos
  * de cada conexión nueva), envía SU meta al recién conectado con la acción
  * `meta` dirigida. Así el roster se completa solo, sin handshake extra.
+ *
+ * CAPACIDAD (corrección de auditoría): como `onPeerJoin` dispara en ambos
+ * extremos, evaluar capacidad ahí hacía que los RESIDENTES se auto-expulsaran
+ * en cadena al conectar el 11º. Ahora la capacidad la evalúa CADA JOINER
+ * sobre sí mismo en una ventana de asentamiento (`JOIN_SETTLE_MS`, ver
+ * `enterRoom`/`evaluateJoinAdmission`): los residentes nunca se van por
+ * capacidad y el creador usa la misma ventana para detectar colisión de
+ * palabra y regenerar la sala.
  */
 
 import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
-import { MULTIPLAYER } from '../config/balance';
+import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
 import { assignColors, isRoomFull, resolveHostPeerId } from './lobbyState';
 import type { NetClient, CreateRoomOptions, JoinRoomOptions } from './NetClient';
 import {
@@ -111,7 +121,22 @@ export interface TrysteroNetClientOptions {
   /** rng para elegir la palabra al CREAR sala (default: crypto → mulberry32). */
   readonly wordRng?: Rng;
   readonly env?: NetEnvSource;
+  /**
+   * Programador del vencimiento de la ventana de asentamiento (default:
+   * `setTimeout`). Inyectable para que los tests la venzan sin esperar
+   * tiempo real; devuelve una función para cancelar el timer pendiente.
+   */
+  readonly settleScheduler?: (callback: () => void, ms: number) => () => void;
 }
+
+/** Programador default: setTimeout real (cancelable). */
+const defaultSettleScheduler = (callback: () => void, ms: number): (() => void) => {
+  const id = setTimeout(callback, ms);
+  return () => clearTimeout(id);
+};
+
+/** Tope de regeneraciones de palabra por colisión (evita bucles infinitos). */
+export const MAX_WORD_REGEN_ATTEMPTS = 3;
 
 /** Handlers por evento (misma forma que el FakeNetClient). */
 type HandlerMap = {
@@ -145,6 +170,7 @@ export class TrysteroNetClient implements NetClient {
 
   private readonly roomFactory: RoomFactory;
   private readonly wordRng: Rng;
+  private readonly settleScheduler: (callback: () => void, ms: number) => () => void;
   private readonly handlers: HandlerMap = {
     peerJoin: new Set(),
     peerLeave: new Set(),
@@ -165,8 +191,16 @@ export class TrysteroNetClient implements NetClient {
   /** Metas conocidas: la propia + las anunciadas por los peers. */
   private metas = new Map<string, PeerMeta>();
   private lastHost: string | null = null;
-  /** true si esta instancia CREÓ la sala (anfitrión original). */
-  private isCreator = false;
+  /** Última entrada (appId + nombre sanitizado), para regenerar la sala. */
+  private lastEntry: { appId: string; name: string } | null = null;
+  /** Cancela el timer de la ventana de asentamiento activa (si hay). */
+  private cancelSettle: (() => void) | null = null;
+  /** true mientras el JOINER evalúa su propia admisión (ventana abierta). */
+  private settlingJoin = false;
+  /** true mientras el CREADOR vigila colisión de palabra (ventana abierta). */
+  private creatorWatch = false;
+  /** Regeneraciones de palabra consecutivas por colisión (tope: MAX). */
+  private wordRegenAttempts = 0;
 
   constructor(options: TrysteroNetClientOptions = {}) {
     this.roomFactory = options.roomFactory ?? defaultRoomFactory;
@@ -174,6 +208,7 @@ export class TrysteroNetClient implements NetClient {
     // envuelve en función para que los tests puedan inyectar el suyo.
     this.selfPeerId = (options.selfIdProvider ?? (() => trysteroSelfId))();
     this.wordRng = options.wordRng ?? defaultWordRng();
+    this.settleScheduler = options.settleScheduler ?? defaultSettleScheduler;
   }
 
   get roomWord(): string | null {
@@ -206,8 +241,8 @@ export class TrysteroNetClient implements NetClient {
 
   private enterRoom(appId: string, word: string, name: string, isCreator: boolean): void {
     this.leave();
-    this.isCreator = isCreator;
     this.currentWord = word;
+    this.lastEntry = { appId, name };
     this.metas = new Map([[this.selfPeerId, { name, color: 0, isCreator }]]);
 
     let room: TrysteroRoom;
@@ -262,6 +297,26 @@ export class TrysteroNetClient implements NetClient {
     room.onPeerLeave = (peerId) => this.handlePeerLeave(peerId);
 
     this.emitRoster();
+
+    // Ventana de asentamiento (JOIN_SETTLE_MS): Trystero descubre los peers
+    // de la malla de forma PROGRESIVA, así que ambas direcciones esperan:
+    // - JOINER: al vencer evalúa SU PROPIA admisión (si con él la sala ya
+    //   supera maxPlayers → roomFull + leave; nunca un residente).
+    // - CREADOR: si un peer aparece durante la ventana, antes de que haya
+    //   compartido la palabra con nadie, asume COLISIÓN de palabra y
+    //   regenera la sala (p≈1/150 por creación; ver handlePeerJoin).
+    this.cancelSettle?.();
+    if (isCreator) {
+      this.creatorWatch = true;
+      this.cancelSettle = this.settleScheduler(() => {
+        // La ventana venció sin colisión: la sala es suya, entra quien entre.
+        this.creatorWatch = false;
+        this.wordRegenAttempts = 0;
+      }, JOIN_SETTLE_MS);
+    } else {
+      this.settlingJoin = true;
+      this.cancelSettle = this.settleScheduler(() => this.evaluateJoinAdmission(), JOIN_SETTLE_MS);
+    }
   }
 
   /* ---------------- roster / anfitrión ---------------- */
@@ -287,12 +342,24 @@ export class TrysteroNetClient implements NetClient {
   }
 
   /**
-   * Conexión nueva: se anuncia la meta propia al recién conectado (patrón
-   * Trystero — no hay metadata de join) y se controla la CAPACIDAD: un
-   * JOINER que al entrar ya encuentra la sala llena (más de 10 contándose)
-   * se auto-rechaza (roomFull + leave). El creador nunca se auto-rechaza.
+   * Conexión nueva (Trystero dispara `onPeerJoin` en AMBOS extremos de cada
+   * conexión, así que esto corre tanto en el residente como en el recién
+   * llegado). SEMÁNTICA DE CAPACIDAD (corrección de auditoría — el 11º ya no
+   * implosiona la sala):
+   *
+   * - Los RESIDENTES establecidos NUNCA se auto-expulsan por capacidad: quien
+   *   ya fue admitido se queda pase lo que pase (la sala nunca se vacía sola).
+   * - El JOINER en ventana de asentamiento evalúa SU PROPIA admisión: si ya
+   *   ve `maxPlayers` peers (10 = 11 contándose), anticipa el fallo sin
+   *   esperar el timer; si no, decide el timer al vencer.
+   * - El CREADOR en ventana interpreta cualquier peer como COLISIÓN de
+   *   palabra (nadie pudo recibir la palabra todavía) y regenera la sala.
    */
   private handlePeerJoin(peerId: string): void {
+    if (this.creatorWatch) {
+      this.regenerateAfterWordCollision();
+      return;
+    }
     for (const handler of this.handlers.peerJoin) {
       handler(peerId);
     }
@@ -300,12 +367,51 @@ export class TrysteroNetClient implements NetClient {
     if (own && this.metaAction) {
       void this.metaAction.send(own, { target: peerId });
     }
-    if (!this.isCreator && isRoomFull(this.peerCountIncludingSelf())) {
-      for (const handler of this.handlers.roomFull) {
-        handler();
-      }
-      this.leave();
+    // Anticipación del joiner: 10 peers VISTOS = 11 conmigo = lleno. Con
+    // descubrimiento progresivo mirar "peers + 1 > maxPlayers" sería
+    // prematuro, por eso el umbral es exactamente `maxPlayers` vistos.
+    if (this.settlingJoin && isRoomFull(this.peerCountIncludingSelf())) {
+      this.evaluateJoinAdmission();
     }
+  }
+
+  /**
+   * Decisión de admisión del joiner al vencer la ventana (o al anticiparla):
+   * si `peers conocidos + 1` supera la capacidad, este cliente es el que está
+   * de más → `roomFull` + leave (el flujo de LobbyScene ya maneja roomFull).
+   * En cualquier otro caso queda ADMITIDO: a partir de acá nunca se va por
+   * capacidad.
+   */
+  private evaluateJoinAdmission(): void {
+    if (!this.settlingJoin) {
+      return;
+    }
+    this.settlingJoin = false;
+    if (!isRoomFull(this.peerCountIncludingSelf())) {
+      return;
+    }
+    for (const handler of this.handlers.roomFull) {
+      handler();
+    }
+    this.leave();
+  }
+
+  /**
+   * Colisión de palabra detectada (plan §4: "si ya hay alguien en esa sala,
+   * el creador se entera y se genera otra"): el creador vio un peer durante
+   * la ventana de asentamiento, antes de haber compartido la palabra. Abandona
+   * la sala colisionada y crea una con palabra fresca. Con tope de intentos
+   * para no loopear si el rng insistiera en repetir (p≈(1/150)ⁿ: nunca en
+   * la práctica); agotado el tope, se queda y sigue como sala normal.
+   */
+  private regenerateAfterWordCollision(): void {
+    this.creatorWatch = false;
+    if (!this.lastEntry || this.wordRegenAttempts >= MAX_WORD_REGEN_ATTEMPTS) {
+      return;
+    }
+    this.wordRegenAttempts += 1;
+    const { appId, name } = this.lastEntry;
+    this.enterRoom(appId, pickRoomWord(this.wordRng), name, true);
   }
 
   private handlePeerLeave(peerId: string): void {
@@ -379,12 +485,16 @@ export class TrysteroNetClient implements NetClient {
       this.room.onPeerLeave = null;
       void this.room.leave();
     }
+    this.cancelSettle?.();
+    this.cancelSettle = null;
+    this.settlingJoin = false;
+    this.creatorWatch = false;
     this.room = null;
     this.metaAction = null;
     this.startAction = null;
     this.currentWord = null;
+    this.lastEntry = null;
     this.metas.clear();
-    this.isCreator = false;
   }
 
   destroy(): void {

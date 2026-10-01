@@ -20,7 +20,11 @@ import type { PlayerInfo, RosterEntry } from './protocol';
 
 /**
  * Anfitrión de la sala para un roster dado:
- * - Si algún presente tiene `isCreator` (creó la sala), es él.
+ * - Si algún presente tiene `isCreator` (creó la sala), es él. Con VARIOS
+ *   creadores a la vez (colisión de palabra, p≈1/150) gana el de peerId
+ *   MENOR: los candidatos se ordenan por peerId ANTES del `find` para que
+ *   la elección sea determinística también entre clientes cuyo Map de metas
+ *   se armó en distinto orden (mismo roster ⇒ mismo anfitrión, siempre).
  * - Si el creador se fue, el anfitrión es el de peerId MENOR entre los
  *   presentes (orden lexicográfico — misma regla en todos los clientes,
  *   sin negociación). `null` si el roster está vacío.
@@ -29,7 +33,8 @@ export function resolveHostPeerId(roster: readonly RosterEntry[]): string | null
   if (roster.length === 0) {
     return null;
   }
-  const creator = roster.find((entry) => entry.isCreator);
+  const byPeerId = (a: RosterEntry, b: RosterEntry): number => (a.peerId < b.peerId ? -1 : 1);
+  const creator = [...roster].sort(byPeerId).find((entry) => entry.isCreator);
   if (creator) {
     return creator.peerId;
   }
