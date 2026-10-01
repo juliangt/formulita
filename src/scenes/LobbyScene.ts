@@ -49,6 +49,7 @@ import { handoffNetClient } from '../net/netClientSession';
 import { randomRoomSeed } from '../net/roomRng';
 import { resolveAppId, TrysteroNetClient } from '../net/TrysteroNetClient';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { applyMobileInputAttributes } from '../ui/ChatPanel';
 import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
 import { MenuScene } from './MenuScene';
@@ -321,8 +322,7 @@ export class LobbyScene extends Phaser.Scene {
       WORD_INPUT_CSS,
     ) as Phaser.GameObjects.DOMElement;
     const node = this.wordInput.node as HTMLInputElement;
-    node.maxLength = MULTIPLAYER.roomWordMaxLength;
-    node.autocapitalize = 'characters';
+    applyMobileInputAttributes(node, 'roomWord');
     node.placeholder = 'PALABRA';
     // C3 — invitación aceptada: la palabra llega PRECARGADA y el jugador
     // confirma con ENTRAR (mismo flujo de unirse de #1, sin atajos).
@@ -384,7 +384,7 @@ export class LobbyScene extends Phaser.Scene {
       WORD_INPUT_CSS,
     ) as Phaser.GameObjects.DOMElement;
     const node = this.nameInput.node as HTMLInputElement;
-    node.maxLength = MULTIPLAYER.maxPlayerNameLength;
+    applyMobileInputAttributes(node, 'name');
     node.placeholder = 'TU NOMBRE';
     this.nameInput.setOrigin(0.5);
 

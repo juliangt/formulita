@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { getAudioEngine } from '../audio/AudioManager';
-import { MUTE_BUTTON, MENU, MULTIPLAYER, TRACK } from '../config/balance';
+import { MUTE_BUTTON, MENU, TRACK } from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
@@ -9,6 +9,7 @@ import { chatMenuButtonLabel } from '../chat/dmView';
 import { getSocialChatSession } from '../chat/socialChatSession';
 import { sanitizePlayerName } from '../net/protocol';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { applyMobileInputAttributes } from '../ui/ChatPanel';
 import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
 import { LobbyScene } from './LobbyScene';
@@ -326,7 +327,7 @@ export class MenuScene extends Phaser.Scene {
 
     this.multiNameInput = this.add.dom(centerX, 570, 'input', NAME_INPUT_CSS) as Phaser.GameObjects.DOMElement;
     const inputNode = this.multiNameInput.node as HTMLInputElement;
-    inputNode.maxLength = MULTIPLAYER.maxPlayerNameLength;
+    applyMobileInputAttributes(inputNode, 'name');
     inputNode.value = storedName;
     inputNode.placeholder = 'PILOTO';
     this.multiNameInput.setOrigin(0.5).setDepth(101);

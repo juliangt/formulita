@@ -11,7 +11,10 @@
  *
  * RENDER SIN HTML: los mensajes son `Phaser.GameObjects.Text` (jamás
  * innerHTML — sin vector XSS) con wrap al ancho del panel, anclados ABAJO
- * (siempre se ven los últimos) y limitados a `CHAT.visibleMessages`.
+ * (siempre se ven los últimos) y limitados a `CHAT.visibleMessages`. SIN
+ * scroll táctil a propósito (decisión v1 del issue #2): la lista siempre
+ * muestra los últimos N y los que no caben simplemente no se dibujan —
+ * el scroll real llega si la v2 lo pide.
  *
  * AISLAMIENTO DE FOCO (la parte delicada): mientras el input DOM tiene foco,
  * el teclado del juego NO debe capturar — ni "P" pausa, ni ESPACIO dispara
@@ -35,7 +38,7 @@
  */
 
 import Phaser from 'phaser';
-import { CHAT, CHAT_MAX_LEN } from '../config/balance';
+import { CHAT, CHAT_MAX_LEN, MULTIPLAYER } from '../config/balance';
 import type { EventBus, GameEvents } from '../core/EventBus';
 import type { ChatMessage, ChatStore } from '../chat/ChatStore';
 import type { DmBlockedSendState } from '../chat/dmView';
@@ -116,6 +119,63 @@ export function chatSendState(cooldownRemainingMs: number): ChatSendState {
 }
 
 /* ------------------------------------------------------------------ */
+/* Atributos móviles del input DOM (testeable con happy-dom)            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Preset de atributos móviles de un input DOM del juego. El teclado virtual
+ * (iOS/Android) se configura con estos hints — cada uno elegido para lo que
+ * el input espera, para que el teclado AYUDE en vez de estorbar:
+ *
+ * - `maxLength`: tope duro del dominio (200 chat / 12 nombre / 9 palabra de
+ *   sala): el usuario no puede tipear de más y el sanitize recorta igual.
+ * - `enterKeyHint`: la tecla Enter del teclado virtual se etiqueta con la
+ *   acción real (chat: "enviar"; palabra de sala: "ir" → ENTRAR; nombre:
+ *   "listo").
+ * - `autoCapitalize`: SOLO la palabra de sala fuerza MAYÚSCULAS (el dominio
+ *   es A–Z); en chat explícitamente "none" para no gritar, y en nombre
+ *   "words" como cortesía.
+ * - `autoComplete`/`autoCorrect`/`spellCheck` OFF: nada acá se completa ni
+ *   corrige contra diccionarios (y el autocorrect de iOS reescribiría
+ *   palabras de sala).
+ * - `inputMode: 'text'` explícito: es el default, pero declararlo documenta
+ *   la intención (teclado completo, no numérico).
+ */
+export interface MobileInputPreset {
+  readonly maxLength: number;
+  readonly enterKeyHint: 'send' | 'go' | 'done';
+  readonly autoCapitalize: 'none' | 'characters' | 'words';
+}
+
+/** Presets por clase de input (los consumen ChatPanel y los inputs del lobby/menú). */
+export const MOBILE_INPUT_PRESETS: Readonly<Record<'chat' | 'name' | 'roomWord', MobileInputPreset>> = {
+  /** Input de mensaje de chat: 200 caracteres, Enter = ENVIAR, sin mayúsculas forzadas. */
+  chat: { maxLength: CHAT_MAX_LEN, enterKeyHint: 'send', autoCapitalize: 'none' },
+  /** Input de nombre de jugador: 12 caracteres, Enter = listo. */
+  name: { maxLength: MULTIPLAYER.maxPlayerNameLength, enterKeyHint: 'done', autoCapitalize: 'words' },
+  /** Input de palabra de sala: 9 caracteres A–Z, Enter = ENTRAR, TODO mayúsculas. */
+  roomWord: { maxLength: MULTIPLAYER.roomWordMaxLength, enterKeyHint: 'go', autoCapitalize: 'characters' },
+};
+
+/**
+ * Aplica el preset móvil a un nodo de input DOM. Los tres atributos que el
+ * resto del repo ya usa como PROPIEDAD reflejada (`maxLength`, `autocomplete`,
+ * `autocapitalize`) siguen por propiedad; los hints que no garantizan estar
+ * en las defs de DOM de todas las versiones de TS (`enterkeyhint`, `inputmode`,
+ * `autocorrect`, `spellcheck`) van por atributo — mismo efecto en el navegador.
+ */
+export function applyMobileInputAttributes(node: HTMLInputElement, kind: 'chat' | 'name' | 'roomWord'): void {
+  const preset = MOBILE_INPUT_PRESETS[kind];
+  node.maxLength = preset.maxLength;
+  node.autocomplete = 'off';
+  node.autocapitalize = preset.autoCapitalize;
+  node.setAttribute('enterkeyhint', preset.enterKeyHint);
+  node.setAttribute('inputmode', 'text');
+  node.setAttribute('autocorrect', 'off'); // WebKit no estándar, inofensivo afuera de iOS
+  node.setAttribute('spellcheck', 'false');
+}
+
+/* ------------------------------------------------------------------ */
 /* Aislamiento de foco del input DOM (testeable con happy-dom)          */
 /* ------------------------------------------------------------------ */
 
@@ -181,7 +241,12 @@ export function isolateChatInput(
 /* Input DOM                                                           */
 /* ------------------------------------------------------------------ */
 
-/** Estilo del input de texto del chat (mismo lenguaje que el del lobby). */
+/**
+ * Estilo del input de texto del chat (mismo lenguaje que el del lobby).
+ * La fuente es 34 px de juego: al escala FIT más chica de iPhone (~0,52)
+ * quedan ~18 px CSS — por encima de los 16 px que disparan el auto-zoom de
+ * foco de iOS Safari (el input nunca agranda la página al tocarlo).
+ */
 const CHAT_INPUT_CSS = {
   'font-family': 'monospace',
   'font-size': `${CHAT.inputFontSize}px`,
@@ -275,11 +340,15 @@ export class ChatPanel {
       .rectangle(centerX, (CHAT.listTopY + CHAT.listBottomY) / 2, CHAT.listWidth, listHeight, 0x14141c)
       .setStrokeStyle(6, 0x3a3a44);
 
-    // Input DOM con foco aislado del teclado del juego.
+    // Input DOM con foco aislado del teclado del juego y atributos móviles
+    // (teclado virtual que AYUDA: Enter = ENVIAR, sin autocorrect ni
+    // autocapitalize; máx 200 hard). Ancla abajo del layout (inputY 948 con
+    // ENVIAR/CERRAR debajo): en Android/desktop táctil el teclado redimensiona
+    // la ventana y Scale.FIT re-encaja TODO el lienzo sobre el teclado; el
+    // caso iOS (teclado que solapa sin resize) queda para QA manual.
     this.input = scene.add.dom(centerX, CHAT.inputY, 'input', CHAT_INPUT_CSS) as Phaser.GameObjects.DOMElement;
     this.inputNode = this.input.node as HTMLInputElement;
-    this.inputNode.maxLength = CHAT_MAX_LEN;
-    this.inputNode.autocomplete = 'off';
+    applyMobileInputAttributes(this.inputNode, 'chat');
     this.inputNode.placeholder = INPUT_PLACEHOLDER;
     this.input.setOrigin(0.5);
     this.isolation = isolateChatInput(
