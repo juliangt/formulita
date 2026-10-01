@@ -1,12 +1,16 @@
 import Phaser from 'phaser';
-import { GAME_OVER } from '../config/balance';
+import { GAME_OVER, LEADERBOARD } from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
+import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
+import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
 import { GameScene } from './GameScene';
+import { LobbyScene } from './LobbyScene';
 import { MenuScene } from './MenuScene';
 import { formatDistance, formatScore } from '../ui/format';
+import { Leaderboard, personalResultMessage } from '../ui/Leaderboard';
 import { MenuButton } from '../ui/MenuButton';
 
 const TITLE_COLOR = '#d63c3c';
@@ -17,6 +21,12 @@ const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'monospace',
   fontSize: '84px',
   color: TITLE_COLOR,
+};
+
+const MULTI_TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: '72px',
+  color: '#f2f2f2',
 };
 
 const RECORD_BANNER_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
@@ -46,11 +56,20 @@ const HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
  * transporte entre escenas) y sobre el registry de Phaser (estado global que
  * habría que invalidar en cada carrera): el init data es síncrono, tipado y
  * por-transición. El contrato es `GameOverData` (`data/types.ts`).
+ *
+ * M2 — multijugador: el payload `MultiGameOverData` (`{mode:'multi',
+ * standings, myPeerId}`, parseado defensivo en net/protocol.ts) cambia la
+ * pantalla a RESULTADOS con la tabla del leaderboard y el mensaje personal;
+ * los botones pasan a ser MENÚ + CREAR PARTIDA (una carrera multi nueva
+ * empieza por el lobby). Sin payload multi, la pantalla solo es IDÉNTICA a
+ * la de siempre (regresión cero).
  */
 export class GameOverScene extends Phaser.Scene {
   static readonly KEY = 'GameOver';
 
   private raceData: GameOverData = parseGameOverData(undefined);
+  /** M2 — payload multi (null = pantalla clásica de modo solo). */
+  private multiData: MultiGameOverData | null = null;
 
   constructor() {
     super(GameOverScene.KEY);
@@ -58,11 +77,21 @@ export class GameOverScene extends Phaser.Scene {
 
   init(data: unknown): void {
     this.raceData = parseGameOverData(data);
+    this.multiData = parseMultiGameOverData(data);
   }
 
   create(): void {
     const centerX = this.scale.width / 2;
     this.cameras.main.setBackgroundColor('#000000');
+
+    // M2 — la partida multijugador tiene su propia pantalla: RESULTADOS +
+    // tabla del leaderboard + mensaje personal (¡GANASTE! / TERMINASTE N°X)
+    // y botones MENÚ / CREAR PARTIDA (una carrera multi nueva pasa por el
+    // lobby: el transporte de la anterior ya se destruyó al salir de Game).
+    if (this.multiData) {
+      this.createMultiResults(centerX);
+      return;
+    }
 
     this.add
       .text(centerX, GAME_OVER.titleY, 'GAME OVER', TITLE_STYLE)
@@ -159,6 +188,89 @@ export class GameOverScene extends Phaser.Scene {
       this.input.keyboard?.off('keydown-M', this.goToMenu);
     });
   }
+
+  /**
+   * M2 — RESULTADOS multijugador: título, mensaje personal según el puesto,
+   * tabla del leaderboard (puesto, nombre+color, monedas, puntaje, km) y
+   * botones MENÚ / CREAR PARTIDA. Ganar = tener más monedas, no sobrevivir:
+   * el ganador se destaca en la tabla y el mensaje lo dice explícito.
+   */
+  private createMultiResults(centerX: number): void {
+    const data = this.multiData;
+    if (!data) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+
+    this.add
+      .text(centerX, LEADERBOARD.titleY, 'RESULTADOS', MULTI_TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    const mine = data.standings.find((standing) => standing.peerId === data.myPeerId);
+    const place = mine?.place ?? data.standings.length;
+    const isWinner = place === 1;
+    this.add
+      .text(centerX, LEADERBOARD.messageY, personalResultMessage(place), {
+        fontFamily: 'monospace',
+        fontSize: `${LEADERBOARD.messageFontSize}px`,
+        color: isWinner ? GOLD_COLOR : '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 8);
+
+    new Leaderboard(this, { highlightPeerId: data.myPeerId }).render(data.standings);
+
+    // Botones: MENÚ y CREAR PARTIDA (abre el lobby en modo crear con el
+    // nombre ya persistido — flujo limpio, sin reusar el transporte muerto).
+    new MenuButton(this, {
+      x: centerX,
+      y: LEADERBOARD.menuY,
+      width: LEADERBOARD.buttonWidth,
+      height: LEADERBOARD.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: LEADERBOARD.buttonFontSize,
+      bus,
+      onPress: this.goToMenu,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: LEADERBOARD.playY,
+      width: LEADERBOARD.buttonWidth,
+      height: LEADERBOARD.buttonHeight,
+      label: 'CREAR PARTIDA',
+      tint: 0x1d8f43,
+      fontSize: LEADERBOARD.buttonFontSize - 6,
+      bus,
+      onPress: this.createMultiRace,
+    });
+
+    // Teclado multi: M menú, Enter/Espacio/C crean una partida nueva.
+    this.input.keyboard?.on('keydown-ENTER', this.createMultiRace);
+    this.input.keyboard?.on('keydown-SPACE', this.createMultiRace);
+    this.input.keyboard?.on('keydown-C', this.createMultiRace);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    if (!prefersTouchControls(this.game.device)) {
+      this.add
+        .text(centerX, LEADERBOARD.hintY, 'ENTER / C  CREAR PARTIDA   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.createMultiRace);
+      this.input.keyboard?.off('keydown-SPACE', this.createMultiRace);
+      this.input.keyboard?.off('keydown-C', this.createMultiRace);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
+
+  /** CREAR PARTIDA (multi): lobby en modo crear con el nombre persistido. */
+  private readonly createMultiRace = (): void => {
+    const name = getPlayerProfileRepository(this.registry).load().name;
+    this.scene.start(LobbyScene.KEY, { mode: 'create', name });
+  };
 
   private readonly retry = (): void => {
     this.scene.start(GameScene.KEY);

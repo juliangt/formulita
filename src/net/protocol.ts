@@ -97,6 +97,36 @@ export interface MatchOverPayload {
 }
 
 /* ------------------------------------------------------------------ */
+/* Resultado final compartido (M2)                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Estadísticas finales congeladas de un jugador: las que viajan en
+ * `eliminated`/`match-over` (exactas) o, si NUNCA llegaron (desconexión
+ * abrupta), las de su último `state` recibido.
+ */
+export interface PlayerStats {
+  readonly coins: number;
+  readonly score: number;
+  readonly distance: number;
+}
+
+/**
+ * Fila del leaderboard final: estadísticas de un jugador + puesto según el
+ * ORDEN DETERMINÍSTICO monedas DESC → km DESC → puntaje DESC (el último en
+ * pie NO gana por sobrevivir: solo tuvo más tiempo para juntar monedas).
+ */
+export interface FinalStanding extends PlayerStats {
+  readonly peerId: string;
+  readonly name: string;
+  readonly color: number;
+  /** Puesto 1..n según el orden determinístico. */
+  readonly place: number;
+  /** true si es la fila ganadora (más monedas). */
+  readonly isWinner: boolean;
+}
+
+/* ------------------------------------------------------------------ */
 /* Sanitización (pura, emisor y receptor)                              */
 /* ------------------------------------------------------------------ */
 
@@ -118,6 +148,25 @@ export function sanitizePlayerName(raw: string): string {
 /** true si el nombre queda usable tras sanitizar (no vacío). */
 export function isValidPlayerName(raw: string): boolean {
   return sanitizePlayerName(raw).length > 0;
+}
+
+/**
+ * Prepara un `StatePayload` para el wire (M2): redondea los floats a enteros
+ * (distance/x/speed en px no necesitan decimales a 10 Hz) y normaliza los
+ * contadores — achica el payload y evita viajar NaN/Infinity. Es la ÚLTIMA
+ * parada antes de `sendState` en cualquier cliente.
+ */
+export function roundStatePayload(payload: StatePayload): StatePayload {
+  const round = (value: number): number =>
+    Number.isFinite(value) ? Math.round(value) : 0;
+  return {
+    distance: round(payload.distance),
+    x: round(payload.x),
+    speed: round(payload.speed),
+    turboActive: payload.turboActive === true,
+    coins: round(payload.coins),
+    score: round(payload.score),
+  };
 }
 
 /**
@@ -227,4 +276,103 @@ export function parseMultiplayerInit(raw: unknown): MultiplayerInit | null {
     myPeerId: record.myPeerId,
     roomWord: typeof record.roomWord === 'string' ? record.roomWord : '',
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Init data de GameOverScene en multi (parseo defensivo)              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Payload que GameScene le pasa a GameOverScene al terminar una partida
+ * multijugador: los puestos finales (computados LOCALMENTE por cada cliente
+ * con las mismas reglas determinísticas de MatchTracker) + quién soy yo.
+ * Phaser lo propaga como `unknown`; `parseMultiGameOverData` lo valida.
+ */
+export interface MultiGameOverData {
+  readonly mode: 'multi';
+  /** Puestos finales ordenados por place (1..n). */
+  readonly standings: FinalStanding[];
+  /** peerId propio dentro de `standings`. */
+  readonly myPeerId: string;
+}
+
+/** Coacciona una fila cruda de standings; null si no tiene forma válida. */
+function parseFinalStanding(raw: unknown): FinalStanding | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.peerId !== 'string' || record.peerId.length === 0) {
+    return null;
+  }
+  if (typeof record.name !== 'string') {
+    return null;
+  }
+  if (typeof record.color !== 'number' || !Number.isFinite(record.color)) {
+    return null;
+  }
+  if (typeof record.place !== 'number' || !Number.isInteger(record.place) || record.place < 1) {
+    return null;
+  }
+  const stats = parsePlayerStats(record);
+  if (!stats) {
+    return null;
+  }
+  return {
+    peerId: record.peerId,
+    name: record.name,
+    color: record.color,
+    place: record.place,
+    isWinner: record.isWinner === true || record.place === 1,
+    ...stats,
+  };
+}
+
+/** Coacciona {coins, score, distance}; null si alguno no es número finito. */
+function parsePlayerStats(raw: Record<string, unknown>): PlayerStats | null {
+  if (
+    typeof raw.coins !== 'number' ||
+    !Number.isFinite(raw.coins) ||
+    typeof raw.score !== 'number' ||
+    !Number.isFinite(raw.score) ||
+    typeof raw.distance !== 'number' ||
+    !Number.isFinite(raw.distance)
+  ) {
+    return null;
+  }
+  return {
+    coins: Math.max(0, raw.coins),
+    score: Math.max(0, raw.score),
+    distance: Math.max(0, raw.distance),
+  };
+}
+
+/**
+ * Parsea el init data multijugador de GameOverScene: devuelve
+ * `MultiGameOverData` si el payload está completo y válido, `null` en
+ * cualquier otro caso (GameOverScene degrada a su layout solo de siempre).
+ */
+export function parseMultiGameOverData(raw: unknown): MultiGameOverData | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  if (record.mode !== 'multi') {
+    return null;
+  }
+  if (typeof record.myPeerId !== 'string' || record.myPeerId.length === 0) {
+    return null;
+  }
+  if (!Array.isArray(record.standings) || record.standings.length === 0) {
+    return null;
+  }
+  const standings: FinalStanding[] = [];
+  for (const entry of record.standings) {
+    const standing = parseFinalStanding(entry);
+    if (!standing) {
+      return null;
+    }
+    standings.push(standing);
+  }
+  return { mode: 'multi', standings, myPeerId: record.myPeerId };
 }
