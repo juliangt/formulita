@@ -783,8 +783,13 @@ export const CHAT = {
   listPadding: 20,
   /** Separación vertical entre mensajes (px). */
   messageGap: 10,
-  /** Tamaño de fuente de los mensajes (px). */
-  messageFontSize: 26,
+  /* Tamaño de fuente de los mensajes (px): 28 queda en ≈15 px CSS al escala
+   * FIT más chica de iPhone (~0,52) — legible en móvil sin agrandar el panel
+   * (los que no caben en CHAT.visibleMessages ya no se dibujan). Los mensajes
+   * van SIN stroke a propósito: viven sobre el panel casi opaco 0x14141c (no
+   * sobre la pista scrolleando como los títulos con sombra) y el outline
+   * engrosaría el monospace chico en vez de aclararlo. */
+  messageFontSize: 28,
   /** Máximo de mensajes renderizados (siempre los ÚLTIMOS). */
   visibleMessages: 24,
   /* Input DOM + ENVIAR: el input ancho (el pulgar escribe) y el botón

@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT, CHAT_SEND_COOLDOWN_MS } from '../config/balance';
+import { CHAT, CHAT_MAX_LEN, CHAT_SEND_COOLDOWN_MS, MULTIPLAYER } from '../config/balance';
 import { ChatStore, type ChatMessage } from '../chat/ChatStore';
 import {
+  applyMobileInputAttributes,
   chatSendState,
   colorNumberToCss,
   formatChatLine,
   isolateChatInput,
+  MOBILE_INPUT_PRESETS,
   SELF_LABEL,
   visibleChatMessages,
   type GlobalCaptureKeyboard,
@@ -110,6 +112,65 @@ describe('ChatPanel — chatSendState (botón ENVIAR según cooldown)', () => {
     store.sendRoomMessage('hola', 1_000);
     expect(chatSendState(store.cooldownRemainingMs('room', 1_000)).disabled).toBe(true);
     expect(chatSendState(store.cooldownRemainingMs('room', 1_000 + CHAT_SEND_COOLDOWN_MS)).disabled).toBe(false);
+  });
+});
+
+describe('ChatPanel — applyMobileInputAttributes (teclado virtual que ayuda)', () => {
+  /** Input DOM real de happy-dom (los atributos se reflejan como en el navegador). */
+  function mountInput(): HTMLInputElement {
+    const node = document.createElement('input');
+    document.body.appendChild(node);
+    return node;
+  }
+
+  it('chat: máx 200, Enter=ENVIAR, SIN mayúsculas forzadas, sin autocompletar', () => {
+    const node = mountInput();
+    applyMobileInputAttributes(node, 'chat');
+
+    expect(node.maxLength).toBe(CHAT_MAX_LEN);
+    expect(node.getAttribute('enterkeyhint')).toBe('send');
+    expect(node.autocapitalize).toBe('none');
+    expect(node.autocomplete).toBe('off');
+    expect(node.getAttribute('inputmode')).toBe('text');
+    node.remove();
+  });
+
+  it('nombre: máx 12 (el tope del protocolo) y Enter=LISTO', () => {
+    const node = mountInput();
+    applyMobileInputAttributes(node, 'name');
+
+    expect(node.maxLength).toBe(MULTIPLAYER.maxPlayerNameLength);
+    expect(node.getAttribute('enterkeyhint')).toBe('done');
+    expect(node.autocapitalize).toBe('words');
+    node.remove();
+  });
+
+  it('palabra de sala: máx 9, Enter=IR (ENTRAR) y TODO en mayúsculas', () => {
+    const node = mountInput();
+    applyMobileInputAttributes(node, 'roomWord');
+
+    expect(node.maxLength).toBe(MULTIPLAYER.roomWordMaxLength);
+    expect(node.getAttribute('enterkeyhint')).toBe('go');
+    expect(node.autocapitalize).toBe('characters'); // el dominio es A–Z
+    node.remove();
+  });
+
+  it('todos los presets apagan el autocorrect del teclado (Webkit)', () => {
+    for (const kind of ['chat', 'name', 'roomWord'] as const) {
+      const node = mountInput();
+      applyMobileInputAttributes(node, kind);
+      expect(node.getAttribute('autocorrect')).toBe('off');
+      expect(node.getAttribute('spellcheck')).toBe('false');
+      node.remove();
+    }
+  });
+
+  it('los presets declaran el largo del dominio que el sanitize recorta', () => {
+    // Coherencia con las constantes del protocolo: si alguien cambia un tope
+    // en balance.ts, el input DOM lo sigue sin editar este test.
+    expect(MOBILE_INPUT_PRESETS.chat.maxLength).toBe(CHAT_MAX_LEN);
+    expect(MOBILE_INPUT_PRESETS.name.maxLength).toBe(MULTIPLAYER.maxPlayerNameLength);
+    expect(MOBILE_INPUT_PRESETS.roomWord.maxLength).toBe(MULTIPLAYER.roomWordMaxLength);
   });
 });
 

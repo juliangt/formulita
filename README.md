@@ -2,9 +2,9 @@
 
 Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 4 + Vite + TypeScript strict.**
 
-Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor).
+Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor) y **chat social opt-in** (chat de sala, mensajes directos e invitaciones a partida — nadie aparece en ninguna lista hasta habilitarlo).
 
-> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1).**
+> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1) + chat social (issue #2).**
 
 ---
 
@@ -130,6 +130,43 @@ Requisitos (una sola vez, quien administra el repo):
 
 ---
 
+## Chat social (sala + directos, opt-in)
+
+**Chat de tres piezas: (1) chat de SALA de partida** — en el lobby y, si te eliminan, en modo espectador; el que sigue corriendo no tiene chat (decisión cerrada del issue: conducir sin distracciones) —; **(2) sala pública de presencia OPT-IN con mensajes directos (DM)**; **(3) invitaciones a partida** por DM. Todo P2P sobre la misma red de Trystero, sin servidor.
+
+**Presencia opt-in privacy-by-default**: NADIE aparece en la lista pública hasta habilitar **MOSTRARME DISPONIBLE** (default **NO**, persistido por pestaña). Deshabilitarlo es una **desconexión real** (leave de la sala pública, sin tráfico residual). Mientras estás disponible tu IP es visible a los peers de esa sala (WebRTC directo, como en cualquier partida) — por eso el default es escondido.
+
+### Cómo se usa
+
+1. Botón **CHAT**: en el menú (con badge de no leídos `CHAT · N`) y en el lobby. Abre el overlay con dos tabs.
+2. Tab **SALA**: el hilo de la partida actual (solo existe dentro de una partida; desde el menú aparece deshabilitada con aviso).
+3. Tab **PÚBLICO**: toggle grande **MOSTRARME DISPONIBLE** (SÍ/NO) + lista en vivo de quienes se mostraron. Tocar una fila abre el **hilo de DM** con ese jugador (VOLVER · BLOQUEAR/DESBLOQUEAR · INVITAR).
+4. **INVITAR A PARTIDA** (solo si estás en un lobby): manda tu palabra de sala por DM; el otro ve el banner «N TE INVITÓ A "PALABRA"» con **UNIRSE** (pre-carga la palabra en el flujo de unirse) / **IGNORAR**.
+5. El eliminado de una partida multi tiene botón **CHAT** en su overlay de espectador (escribe en el hilo de sala); el vivo no lo ve nunca.
+
+### Reglas
+
+- Mensajes de **máx. 200 caracteres** (sanitizados igual en emisor y receptor: trim, espacios colapsados, recorte — un cliente "rogue" no elude el límite).
+- **1 mensaje cada 1,5 s POR HILO**: la sala y cada DM enfrían por separado; los intentos rechazados no re-armar el reloj.
+- **Efímero**: NADA persiste al cerrar la pestaña (ni mensajes, ni hilos, ni bloqueos; solo el toggle de disponibilidad queda guardado en `localStorage`).
+- **Bloqueo por sesión** (BLOQUEAR): corta la conversación en AMBOS sentidos — sus mensajes no entran, los míos no salen — y no se persiste (los peerId cambian en cada conexión).
+- **DM requiere ambos disponibles**: si el otro se esconde (o cae por staleness, >20 s sin heartbeat de 5 s), su hilo pasa a **DESCONECTADO** con el input bloqueado; el historial queda.
+- Sin identidad persistente: los nombres NO son únicos (dos "PILOTO" pueden coexistir).
+
+### Límites de la v1 del chat (issue #2 §9)
+
+- **Sin identidad persistente**: nombres no únicos, bloqueo solo por sesión (al reconectar, peerId nuevo).
+- **Sin historial ni offline ni notificaciones**: no hay mensajes pendientes esperándote; nada llega con la pestaña cerrada.
+- **Sin moderación central**: la defensa es distributed-by-client — sanitize (200) + throttle (1,5 s/hilo) + bloqueo por sesión.
+- **Malla pública cómoda hasta ~30–50 presentes** por sala `appId-social`; más que eso exigiría sharding de vestíbulos (futuro).
+- **Privacidad WebRTC**: mientras estás disponible, tu IP es visible a los peers de la sala pública (conexión directa, sin relay) — el default escondido minimiza la exposición.
+
+### Probarlo
+
+Igual que el multijugador: 2–3 pestañas/dispositivos (`npm run dev` por LAN). En cada una: CHAT → tab PÚBLICO → MOSTRARME DISPONIBLE. La lista se llena sola al momento del descubrimiento de malla (~1,5 s), y los hilos de DM abren tocando las filas. Requiere `VITE_TRYSTERO_APP_ID` (misma configuración que el multijugador).
+
+---
+
 ## Arquitectura (por capas)
 
 Principios SOLID: escenas que solo orquestan, lógica pura testeable, input/audio/persistencia detrás de interfaces.
@@ -149,9 +186,15 @@ src/
 ├── entities/             # PlayerCar, RivalCar, Hazard, Coin, Pickup, GhostCar (+ defs)
 ├── net/                  # multijugador P2P: NetClient + TrysteroNetClient, protocolo,
 │                         #   lobby (roster/colores/anfitrión), roomRng (seed por sala),
-│                         #   interpolación de fantasmas, handoff lobby → carrera
+│                         #   interpolación de fantasmas, handoff lobby → carrera,
+│                         #   ChatClient + TrysteroChatClient (sala pública social)
+├── chat/                 # chat social (issue #2): ChatStore puro (sanitize 200 /
+│                         #   throttle 1,5 s por hilo / no leídos / bloqueo sesión),
+│                         #   adaptadores roomChat/dmChat, sesión social
+│                         #   (socialChatSession), vistas puras presenceView/dmView
 ├── ui/                   # HUD: Speedometer, EnergyBar, DrsIndicator, ScoreHud,
-│                         #   botones (MenuButton, PixelButton, MuteButton)
+│                         #   botones (MenuButton, PixelButton, MuteButton) y
+│                         #   ChatPanel (lista + input DOM + ENVIAR del chat)
 ├── audio/                # AudioManager (ISfxEngine): SFX sintéticos Web Audio + dron
 │                         #   del motor; mute persistido, desbloqueo por primer gesto
 └── data/                 # ISaveRepository → LocalStorageSaveRepository (fallback en
@@ -170,10 +213,11 @@ Decisiones clave:
 
 ## Tests
 
-- 50 archivos / 624 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- 64 archivos / 850 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
 - Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), steering del derrape (`slipSteer`), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
 - Tests de integración sin runtime de Phaser: input → steering (fusión consumida por el auto, con derrape), SpawnScheduler × DifficultySystem (ritmo, patrones y cierre conjuntos), colisiones → economía (monedas/pickups → Score/Turbo/DRS/bus) y carrera → guardado → recarga.
 - Multijugador: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`, misma semántica que Trystero) — roster/colores/anfitrión, pista determinista por seed con perfiles de velocidad distintos, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes (lobby → start → carrera con perfiles distintos → 2 choques → match-over) que exige el MISMO ranking en los tres, con el de más monedas de ganador aunque otro haya sobrevivido más.
+- Chat social: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo entrada+salida), TrysteroChatClient contra rooms/hub fake (presencia opt-in, heartbeat, stale, DM/invite dirigidos), sesión social (DM con el overlay cerrado) — y el flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`: chat de sala + presencia opt-in con privacy-by-default verificada + 2 DM simultáneos con throttles independientes + escondite→DESCONECTADO + invitación con UNIRSE + badges por cliente), 100% determinista con reloj/timers inyectados.
 
 ---
 
@@ -229,6 +273,35 @@ Criterio de aceptación del issue #1 (M3): partida de ~10 minutos con dispositiv
 - [ ] Partida de ~10 min con 2–10 jugadores sin errores de consola ni degradación de FPS en ningún dispositivo.
 - [ ] **Reconexión NO soportada (límite v1)**: recargar (F5) a mitad de partida elimina al que recargó (puede crear/unirse a otra sala); los demás concluyen la partida en curso sin romperse.
 - [ ] Los récords/monedas del modo solo no cambian por jugar partidas multi.
+
+### Chat social (multi-dispositivo: iOS + Android mezclados)
+
+Criterio de aceptación del issue #2 (C4): el flujo social completo con 3 dispositivos REALES sin errores de consola. La parte física (teclado virtual en pantalla, foco real, overlays del SO) no es automatizable — esta checklist es el QA manual que la suite no cubre.
+
+Teclado virtual y foco (en CADA dispositivo móvil):
+
+- [ ] Tocar el input de chat lo enfoca y el **teclado NO tapa el input**: en Android la ventana se redimensiona y todo el lienzo (input + ENVIAR) queda visible sobre el teclado; en iOS Safari verificar que el input enfocado queda alcanzable (el layout ancla el input abajo, con ENVIAR/CERRAR debajo).
+- [ ] La tecla Enter del teclado virtual se etiqueta **"enviar"** (`enterkeyhint`) y envía el mensaje; en el input de palabra de sala se etiqueta "ir" y en el de nombre "listo".
+- [ ] Enfocar el input **NO hace zoom** la página en iOS (la fuente efectiva queda ≥16 px CSS).
+- [ ] El teclado NO sugiere autocorrección ni autocompletado en ningún input del juego (y la palabra de sala fuerza MAYÚSCULAS).
+- [ ] Escribir **"P" en el input de chat NO pausa nada** (ni ESPACIO acelera, ni las flechas mueven): el input está aislado del teclado del juego; al cerrar el chat, P vuelve a pausar.
+- [ ] El tope de 200 caracteres se corta al tipear (el input no admite más).
+
+Lista de mensajes:
+
+- [ ] La lista muestra siempre los **últimos** mensajes (anclada abajo) y los propios alineados a la derecha en amarillo "VOS" (decisión v1: sin scroll táctil — sobran los últimos N visibles).
+- [ ] Con el panel lleno, los mensajes más viejos salen por arriba sin deformar el layout.
+
+Flujo social con 3 dispositivos (uno iOS, uno Android, uno desktop):
+
+- [ ] Sala compartida: A crea, B y C se unen; el chat de SALA muestra nombre y color del remitente en todos, con el throttle de 1,5 s visible ("ESPERÁ…").
+- [ ] **Privacy by default**: nadie aparece en la tab PÚBLICO hasta tocar MOSTRARME DISPONIBLE; quien no lo tocó no figura en la lista de nadie.
+- [ ] **2 DM simultáneos** al chat de sala (p. ej. A↔C mientras B escribe en sala): los mensajes no se cruzan de hilo y el throttle de cada hilo es independiente.
+- [ ] Tocar MOSTRARME DISPONIBLE: NO → SÍ aparece en las listas de los demás en ~1,5 s; SÍ → NO desaparece y su hilo de DM pasa a DESCONECTADO con el input bloqueado.
+- [ ] **INVITAR A PARTIDA** (desde un lobby): el invitado ve el banner «N TE INVITÓ A "PALABRA"», UNIRSE lo lleva al lobby con la palabra pre-cargada y IGNORAR lo descarta.
+- [ ] El badge del botón CHAT del menú cuenta los no leídos de sala + DMs y se limpia al abrir cada hilo.
+- [ ] Sesión de ~10 minutos de chat (sala + DMs + bloqueos) sin errores ni warnings de consola en ningún dispositivo.
+- [ ] Cerrar la pestaña y volver: no queda rastro de mensajes ni hilos (efímero); solo el toggle de disponibilidad se recuerda.
 
 ---
 
