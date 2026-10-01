@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AUDIO_SETTINGS_STORAGE_KEY,
   AudioManager,
+  buildSilentWavDataUri,
   engineFrequencyForSpeed,
   getAudioEngine,
+  shouldShowAudioBlockedHint,
   type AudioBufferLike,
   type AudioBufferSourceNodeLike,
   type AudioContextFactory,
@@ -14,9 +16,11 @@ import {
   type AudioParamLike,
   type BiquadFilterNodeLike,
   type GainNodeLike,
+  type MediaElementLike,
   type OscillatorNodeLike,
   type UnlockEventTarget,
 } from '../audio/AudioManager';
+import { showAudioBlockedHint } from '../audio/AudioBlockedHint';
 import { AUDIO_ENGINE_REGISTRY_KEY } from '../audio/ISfxEngine';
 import { AUDIO, DRS_MULTIPLIER, MAX_SPEED, TURBO_MULTIPLIER } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
@@ -144,6 +148,29 @@ class FakeBuffer implements AudioBufferLike {
   }
 }
 
+class FakeMediaElement implements MediaElementLike {
+  loop = false;
+  volume = 1;
+  playCalls = 0;
+  paused = 0;
+  /** Si se asigna, `play()` devuelve esta promesa (para simular rechazo). */
+  playResult: Promise<void> | null = null;
+  /** Si true, `play()` lanza sincrónico (rarezas de WebViews viejos). */
+  throwOnPlay = false;
+
+  play(): Promise<void> {
+    this.playCalls += 1;
+    if (this.throwOnPlay) {
+      throw new Error('play lanzó sincrónico (fake)');
+    }
+    return this.playResult ?? Promise.resolve();
+  }
+
+  pause(): void {
+    this.paused += 1;
+  }
+}
+
 class FakeAudioContext implements AudioContextLike {
   currentTime = 0;
   readonly sampleRate = 48000;
@@ -208,6 +235,10 @@ class FakeAudioContext implements AudioContextLike {
 interface Harness {
   manager: AudioManager;
   ctx: FakeAudioContext;
+  /** Media element silencioso fake (lo que el workaround reproduce). */
+  media: FakeMediaElement;
+  /** Cantidad de veces que el manager disparó el aviso de audio bloqueado. */
+  hintCalls: () => number;
   factoryCalls: () => number;
   bus: EventBus<GameEvents>;
 }
@@ -217,9 +248,13 @@ function makeHarness(options?: {
   throws?: boolean;
   storage?: Storage | null;
   withBus?: boolean;
+  /** `null` = factory de media element que devuelve null (workaround off). */
+  mediaElement?: FakeMediaElement | null;
 }): Harness {
   let calls = 0;
+  let hints = 0;
   const ctx = new FakeAudioContext();
+  const media = new FakeMediaElement();
   const factory: AudioContextFactory = () => {
     calls += 1;
     if (options?.throws) {
@@ -230,12 +265,17 @@ function makeHarness(options?: {
   const manager = new AudioManager({
     contextFactory: factory,
     storage: options?.storage === undefined ? new FakeStorage() : options.storage,
+    mediaElementFactory: options?.mediaElement === null ? () => null : () => media,
+    // El default real es el overlay DOM: acá se cuenta, para no tocar DOM.
+    onAudioBlocked: () => {
+      hints += 1;
+    },
   });
   const bus = new EventBus<GameEvents>();
   if (options?.withBus) {
     manager.attachBus(bus);
   }
-  return { manager, ctx, factoryCalls: () => calls, bus };
+  return { manager, ctx, media, hintCalls: () => hints, factoryCalls: () => calls, bus };
 }
 
 /* ------------------------------------------------------------------ */
@@ -451,6 +491,203 @@ describe('AudioManager — unlock (política de autoplay)', () => {
     };
 
     expect(() => manager.unlock()).not.toThrow();
+  });
+});
+
+describe('AudioManager — workaround Ring/Silent (media element silencioso)', () => {
+  it('el primer gesto reproduce el media element UNA vez (loop, volumen casi 0)', () => {
+    const { manager, media } = makeHarness();
+
+    manager.unlock();
+    expect(media.playCalls).toBe(1);
+    expect(media.loop).toBe(true);
+    expect(media.volume).toBeGreaterThan(0); // no mudo del todo: iOS lo exige
+    expect(media.volume).toBeLessThan(0.01); // pero inaudible para humanos
+
+    // Gestos subsiguientes: ni re-create ni re-play.
+    manager.unlock();
+    manager.unlock();
+    expect(media.playCalls).toBe(1);
+  });
+
+  it('el media element se pausa en dispose', () => {
+    const { manager, media } = makeHarness();
+
+    manager.unlock();
+    manager.dispose();
+
+    expect(media.paused).toBe(1);
+  });
+
+  it('factory de media element null: el unlock sigue funcionando sin workaround', () => {
+    const { manager, ctx, media } = makeHarness({ mediaElement: null });
+
+    expect(() => manager.unlock()).not.toThrow();
+    // El resto del ritual (primer silencioso) se sirvió igual.
+    expect(ctx.buffers.length).toBe(1);
+    expect(media.playCalls).toBe(0);
+  });
+
+  it('si play() del media element rechaza, no lanza ni rompe el resto del unlock', async () => {
+    const { manager, ctx, media } = makeHarness();
+    media.playResult = Promise.reject(new Error('play bloqueado (fake)'));
+
+    expect(() => manager.unlock()).not.toThrow();
+    expect(ctx.buffers.length).toBe(1);
+    expect(ctx.sources.length).toBe(1);
+    expect(ctx.sources[0].started.length).toBe(1);
+
+    await Promise.resolve(); // deja correr el catch de la promesa rechazada
+    expect(media.playCalls).toBe(1);
+  });
+
+  it('si play() lanza sincrónico también se tolera (misma degradación)', () => {
+    const { manager, ctx, media } = makeHarness();
+    media.throwOnPlay = true;
+
+    expect(() => manager.unlock()).not.toThrow();
+    expect(ctx.buffers.length).toBe(1);
+    expect(media.playCalls).toBe(1);
+  });
+});
+
+describe('AudioManager — hint de audio bloqueado (una vez por sesión)', () => {
+  /** Dos ticks de microtask: alcanzan para que el veredicto post-resume corra. */
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('resume rechazado (contexto sigue suspended) señala el hint UNA vez', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.resume = () => Promise.reject(new Error('resume bloqueado (fake)'));
+
+    manager.unlock();
+    await flushMicrotasks();
+    expect(hintCalls()).toBe(1);
+
+    manager.unlock(); // segundo gesto: el hint ya se mostró en esta sesión
+    await flushMicrotasks();
+    expect(hintCalls()).toBe(1);
+  });
+
+  it('resume resuelve pero el contexto queda suspendido igual → hint', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.resume = () => {
+      ctx.resumeCount += 1;
+      return Promise.resolve(); // sin pasar a running (Safari terco)
+    };
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(1);
+  });
+
+  it('resume exitoso (contexto running) → sin hint', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(ctx.state).toBe('running');
+    expect(hintCalls()).toBe(0);
+  });
+
+  it('contexto ya running desde la creación → sin hint', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.state = 'running';
+
+    manager.unlock();
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(0);
+  });
+
+  it('sin contexto (Web Audio ausente) → sin hint', async () => {
+    let hints = 0;
+    const manager = new AudioManager({
+      contextFactory: () => null,
+      storage: new FakeStorage(),
+      mediaElementFactory: () => null,
+      onAudioBlocked: () => {
+        hints += 1;
+      },
+    });
+
+    manager.unlock();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(hints).toBe(0);
+  });
+});
+
+describe('shouldShowAudioBlockedHint — decisión pura del hint', () => {
+  it('solo muestra con contexto no-running y sin repeticiones de sesión', () => {
+    expect(shouldShowAudioBlockedHint('suspended', false)).toBe(true);
+    expect(shouldShowAudioBlockedHint('interrupted', false)).toBe(true);
+    expect(shouldShowAudioBlockedHint('closed', false)).toBe(true);
+    expect(shouldShowAudioBlockedHint('running', false)).toBe(false);
+    expect(shouldShowAudioBlockedHint('suspended', true)).toBe(false);
+    expect(shouldShowAudioBlockedHint(null, false)).toBe(false); // sin contexto
+  });
+});
+
+describe('buildSilentWavDataUri — WAV silencioso inline (cero assets)', () => {
+  it('genera un WAV PCM 16-bit mono con header válido y muestras en cero', () => {
+    const uri = buildSilentWavDataUri();
+    expect(uri.startsWith('data:audio/wav;base64,')).toBe(true);
+
+    const bytes = Buffer.from(uri.slice('data:audio/wav;base64,'.length), 'base64');
+    expect(bytes.length).toBeGreaterThan(44);
+    expect(bytes.toString('ascii', 0, 4)).toBe('RIFF');
+    expect(bytes.toString('ascii', 8, 12)).toBe('WAVE');
+    expect(bytes.toString('ascii', 12, 16)).toBe('fmt ');
+    expect(bytes.readUint32LE(16)).toBe(16); // chunk fmt estándar
+    expect(bytes.readUint16LE(20)).toBe(1); // PCM
+    expect(bytes.readUint16LE(22)).toBe(1); // mono
+    expect(bytes.readUint32LE(24)).toBe(8000); // sample rate
+    expect(bytes.readUint16LE(34)).toBe(16); // bits por muestra
+    expect(bytes.toString('ascii', 36, 40)).toBe('data');
+    expect(bytes.readUint32LE(40)).toBe(bytes.length - 44);
+    for (let i = 44; i < bytes.length; i += 1) {
+      if (bytes[i] !== 0) {
+        expect.unreachable(`byte ${i} no es silencio`);
+      }
+    }
+  });
+
+  it('es memoizado: misma constante para toda la sesión', () => {
+    expect(buildSilentWavDataUri()).toBe(buildSilentWavDataUri());
+  });
+});
+
+describe('showAudioBlockedHint — overlay DOM (thin)', () => {
+  const HINT_MARK = 'volumen y el silencio';
+
+  const hintNodes = (): Element[] =>
+    [...document.body.querySelectorAll('div[role="status"]')].filter((n) =>
+      n.textContent?.includes(HINT_MARK),
+    );
+
+  it('aparece una sola vez (dedupe) y se auto-remueve a los ~4 s', () => {
+    vi.useFakeTimers();
+    try {
+      showAudioBlockedHint();
+      expect(hintNodes().length).toBe(1);
+
+      showAudioBlockedHint(); // segunda llamada: reinicia, no duplica
+      expect(hintNodes().length).toBe(1);
+
+      vi.advanceTimersByTime(4500);
+      expect(hintNodes().length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      for (const node of hintNodes()) {
+        node.remove();
+      }
+    }
   });
 });
 
