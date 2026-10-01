@@ -36,6 +36,7 @@ import {
   type StartPayload,
 } from '../net/protocol';
 import type { NetClient } from '../net/NetClient';
+import { handoffNetClient } from '../net/netClientSession';
 import { randomRoomSeed } from '../net/roomRng';
 import { resolveAppId, TrysteroNetClient } from '../net/TrysteroNetClient';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
@@ -114,6 +115,12 @@ export class LobbyScene extends Phaser.Scene {
   private playerName = '';
   /** true una vez que la escena entró a una sala (create o join exitoso). */
   private joined = false;
+  /**
+   * M2 — true al arrancar la carrera: la propiedad del NetClient pasa a
+   * GameScene (handoff por registry), así que el SHUTDOWN del lobby ya NO
+   * debe destruirlo.
+   */
+  private handedOff = false;
   private road!: Phaser.GameObjects.TileSprite;
 
   /* Widgets vivos (se recrean/actualizan por evento). */
@@ -135,6 +142,7 @@ export class LobbyScene extends Phaser.Scene {
     this.lobbyData = parseLobbyData(data);
     this.playerName = sanitizePlayerName(this.lobbyData.name ?? '');
     this.joined = false;
+    this.handedOff = false;
   }
 
   create(): void {
@@ -211,9 +219,15 @@ export class LobbyScene extends Phaser.Scene {
       this.setStatus('INGRESÁ LA PALABRA DE LA SALA');
     }
 
-    // Al apagarse la escena (SALIR, arranque de la carrera o restart), el
-    // cliente se destruye: sale de la sala y limpia todos los handlers.
+    // Al apagarse la escena (SALIR o restart) el cliente se destruye: sale
+    // de la sala y limpia todos los handlers. EXCEPCIÓN (M2): si la carrera
+    // ya arrancó, la propiedad pasó a GameScene por registry (handoff) y el
+    // dueño nuevo lo destruye en su propio shutdown.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      if (this.handedOff) {
+        this.client = null;
+        return;
+      }
       this.client?.destroy();
       this.client = null;
     });
@@ -432,6 +446,12 @@ export class LobbyScene extends Phaser.Scene {
 
   /** `start` recibido (o propio): arranca la carrera multi determinista. */
   private startRace(payload: StartPayload): void {
+    // M2 — handoff del NetClient: la carrera es la nueva dueña del transporte
+    // (difunde state/eliminated/match-over). Este SHUTDOWN ya no lo destruye.
+    if (this.client) {
+      handoffNetClient(this.registry, this.client);
+      this.handedOff = true;
+    }
     this.scene.start(GameScene.KEY, {
       mode: 'multi',
       seed: payload.seed,

@@ -4,6 +4,7 @@ import {
   isValidPlayerName,
   isValidRoomWord,
   parseMultiplayerInit,
+  roundStatePayload,
   sanitizePlayerName,
   sanitizeRoomWord,
 } from '../net/protocol';
@@ -146,5 +147,52 @@ describe('protocol — parseMultiplayerInit (init data de GameScene)', () => {
     const withoutWord = parseMultiplayerInit({ ...valid, roomWord: undefined });
     expect(withoutWord).not.toBeNull();
     expect(withoutWord?.roomWord).toBe('');
+  });
+});
+
+describe('protocol — roundStatePayload (wire de `state`, M2)', () => {
+  it('redondea los floats a enteros (payload chico a 10 Hz)', () => {
+    expect(
+      roundStatePayload({
+        distance: 12345.6789,
+        x: 360.4,
+        speed: 403.2,
+        turboActive: false,
+        coins: 7,
+        score: 2345.6,
+      }),
+    ).toEqual({
+      distance: 12346,
+      x: 360,
+      speed: 403,
+      turboActive: false,
+      coins: 7,
+      score: 2346,
+    });
+  });
+
+  it('viaja SOLO los campos del protocolo (nada extra se cuela)', () => {
+    const payload = roundStatePayload({
+      distance: 1,
+      x: 2,
+      speed: 3,
+      turboActive: true,
+      coins: 4,
+      score: 5,
+    });
+    expect(Object.keys(payload).sort()).toEqual(['coins', 'distance', 'score', 'speed', 'turboActive', 'x']);
+  });
+
+  it('no finitos degradan a 0 (jamás NaN por el wire)', () => {
+    expect(
+      roundStatePayload({
+        distance: Number.NaN,
+        x: Number.POSITIVE_INFINITY,
+        speed: -12.5,
+        turboActive: undefined as unknown as boolean,
+        coins: Number.NaN,
+        score: 1,
+      }),
+    ).toEqual({ distance: 0, x: 0, speed: -12, turboActive: false, coins: 0, score: 1 });
   });
 });

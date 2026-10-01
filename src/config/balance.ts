@@ -528,6 +528,145 @@ export const LOBBY = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Carrera compartida (M2 — estado en vivo, fantasmas, leaderboard)    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Frecuencia de difusión del estado propio (M2): veces por SEGUNDO que cada
+ * cliente difunde `state {distance, x, speed, turboActive, coins, score}`.
+ * 10 Hz × ~70 B × ~10 pares mantiene el ancho de banda despreciable sin que
+ * la interpolación de los fantasmas se note cortada (buffer de 100 ms).
+ */
+export const STATE_HZ = 10;
+
+/**
+ * Retardo de renderizado de los fantasmas (M2, ms): cada auto rival se dibuja
+ * en el punto interpolado entre los dos estados más recientes que rodean
+ * `t − GHOST_INTERPOLATION_MS`, de modo que SIEMPRE hay dos snapshots entre
+ * los que interpolar (nunca teletransporta). Equivale a un intervalo entero
+ * del stream a STATE_HZ.
+ */
+export const GHOST_INTERPOLATION_MS = 100;
+
+/**
+ * Techo de extrapolación del fantasma (M2, ms): si no llegó un estado nuevo,
+ * se extrapolan UN intervalo como máximo desde el último snapshot (con la
+ * velocidad de los dos últimos); pasado el techo el auto se congela en ese
+ * punto en vez de volar por la pista.
+ */
+export const GHOST_MAX_EXTRAPOLATION_MS = 1000 / STATE_HZ;
+
+/** Snapshots de interpolación conservados por fantasma (~2 s de stream). */
+export const SNAPSHOT_BUFFER_SIZE = 20;
+
+/**
+ * Staleness de un jugador (M2, ms): un jugador VIVO que lleva más de 20 s
+ * sin difundir `state` se trata como eliminado (con su última estadística
+ * conocida) — cubre pestañas muertas y desconexiones silenciosas que no
+ * dispararon `onPeerLeave`.
+ */
+export const PLAYER_STALE_MS = 20000;
+
+/**
+ * Gracia antes de cerrar la partida por detección LOCAL (M2, ms): al quedar
+ * ≤1 vivo, quien NO es el superviviente espera este tiempo a que llegue el
+ * `match-over` con las stats exactas del ganador antes de armar el
+ * leaderboard con las últimas conocidas (el superviviente no espera).
+ */
+export const MATCH_OVER_GRACE_MS = 1500;
+
+/** Alfa de los autos fantasma (semitransparentes y ATRAVESABLES). */
+export const GHOST_ALPHA = 0.55;
+
+/** Alfa del marcador de un jugador eliminado en la franja de posiciones. */
+export const STRIP_ELIMINATED_ALPHA = 0.3;
+
+/**
+ * Layout de la franja de posiciones (M2): columna derecha (sobre la barrera)
+ * que muestra dónde está cada jugador relativo a uno mismo por distancia.
+ * `range` es la diferencia de distancia (px) que mapea al alto COMPLETO de
+ * la franja: ±range/2 desde el propio marcador (centrado).
+ */
+export const POSITION_STRIP = {
+  /** X del centro de la franja (barrera derecha). */
+  x: 688,
+  /** Y del centro de la franja. */
+  centerY: 660,
+  /** Ancho de la franja (px). */
+  width: 20,
+  /** Alto de la franja (px). */
+  height: 840,
+  /** Rango de distancia mapeado al alto (px de carrera). */
+  range: 4000,
+  /** Tamaño del marcador de cada jugador (px). */
+  dotWidth: 12,
+  dotHeight: 18,
+  /** Profundidad (mismo plano que el HUD de carrera). */
+  depth: 40,
+  /** Contador VIVOS: esquina superior derecha, debajo de las monedas. */
+  aliveX: 656,
+  aliveY: 104,
+  aliveFontSize: 26,
+} as const;
+
+/**
+ * Overlay de eliminación / espectador (M2): cartel "ELIMINADO — PUESTO N"
+ * más el subtitulo de modo espectador. Va ARRIBA (el mundo sigue visible:
+ * la cámara sigue corriendo hasta el fin de la partida).
+ */
+export const SPECTATOR_OVERLAY = {
+  /** Y del cartel ELIMINADO — PUESTO N (centro). */
+  bannerY: 268,
+  /** Y del subtítulo de modo espectador (centro). */
+  subtitleY: 332,
+  /** Tamaño de fuente del cartel (px). */
+  bannerFontSize: 52,
+  /** Tamaño de fuente del subtítulo (px). */
+  subtitleFontSize: 28,
+  /** Profundidad: por encima del HUD de carrera, bajo el HUD táctil. */
+  depth: 46,
+} as const;
+
+/**
+ * Layout del leaderboard final multi (M2) sobre el lienzo 720×1280: título
+ * RESULTADOS, mensaje personal, tabla de hasta 10 filas y dos botones.
+ */
+export const LEADERBOARD = {
+  /** Y del título RESULTADOS (centro). */
+  titleY: 170,
+  /** Y del mensaje personal ¡GANASTE! / TERMINASTE N°X (centro). */
+  messageY: 264,
+  /** Y de la fila de encabezados de la tabla. */
+  headerY: 384,
+  /** Y de la primera fila; una fila por jugador (hasta 10). */
+  rowStartY: 448,
+  /** Separación vertical entre filas (px). */
+  rowHeight: 58,
+  /** Tamaño de fuente de las filas (px). */
+  rowFontSize: 24,
+  /** Tamaño de fuente de los encabezados (px). */
+  headerFontSize: 22,
+  /** Tamaño de fuente del mensaje personal (px). */
+  messageFontSize: 56,
+  /** Botones MENÚ y CREAR PARTIDA. */
+  menuY: 1056,
+  playY: 1160,
+  /** Y de la ayuda de teclado multi (solo desktop, bajo los botones). */
+  hintY: 1236,
+  buttonWidth: 380,
+  buttonHeight: 96,
+  buttonFontSize: 36,
+  /** X de las columnas de la tabla (put/mon/pts/km anclan por la derecha). */
+  placeX: 96,
+  nameX: 150,
+  coinsX: 470,
+  scoreX: 588,
+  kmX: 660,
+  /** Tamaño del cuadrado de color junto al nombre (px). */
+  swatchSize: 22,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Countdown, pausa y viñeta (Fase 7)                                  */
 /* ------------------------------------------------------------------ */
 

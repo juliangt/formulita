@@ -5,11 +5,15 @@ import {
   COUNTDOWN,
   FIXED_VIRTUAL_STEP,
   GAMEOVER_TRANSITION_MS,
+  GHOST_INTERPOLATION_MS,
+  MATCH_OVER_GRACE_MS,
   MUTE_BUTTON,
   OIL_SLIP_SECONDS,
   PLAYER_START_Y,
   RACE_HUD,
   SPEED_VIGNETTE,
+  SPECTATOR_OVERLAY,
+  STATE_HZ,
   TOUCH_HUD,
   TRACK,
   TURBO_MAX,
@@ -20,9 +24,22 @@ import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus'
 import type { ISaveRepository } from '../data/ISaveRepository';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { parseGameOverData } from '../data/types';
+import { GhostCar } from '../entities/GhostCar';
 import { PlayerCar } from '../entities/PlayerCar';
 import { TrackEntity } from '../entities/TrackEntity';
-import { parseMultiplayerInit, type MultiplayerInit } from '../net/protocol';
+import { SnapshotBuffer } from '../net/interpolation';
+import type { NetClient } from '../net/NetClient';
+import { takeSessionNetClient } from '../net/netClientSession';
+import {
+  parseMultiplayerInit,
+  roundStatePayload,
+  type EliminatedPayload,
+  type MatchOverPayload,
+  type MultiGameOverData,
+  type MultiplayerInit,
+  type PlayerStats,
+} from '../net/protocol';
+import { MatchTracker } from '../systems/MatchTracker';
 import { CountdownSystem, type CountdownLabel } from '../systems/CountdownSystem';
 import type { DifficultySystem } from '../systems/DifficultySystem';
 import { InputSystem } from '../systems/InputSystem';
@@ -40,6 +57,7 @@ import { VirtualClock } from '../systems/VirtualClock';
 import { EnergyBar } from '../ui/EnergyBar';
 import { DrsIndicator } from '../ui/DrsIndicator';
 import { MenuButton } from '../ui/MenuButton';
+import { PositionStrip } from '../ui/PositionStrip';
 import { ScoreHud } from '../ui/ScoreHud';
 import { Speedometer } from '../ui/Speedometer';
 import { MuteButton } from '../ui/MuteButton';
@@ -87,6 +105,13 @@ type HudWidget = { destroy(): void };
  *   gradiente horneada una vez) y flash de crash. El HUD se arma con el
  *   estado inicial de los sistemas para que no haya valores vacíos durante
  *   la cuenta.
+ * - M2 — carrera compartida (multijugador): difusión del estado propio a
+ *   10 Hz (acumulador, no por frame), fantasmas de los rivales interpolados
+ *   a t−100 ms (atravesables, con nombre y color), franja lateral de
+ *   posiciones + VIVOS, crash propio → `eliminated` + modo espectador (el
+ *   mundo sigue), fin distribuido (≤1 vivo / match-over) y transición al
+ *   leaderboard de GameOverScene. La PAUSA queda deshabilitada en multi
+ *   (ni botón ni tecla P ni auto-pausa por blur — solo un aviso).
  */
 export class GameScene extends Phaser.Scene {
   static readonly KEY = 'Game';
@@ -108,6 +133,32 @@ export class GameScene extends Phaser.Scene {
   /* M1 — multijugador: init data multi (null = modo solo) + reloj virtual. */
   private multiInit: MultiplayerInit | null = null;
   private virtualClock: VirtualClock | null = null;
+
+  /* M2 — carrera compartida: red, fantasmas, tracker de partida, espectador. */
+  private netClient: NetClient | null = null;
+  private matchTracker: MatchTracker | null = null;
+  private netUnsubs: (() => void)[] = [];
+  private ghostBuffers = new Map<string, SnapshotBuffer>();
+  private ghosts = new Map<string, GhostCar>();
+  private positionStrip: PositionStrip | null = null;
+  /** Acumulador del envío de `state` (s: se emite a STATE_HZ, no por frame). */
+  private stateSendAccumulator = 0;
+  /** true desde mi crash hasta el fin de la partida (modo espectador). */
+  private selfEliminated = false;
+  /** Stats congeladas al morir (o al cerrar la partida siendo el último). */
+  private frozenStats: PlayerStats | null = null;
+  /** Distancia de la "cámara" mientras espectateo (avanza a BASE_SPEED). */
+  private spectatorDistance = 0;
+  /** true cuando ya se mostró/derivó el leaderboard final (una sola vez). */
+  private matchOverShown = false;
+  /** Segundos esperando el match-over ajeno tras detectar el fin local. */
+  private matchOverGrace = 0;
+  /** Acumulador del barrido de staleness (1 vez por segundo alcanza). */
+  private staleSweepAccumulator = 0;
+  /** Aviso de pérdida de foco en multi (la carrera NO se pausa). */
+  private blurNotice: Phaser.GameObjects.Text | null = null;
+  private spectatorBanner: Phaser.GameObjects.Text | null = null;
+  private spectatorSubtitle: Phaser.GameObjects.Text | null = null;
 
   /* Estado de la carrera. */
   private currentSpeed = BASE_SPEED;
@@ -171,6 +222,18 @@ export class GameScene extends Phaser.Scene {
     this.coins = 0;
     this.gameOver = false;
 
+    // M2 — estado de la carrera compartida fresco (idem restart).
+    this.selfEliminated = false;
+    this.frozenStats = null;
+    this.spectatorDistance = 0;
+    this.matchOverShown = false;
+    this.matchOverGrace = 0;
+    this.staleSweepAccumulator = 0;
+    this.stateSendAccumulator = 0;
+    this.blurNotice = null;
+    this.spectatorBanner = null;
+    this.spectatorSubtitle = null;
+
     // Fase 7 — pausa y countdown frescos, y mundo CONGELADO hasta el GO!:
     // ni scroll, ni spawn, ni puntaje, ni física durante la cuenta (el plan
     // pide que el mundo no arranque hasta terminar). `physics.world.pause()`
@@ -214,8 +277,8 @@ export class GameScene extends Phaser.Scene {
     // Fase 4 — dificultad por distancia + generación procedural con pools.
     // M1 — por modo (buildRaceSystems): solo = exactamente como siempre;
     // multi = scheduler sembrado por seed + reloj virtual (pista determinista
-    // compartida) + rng por entidad. El crash en multi termina como en solo
-    // (la eliminación compartida llega en M2).
+    // compartida) + rng por entidad. M2 — el crash en multi ya NO termina la
+    // carrera: elimina y espectatea hasta que quede ≤1 vivo (ver crash()).
     const race = buildRaceSystems(this.multiInit);
     this.difficulty = race.difficulty;
     this.virtualClock = race.virtualClock ?? null;
@@ -235,6 +298,9 @@ export class GameScene extends Phaser.Scene {
       });
     }
     this.registerCollisions();
+    if (this.multiInit) {
+      this.setupMultiplayer();
+    }
 
     this.createTurboEffects();
     this.createCollectEffects();
@@ -289,6 +355,19 @@ export class GameScene extends Phaser.Scene {
       this.game.events.off(Phaser.Core.Events.HIDDEN, this.handleFocusLoss);
       this.game.events.off(Phaser.Core.Events.BLUR, this.handleFocusLoss);
       this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
+      // M2 — la escena era dueña del NetClient (handoff del lobby): se
+      // desuscribe de la red, sale de la sala y limpia sus handlers, para que
+      // el próximo lobby arranque con un transporte fresco.
+      for (const off of this.netUnsubs) {
+        off();
+      }
+      this.netUnsubs = [];
+      this.netClient?.destroy();
+      this.netClient = null;
+      this.matchTracker = null;
+      this.ghosts.clear();
+      this.ghostBuffers.clear();
+      this.positionStrip = null;
       // Salida sin crash (MENÚ desde la pausa, Fase 7): corta el dron del
       // motor sin SFX de crash. En el flujo a GameOver es un no-op: el dron
       // ya se apagó con `game-over`.
@@ -362,17 +441,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Choque destructivo (rival o resto): explosión + shake + guardado
-   * inmediato del progreso (Fase 5) + transición a GameOverScene con el
-   * resumen de la carrera como init data (tras una pequeña pausa para que
-   * se lea la explosión y el shake).
+   * Choque destructivo (rival o resto). Los EFECTOS son idénticos en ambos
+   * modos (flash + explosión + shake + auto fuera de juego); el DESTINO no:
+   *
+   * - SOLO: congela el mundo y transiciona a GameOverScene con el resumen
+   *   de la carrera (Fase 5, exactamente como siempre).
+   * - MULTI (M2): el mundo SIGUE — difundo `eliminated` con mis stats
+   *   congeladas y paso a ESPECTADOR (ver `eliminateSelf`) hasta que la
+   *   partida quede con ≤1 vivo.
    */
   private crash(): void {
-    if (this.gameOver) {
+    if (this.gameOver || this.selfEliminated) {
       return;
     }
-    this.gameOver = true;
-    this.spawnSystem.setEnabled(false);
 
     // Fase 7 — flash rojo de impacto + viñeta a cero mientras arde el auto.
     this.cameras.main.flash(160, 255, 90, 64);
@@ -382,10 +463,18 @@ export class GameScene extends Phaser.Scene {
     this.playerCar.setActive(false).setVisible(false);
     (this.playerCar.body as Phaser.Physics.Arcade.Body).enable = false;
 
-    this.physics.world.pause();
     this.cameras.main.shake(420, 0.014);
     this.exhaustEmitter.stop();
     this.speedLinesEmitter.stop();
+
+    if (this.multiInit) {
+      this.eliminateSelf();
+      return;
+    }
+
+    this.gameOver = true;
+    this.spawnSystem.setEnabled(false);
+    this.physics.world.pause();
 
     // Resumen de la carrera (puntaje y distancia salen del ScoreSystem).
     const summary = {
@@ -403,6 +492,350 @@ export class GameScene extends Phaser.Scene {
     // Pausa para leer el crash y cambio de escena con el payload tipado.
     this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
       this.scene.start(GameOverScene.KEY, parseGameOverData({ ...summary, isNewBest }));
+    });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* M2 — carrera compartida: fantasmas, estado en vivo, espectador    */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Arma la capa multijugador de la carrera: toma el NetClient que el lobby
+   * entregó por registry, crea el tracker de partida (la única fuente de
+   * vivos/eliminados/ranking), un buffer de interpolación y un fantasma por
+   * rival, la franja de posiciones y las suscripciones de red.
+   */
+  private setupMultiplayer(): void {
+    const init = this.multiInit;
+    if (!init) {
+      return;
+    }
+    this.netClient = takeSessionNetClient(this.registry);
+    this.matchTracker = new MatchTracker(init.players, {
+      now: () => this.time.now,
+      selfPeerId: init.myPeerId,
+    });
+
+    for (const player of init.players) {
+      if (player.peerId === init.myPeerId) {
+        continue;
+      }
+      this.ghostBuffers.set(player.peerId, new SnapshotBuffer());
+      this.ghosts.set(player.peerId, new GhostCar(this, player));
+    }
+
+    this.positionStrip = new PositionStrip(this);
+    this.hudWidgets.push(this.positionStrip);
+
+    const client = this.netClient;
+    if (!client) {
+      return; // Degradación defensiva: carrera multi sin transporte.
+    }
+    this.netUnsubs.push(
+      client.onPeerState((peerId, payload) => {
+        this.ghostBuffers
+          .get(peerId)
+          ?.push({ t: this.time.now, distance: payload.distance, x: payload.x });
+        this.matchTracker?.recordState(peerId, payload);
+      }),
+      client.onEliminated((peerId, payload) => this.handlePeerEliminated(peerId, payload)),
+      client.onMatchOver((peerId, payload) => this.handlePeerMatchOver(peerId, payload)),
+      client.onPeerLeave((peerId) => this.handlePeerLeft(peerId)),
+    );
+  }
+
+  /** Un rival chocó (red): stats congeladas + su fantasma estalla y desaparece. */
+  private handlePeerEliminated(peerId: string, payload: EliminatedPayload): void {
+    if (this.matchTracker?.eliminate(peerId, payload) === 'eliminated') {
+      this.killGhost(peerId, true);
+    }
+  }
+
+  /** Un rival se fue de la sala: eliminado con su última stats conocida. */
+  private handlePeerLeft(peerId: string): void {
+    if (this.matchTracker?.markPeerLeft(peerId) === 'eliminated') {
+      this.killGhost(peerId, false);
+    }
+  }
+
+  /**
+   * Llegó `match-over` (lo difundió quien cerró la partida): congela sus
+   * stats exactas y, si con esto la partida terminó, se muestra el
+   * leaderboard YA (sin esperar la gracia: tenemos los números del ganador).
+   */
+  private handlePeerMatchOver(peerId: string, payload: MatchOverPayload): void {
+    this.matchTracker?.recordMatchOver(peerId, payload);
+    if (!this.matchOverShown && this.matchTracker?.isFinished()) {
+      this.concludeMatch();
+    }
+  }
+
+  /** Fuera de juego de un rival: explosión opcional + limpieza del fantasma. */
+  private killGhost(peerId: string, explode: boolean): void {
+    const ghost = this.ghosts.get(peerId);
+    if (!ghost) {
+      return;
+    }
+    if (explode) {
+      const { x, y } = ghost.position;
+      this.crashEmitter.explode(36, x, y);
+    }
+    ghost.destroy();
+    this.ghosts.delete(peerId);
+    this.ghostBuffers.delete(peerId);
+  }
+
+  /**
+   * Mi crash en multi (M2): stats congeladas en el instante exacto, aviso
+   * local + `eliminated` por red, input propio deshabilitado y modo
+   * ESPECTADOR (el mundo sigue hasta que quede ≤1 vivo). El HUD propio queda
+   * congelado: no se emiten más eventos de speed/turbo/drs/puntaje.
+   */
+  private eliminateSelf(): void {
+    const init = this.multiInit;
+    if (!init) {
+      return;
+    }
+    this.selfEliminated = true;
+    this.frozenStats = {
+      coins: this.coins,
+      score: this.scoreSystem.score,
+      distance: this.scoreSystem.distance,
+    };
+    const stats = this.frozenStats;
+
+    this.matchTracker?.eliminate(init.myPeerId, stats);
+    this.netClient?.sendEliminated(stats);
+
+    // Input OFF: nada mueve mi auto (ya ni existe) ni dispara sistemas.
+    this.inputSystem.detach();
+    this.touchSource.detach();
+    this.input.keyboard?.resetKeys();
+
+    this.showSpectatorOverlay();
+
+    // El dron del motor se corta con el crash (SFX incluido, como en solo).
+    this.bus.emit('game-over', stats);
+    this.persistProgress();
+
+    // La "cámara" espectador arranca desde mi punto de muerte.
+    this.spectatorDistance = stats.distance;
+  }
+
+  /** Cartel ELIMINADO — PUESTO N + subtítulo de espectador (mundo visible). */
+  private showSpectatorOverlay(): void {
+    const init = this.multiInit;
+    if (!init) {
+      return;
+    }
+    const place = this.matchTracker?.eliminationPlaceOf(init.myPeerId) ?? 0;
+    const centerX = this.scale.width / 2;
+    this.spectatorBanner = this.add
+      .text(centerX, SPECTATOR_OVERLAY.bannerY, `ELIMINADO — PUESTO ${place}`, {
+        fontFamily: 'monospace',
+        fontSize: `${SPECTATOR_OVERLAY.bannerFontSize}px`,
+        color: '#d63c3c',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 8)
+      .setDepth(SPECTATOR_OVERLAY.depth);
+    this.spectatorSubtitle = this.add
+      .text(centerX, SPECTATOR_OVERLAY.subtitleY, 'MODO ESPECTADOR — LA CARRERA SIGUE', {
+        fontFamily: 'monospace',
+        fontSize: `${SPECTATOR_OVERLAY.subtitleFontSize}px`,
+        color: '#c8ccd4',
+      })
+      .setOrigin(0.5)
+      .setDepth(SPECTATOR_OVERLAY.depth);
+    // Tras el impacto inicial el cartel se atenúa: la carrera es el show.
+    this.tweens.add({
+      targets: [this.spectatorBanner, this.spectatorSubtitle],
+      alpha: 0.45,
+      delay: 2400,
+      duration: 800,
+    });
+  }
+
+  /** Distancia de cámara propia: corriendo es la real; espectando, la virtual. */
+  private cameraDistance(): number {
+    return this.selfEliminated ? this.spectatorDistance : this.scoreSystem.distance;
+  }
+
+  /** Stats propias del instante (las que viajan en eliminated/match-over). */
+  private currentStats(): PlayerStats {
+    return {
+      coins: this.coins,
+      score: this.scoreSystem.score,
+      distance: this.scoreSystem.distance,
+    };
+  }
+
+  /**
+   * Tick multijugador por frame (modo corriendo): difusión del estado a
+   * STATE_HZ (acumulador — NUNCA por frame), fantasmas interpolados a
+   * t−GHOST_INTERPOLATION_MS, franja de posiciones, staleness y fin.
+   */
+  private updateMultiplayer(dt: number, speed: number): void {
+    if (!this.matchTracker) {
+      return;
+    }
+    this.stateSendAccumulator += dt;
+    if (this.stateSendAccumulator >= 1 / STATE_HZ) {
+      this.stateSendAccumulator = 0;
+      this.netClient?.sendState(
+        roundStatePayload({
+          distance: this.scoreSystem.distance,
+          x: this.playerCar.x,
+          speed,
+          turboActive: this.turboSystem.isActive,
+          coins: this.coins,
+          score: this.scoreSystem.score,
+        }),
+      );
+    }
+    this.updateSharedView();
+    this.checkMatchEnd(dt);
+  }
+
+  /** Fantasmas + franja + staleness (común a correr y espectar). */
+  private updateSharedView(): void {
+    // Fantasmas: render en el pasado interpolado (nunca teletransportan).
+    const renderT = this.time.now - GHOST_INTERPOLATION_MS;
+    const myDistance = this.cameraDistance();
+    for (const [peerId, buffer] of this.ghostBuffers) {
+      const ghost = this.ghosts.get(peerId);
+      if (!ghost) {
+        continue;
+      }
+      const point = buffer.renderAt(renderT);
+      if (!point) {
+        ghost.setVisible(false);
+        continue;
+      }
+      ghost.sync(point.distance, point.x, PLAYER_START_Y, myDistance);
+    }
+
+    // Franja de posiciones + VIVOS (los muertos quedan atenuados al centro
+    // de su última distancia).
+    const tracker = this.matchTracker;
+    if (tracker && this.positionStrip) {
+      const stripPlayers = tracker.getAllPlayers().map((player) => ({
+        peerId: player.peerId,
+        color: player.color,
+        distance: player.frozenStats
+          ? player.frozenStats.distance
+          : player.lastState
+            ? player.lastState.distance
+            : 0,
+        alive: player.alive,
+        isSelf: player.peerId === this.multiInit?.myPeerId,
+      }));
+      this.positionStrip.update(
+        stripPlayers,
+        myDistance,
+        tracker.aliveCount,
+        tracker.totalCount,
+      );
+    }
+  }
+
+  /**
+   * Espectador (M2): mi auto explotó pero el mundo NO se detiene — la pista
+   * sigue generándose y scrolleando a velocidad base, los fantasmas siguen
+   * corriendo y sigo esperando el fin de la partida (≤1 vivo / match-over).
+   */
+  private updateSpectator(dt: number): void {
+    const speed = BASE_SPEED;
+    this.currentSpeed = speed;
+    this.spectatorDistance += speed * dt;
+
+    if (this.virtualClock) {
+      this.updateGenerationVirtual(dt, speed);
+    } else {
+      this.difficulty.update(dt, speed);
+      this.spawnSystem.update(dt);
+    }
+
+    const scroll = speed * dt;
+    this.road.tilePositionY = Phaser.Math.Wrap(this.road.tilePositionY - scroll, 0, TRACK.tileHeight);
+
+    this.updateSharedView();
+    this.sweepStaleTick(dt);
+    this.checkMatchEnd(dt);
+  }
+
+  /** Barrido de staleness ~1 vez por segundo (mueve fantasmas de los idos). */
+  private sweepStaleTick(dt: number): void {
+    this.staleSweepAccumulator += dt;
+    if (this.staleSweepAccumulator < 1) {
+      return;
+    }
+    this.staleSweepAccumulator = 0;
+    for (const peerId of this.matchTracker?.sweepStale() ?? []) {
+      this.killGhost(peerId, false);
+    }
+  }
+
+  /**
+   * Detección distribuida del fin (M2): al quedar ≤1 vivo (o llegar un
+   * `match-over`), el último en pie — o el último eliminado, si quedaron 0 —
+   * difunde `match-over` con SUS stats finales exactas y muestra el
+   * leaderboard; los demás esperan una gracia corta a que llegue ese mensaje
+   * antes de armar el ranking con las últimas stats conocidas.
+   */
+  private checkMatchEnd(dt: number): void {
+    const tracker = this.matchTracker;
+    const init = this.multiInit;
+    if (!tracker || !init || this.matchOverShown || !tracker.isFinished()) {
+      this.matchOverGrace = 0;
+      return;
+    }
+
+    if (tracker.shouldBroadcastMatchOver(init.myPeerId)) {
+      this.frozenStats ??= this.currentStats();
+      const stats = this.frozenStats;
+      tracker.markSelfBroadcastDone();
+      this.netClient?.sendMatchOver(stats);
+      tracker.recordMatchOver(init.myPeerId, stats);
+      this.concludeMatch();
+      return;
+    }
+
+    this.matchOverGrace += dt;
+    if (tracker.hasReceivedMatchOver || this.matchOverGrace * 1000 >= MATCH_OVER_GRACE_MS) {
+      this.concludeMatch();
+    }
+  }
+
+  /**
+   * Fin de la partida (idempotente): congela el mundo, computa el ranking
+   * final determinístico LOCALMENTE y transiciona a GameOverScene con el
+   * payload multi (tabla en vez de stats solo).
+   */
+  private concludeMatch(): void {
+    const tracker = this.matchTracker;
+    const init = this.multiInit;
+    if (!tracker || !init || this.matchOverShown) {
+      return;
+    }
+    this.matchOverShown = true;
+    this.gameOver = true; // Congela el mundo: solo queda la transición.
+    this.spawnSystem.setEnabled(false);
+
+    const payload: MultiGameOverData = {
+      mode: 'multi',
+      standings: tracker.finalRanking(),
+      myPeerId: init.myPeerId,
+    };
+
+    // El superviviente corta el dron del motor sin SFX de crash (no chocó).
+    if (!this.selfEliminated) {
+      this.bus.emit('game-aborted', undefined);
+    }
+    this.persistProgress();
+
+    this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
+      this.scene.start(GameOverScene.KEY, payload);
     });
   }
 
@@ -509,6 +942,12 @@ export class GameScene extends Phaser.Scene {
    * escena pausada tampoco procesa su propio input.
    */
   private createPauseControls(): void {
+    // M2 — la pausa está DESHABILITADA en multijugador: ni botón ni tecla P
+    // (battle royale no se congela mientras los demás siguen corriendo). El
+    // modo solo arma exactamente los mismos controles de siempre.
+    if (this.multiInit) {
+      return;
+    }
     this.hudWidgets.push(
       new MenuButton(this, {
         x: RACE_HUD.pauseX,
@@ -536,7 +975,7 @@ export class GameScene extends Phaser.Scene {
    * un `delayedCall` pendiente que no debe quedar detenido.
    */
   private readonly pauseGame = (auto: boolean): void => {
-    if (this.gameOver) {
+    if (this.gameOver || this.multiInit) {
       return;
     }
     if (!this.pauseSystem.pause(auto)) {
@@ -564,10 +1003,44 @@ export class GameScene extends Phaser.Scene {
     this.bus.emit('game-resumed', undefined);
   };
 
-  /** HIDDEN/BLUR (pestaña oculta o ventana sin foco) → pausa automática. */
+  /**
+   * HIDDEN/BLUR (pestaña oculta o ventana sin foco): en SOLO pausa
+   * automática (Fase 7). En MULTI (M2) el mundo SIGUE — battle royale no
+   * pausa — y solo se muestra un aviso (el guardado de progreso corre por
+   * su propio listener de los mismos eventos).
+   */
   private readonly handleFocusLoss = (): void => {
+    if (this.multiInit) {
+      this.showBlurNotice();
+      return;
+    }
     this.pauseGame(true);
   };
+
+  /** Aviso efímero de pérdida de foco en multi (la carrera continúa). */
+  private showBlurNotice(): void {
+    if (!this.blurNotice) {
+      this.blurNotice = this.add
+        .text(this.scale.width / 2, 320, 'SIN FOCO — LA CARRERA CONTINÚA', {
+          fontFamily: 'monospace',
+          fontSize: '28px',
+          color: '#f2f2f2',
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 6)
+        .setDepth(MUTE_BUTTON.gameDepth)
+        .setAlpha(0);
+    }
+    const notice = this.blurNotice;
+    notice.setAlpha(1);
+    this.tweens.killTweensOf(notice);
+    this.tweens.add({
+      targets: notice,
+      alpha: 0,
+      delay: 1400,
+      duration: 500,
+    });
+  }
 
   /**
    * Viñeta de velocidad (Fase 7): gradiente radial horneado UNA vez en una
@@ -737,15 +1210,24 @@ export class GameScene extends Phaser.Scene {
     const dt = delta / 1000;
 
     // Escena terminada: solo queda la cola del shake y el delayedCall que
-    // dispara la transición al Game Over (crash()).
+    // dispara la transición al Game Over (crash()/concludeMatch()).
     if (this.gameOver) {
+      return;
+    }
+
+    // M2 — modo espectador: mi auto ya explotó pero la carrera sigue. El
+    // mundo (pista, spawn, fantasmas, franja) continúa; mi input/sistemas/
+    // puntaje quedan congelados. No hay pausa: battle royale no espera.
+    if (this.selfEliminated) {
+      this.updateSpectator(dt);
       return;
     }
 
     // Fase 7 — tecla P: pausa con JustDown (el auto-repeat del SO no vuelve a
     // dispararla; el re-armado de teclas en el RESUME limpia el flag). El
     // resto del frame se descarta: el overlay toma el control y la escena
-    // queda congelada desde el próximo step del manager.
+    // queda congelada desde el próximo step del manager. En multi la tecla
+    // ni existe (pauseKey null): la pausa está deshabilitada.
     if (this.pauseKey && Phaser.Input.Keyboard.JustDown(this.pauseKey)) {
       this.pauseGame(false);
       return;
@@ -810,6 +1292,12 @@ export class GameScene extends Phaser.Scene {
       const target = turboActive ? SPEED_VIGNETTE.maxAlpha : 0;
       const alpha = this.vignette.alpha + (target - this.vignette.alpha) * Math.min(1, SPEED_VIGNETTE.lerpRate * dt);
       this.vignette.setAlpha(alpha);
+    }
+
+    // M2 — carrera compartida: estado a STATE_HZ, fantasmas, franja, fin.
+    if (this.multiInit) {
+      this.updateMultiplayer(dt, speed);
+      this.sweepStaleTick(dt);
     }
 
     // EventBus → HUD desacoplado (velocímetro, barra de turbo, chip DRS).
