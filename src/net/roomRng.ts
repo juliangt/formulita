@@ -91,3 +91,18 @@ export function hashStringToSeed(s: string): number {
   }
   return finalizeHash(h);
 }
+
+/**
+ * Semilla uint32 aleatoria para una sala nueva (M1): la genera el ANFITRIÓN
+ * al INICIAR y viaja en el payload `start`. Crypto si existe; fallback
+ * mixto para entornos sin WebCrypto. Es la ÚNICA fuente de azar de la sala:
+ * a partir de acá todo el pipeline es determinista (mulberry32/deriveRng).
+ */
+export function randomRoomSeed(): number {
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const buffer = new Uint32Array(1);
+    crypto.getRandomValues(buffer);
+    return buffer[0] >>> 0;
+  }
+  return hashStringToSeed(`${Date.now()}-${Math.random()}`) >>> 0;
+}
