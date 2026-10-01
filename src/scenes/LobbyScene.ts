@@ -15,6 +15,12 @@
  * `scene.start(Game, {mode:'multi', seed, players, myPeerId, roomWord})` —
  * cada cliente corre su countdown 3-2-1 y la pista determinista de M0.
  *
+ * C1 (issue #2) — chat de SALA: dentro de la sala aparece el botón CHAT que
+ * lanza el overlay `ChatScene` (tab SALA) sobre el hilo `room` del ChatStore
+ * de sesión. El lobby alimenta el store con los `chat` que llegan por la
+ * malla y difunde los envíos del overlay; cerrar el chat NO toca la sala (la
+ * carrera activa no tiene chat — decisión cerrada del issue).
+ *
  * El nombre se pidió ANTES en el menú (persistido en el
  * PlayerProfileRepository); si llegara vacío (arranque en caliente), la
  * escena pide un input de nombre defensivo antes de conectar.
@@ -26,6 +32,9 @@
 
 import Phaser from 'phaser';
 import { LOBBY, MENU, MULTIPLAYER, TRACK } from '../config/balance';
+import { ChatStore, ROOM_THREAD_ID } from '../chat/ChatStore';
+import { removeSessionChatStore, setSessionChatStore } from '../chat/chatSession';
+import { receiveRoomChat } from '../chat/roomChat';
 import { getSessionEventBus } from '../core/EventBus';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import {
@@ -40,6 +49,7 @@ import { handoffNetClient } from '../net/netClientSession';
 import { randomRoomSeed } from '../net/roomRng';
 import { resolveAppId, TrysteroNetClient } from '../net/TrysteroNetClient';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
 import { MenuScene } from './MenuScene';
 import { MenuButton } from '../ui/MenuButton';
@@ -134,6 +144,14 @@ export class LobbyScene extends Phaser.Scene {
   private startButton: MenuButton | null = null;
   private enterButton: MenuButton | null = null;
 
+  /* C1 (issue #2) — chat de sala. */
+  /** Store de la sesión (compartido con el overlay por `chatSession`). */
+  private chatStore: ChatStore | null = null;
+  /** Botón CHAT (solo DENTRO de la sala; la carrera no tiene chat). */
+  private chatButton: MenuButton | null = null;
+  /** Desuscripción de `onChat` del NetClient (limpia en SHUTDOWN). */
+  private unsubscribeChat: (() => void) | null = null;
+
   constructor() {
     super(LobbyScene.KEY);
   }
@@ -199,12 +217,23 @@ export class LobbyScene extends Phaser.Scene {
     this.client.onRoomFull(() => {
       this.joined = false;
       this.wordText.setVisible(false);
+      this.closeChatEntry();
       this.showWordInput();
       this.setStatus(`SALA LLENA (${MULTIPLAYER.maxPlayers}/${MULTIPLAYER.maxPlayers})`, '#d63c3c');
     });
     this.client.onRosterChange((roster) => this.renderRoster(roster));
     this.client.onHostChange(() => this.syncStartButton());
     this.client.onStart((payload) => this.startRace(payload));
+
+    // C1 — chat de sala: los mensajes que llegan por la malla entran al store
+    // de la sesión (el overlay los lee de ahí, abierto o cerrado). El
+    // remitente se resuelve contra el roster LOCAL (wire = solo texto).
+    this.unsubscribeChat = this.client.onChat((fromPeerId, payload) => {
+      if (!this.chatStore || !this.client) {
+        return;
+      }
+      receiveRoomChat(this.chatStore, this.client.getRoster(), fromPeerId, payload, Date.now());
+    });
 
     if (this.playerName.length === 0) {
       // Arranque defensivo sin nombre (el flujo normal lo pide en el menú).
@@ -224,10 +253,24 @@ export class LobbyScene extends Phaser.Scene {
     // ya arrancó, la propiedad pasó a GameScene por registry (handoff) y el
     // dueño nuevo lo destruye en su propio shutdown.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      // El overlay de chat muere con el lobby (p. ej. llegó `start` con el
+      // chat abierto): su propio shutdown destruye el panel y restaura la
+      // captura de teclado del juego.
+      this.scene.stop(ChatScene.KEY);
+      this.unsubscribeChat?.();
+      this.unsubscribeChat = null;
       if (this.handedOff) {
+        // La sala SIGUE VIVA en la carrera: el store queda publicado para
+        // C2/C3 (espectador/menú); el chat de C1 no se abre en carrera.
         this.client = null;
         return;
       }
+      // La sala murió con el lobby: el chat de la sesión se vacía y se retira
+      // del registry (la próxima sala arranca con un store fresco).
+      this.chatStore?.clear();
+      removeSessionChatStore(this.registry);
+      this.chatStore = null;
+      this.chatButton = null;
       this.client?.destroy();
       this.client = null;
     });
@@ -242,6 +285,7 @@ export class LobbyScene extends Phaser.Scene {
     const client = this.requireClient();
     client.create({ appId: this.appId, name: this.playerName });
     this.joined = true;
+    this.openChatEntry();
     const word = client.roomWord ?? '';
     this.wordInput?.destroy();
     this.wordInput = null;
@@ -301,6 +345,7 @@ export class LobbyScene extends Phaser.Scene {
     getPlayerProfileRepository(this.registry).save({ name });
     client.join({ appId: this.appId, roomWord: word, name });
     this.joined = true;
+    this.openChatEntry();
     this.enterButton?.destroy();
     this.enterButton = null;
     this.wordInput?.destroy();
@@ -367,6 +412,12 @@ export class LobbyScene extends Phaser.Scene {
     // se re-sincroniza con cada roster (roomWord === palabra vigente).
     if (this.wordText.visible) {
       this.wordText.setText(this.client?.roomWord ?? this.wordText.text);
+    }
+    // C1 — la identidad propia del chat sigue al roster (nombre/color pueden
+    // cambiar al entrar/salir jugadores) sin perder los mensajes.
+    const chatSelf = roster.find((player) => player.peerId === this.client?.selfPeerId);
+    if (chatSelf) {
+      this.chatStore?.updateSelf(chatSelf);
     }
     for (const row of this.rosterRows) {
       row.destroy();
@@ -464,6 +515,69 @@ export class LobbyScene extends Phaser.Scene {
       players: payload.players,
       myPeerId: this.client?.selfPeerId ?? '',
       roomWord: this.client?.roomWord ?? '',
+    });
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* C1 — chat de sala (store de sesión + botón + overlay)              */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Entrada a una sala con chat: crea el ChatStore de la sesión (self derivado
+   * del roster del propio cliente) y lo publica en el registry para que el
+   * overlay (y en C2/C3 el menú/espectador) lo compartan, junto al botón CHAT.
+   */
+  private openChatEntry(): void {
+    const client = this.requireClient();
+    const self =
+      client.getRoster().find((player) => player.peerId === client.selfPeerId) ??
+      { peerId: client.selfPeerId, name: this.playerName, color: 0 };
+    this.chatStore = new ChatStore({ self });
+    setSessionChatStore(this.registry, this.chatStore);
+    this.createChatButton();
+  }
+
+  /** Retira el chat al salir de la sala (SALIR, sala llena, re-entrada). */
+  private closeChatEntry(): void {
+    this.chatButton?.destroy();
+    this.chatButton = null;
+    this.chatStore = null;
+    removeSessionChatStore(this.registry);
+  }
+
+  /** Botón CHAT de la esquina superior derecha (solo existe dentro de la sala). */
+  private createChatButton(): void {
+    this.chatButton?.destroy();
+    this.chatButton = new MenuButton(this, {
+      x: LOBBY.chatButtonX,
+      y: LOBBY.chatButtonY,
+      width: LOBBY.chatButtonWidth,
+      height: LOBBY.chatButtonHeight,
+      label: 'CHAT',
+      tint: 0xb04ee0,
+      fontSize: LOBBY.chatButtonFontSize,
+      bus: getSessionEventBus(this.registry),
+      onPress: () => this.openChatOverlay(),
+    });
+  }
+
+  /**
+   * Abre el overlay de chat ENCIMA del lobby (patrón PauseScene: launch, sin
+   * pausar nada). La escena NO está en el array de `gameConfig.ts` — se
+   * registra on-demand la primera vez y queda disponible para la sesión. El
+   * envío viaja como callback: el overlay nunca toca el NetClient, así que
+   * cerrar el chat no rompe la sala.
+   */
+  private openChatOverlay(): void {
+    if (!this.chatStore) {
+      return;
+    }
+    if (!this.scene.get(ChatScene.KEY)) {
+      this.scene.add(ChatScene.KEY, ChatScene, false);
+    }
+    this.scene.launch(ChatScene.KEY, {
+      thread: ROOM_THREAD_ID,
+      sendChat: (text: string) => this.client?.sendChat(text),
     });
   }
 

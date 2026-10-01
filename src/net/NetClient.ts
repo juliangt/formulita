@@ -18,6 +18,7 @@
  */
 
 import type {
+  ChatPayload,
   EliminatedPayload,
   MatchOverPayload,
   PlayerInfo,
@@ -88,6 +89,14 @@ export interface NetClient {
   /** Difunde el fin de la partida (M2, último superviviente). */
   sendMatchOver(payload: MatchOverPayload): void;
 
+  /**
+   * Difunde un mensaje del chat de SALA a todos los peers (C1, issue #2):
+   * broadcast de la acción `chat` con `{text}` YA sanitizado por
+   * `makeChatPayload` (trim + colapso + máx `CHAT_MAX_LEN`). El remitente se
+   * deduce del peerId al recibir, así que NO viaja nada más.
+   */
+  sendChat(text: string): void;
+
   /* ---------------- lifecycle ---------------- */
 
   /** Sale de la sala (los demás ven el peer irse). Idempotente. */
@@ -121,6 +130,13 @@ export interface NetClient {
 
   /** La partida terminó (M2). */
   onMatchOver(handler: (peerId: string, payload: MatchOverPayload) => void): () => void;
+
+  /**
+   * Un peer difundió un mensaje del chat de sala (C1): llega con SU peerId y
+   * el payload sanitizado. El receptor resuelve nombre/color contra SU roster
+   * local (si el peer ya no está, la UI muestra "PILOTO").
+   */
+  onChat(handler: (fromPeerId: string, payload: ChatPayload) => void): () => void;
 
   /** La sala estaba llena al intentar entrar: salir y avisar al usuario. */
   onRoomFull(handler: () => void): () => void;

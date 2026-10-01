@@ -41,7 +41,9 @@ import { assignColors, isRoomFull, resolveHostPeerId } from './lobbyState';
 import type { NetClient, CreateRoomOptions, JoinRoomOptions } from './NetClient';
 import {
   isValidRoomWord,
+  makeChatPayload,
   sanitizePlayerName,
+  type ChatPayload,
   type EliminatedPayload,
   type MatchOverPayload,
   type PeerMeta,
@@ -148,6 +150,7 @@ type HandlerMap = {
   peerState: Set<(peerId: string, payload: StatePayload) => void>;
   eliminated: Set<(peerId: string, payload: EliminatedPayload) => void>;
   matchOver: Set<(peerId: string, payload: MatchOverPayload) => void>;
+  chat: Set<(peerId: string, payload: ChatPayload) => void>;
   roomFull: Set<() => void>;
   error: Set<(message: string) => void>;
 };
@@ -180,6 +183,7 @@ export class TrysteroNetClient implements NetClient {
     peerState: new Set(),
     eliminated: new Set(),
     matchOver: new Set(),
+    chat: new Set(),
     roomFull: new Set(),
     error: new Set(),
   };
@@ -188,6 +192,8 @@ export class TrysteroNetClient implements NetClient {
   private currentWord: string | null = null;
   private metaAction: TrysteroAction<PeerMeta> | null = null;
   private startAction: TrysteroAction<StartPayload> | null = null;
+  /** Acción `chat` (C1): broadcast del chat de sala. */
+  private chatAction: TrysteroAction<ChatPayload> | null = null;
   /** Metas conocidas: la propia + las anunciadas por los peers. */
   private metas = new Map<string, PeerMeta>();
   private lastHost: string | null = null;
@@ -292,6 +298,16 @@ export class TrysteroNetClient implements NetClient {
         handler(context.peerId, payload);
       }
     };
+
+    // Chat de sala (C1): broadcast {text} sanitizado; el remitente viaja en
+    // el contexto (peerId) que Trystero entrega al recibir.
+    const chatAction = room.makeAction<ChatPayload>('chat');
+    chatAction.onMessage = (payload, context) => {
+      for (const handler of this.handlers.chat) {
+        handler(context.peerId, payload);
+      }
+    };
+    this.chatAction = chatAction;
 
     room.onPeerJoin = (peerId) => this.handlePeerJoin(peerId);
     room.onPeerLeave = (peerId) => this.handlePeerLeave(peerId);
@@ -469,6 +485,15 @@ export class TrysteroNetClient implements NetClient {
     this.withRoom((room) => void room.makeAction<MatchOverPayload>('match-over').send(payload));
   }
 
+  /** Broadcast `chat {text}` (C1): viaja YA sanitizado (`makeChatPayload`). */
+  sendChat(text: string): void {
+    if (!this.chatAction) {
+      this.emitError('No hay sala activa');
+      return;
+    }
+    void this.chatAction.send(makeChatPayload(text));
+  }
+
   private withRoom(fn: (room: TrysteroRoom) => void): void {
     if (!this.room) {
       this.emitError('No hay sala activa');
@@ -492,6 +517,7 @@ export class TrysteroNetClient implements NetClient {
     this.room = null;
     this.metaAction = null;
     this.startAction = null;
+    this.chatAction = null;
     this.currentWord = null;
     this.lastEntry = null;
     this.metas.clear();
@@ -544,6 +570,11 @@ export class TrysteroNetClient implements NetClient {
   onMatchOver(handler: (peerId: string, payload: MatchOverPayload) => void): () => void {
     this.handlers.matchOver.add(handler);
     return () => this.handlers.matchOver.delete(handler);
+  }
+
+  onChat(handler: (peerId: string, payload: ChatPayload) => void): () => void {
+    this.handlers.chat.add(handler);
+    return () => this.handlers.chat.delete(handler);
   }
 
   onRoomFull(handler: () => void): () => void {
