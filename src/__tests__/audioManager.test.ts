@@ -15,10 +15,12 @@ import {
   type AudioNodeLike,
   type AudioParamLike,
   type BiquadFilterNodeLike,
+  type DocumentVisibilityStateLike,
   type GainNodeLike,
   type MediaElementLike,
   type OscillatorNodeLike,
   type UnlockEventTarget,
+  type VisibilityEventTarget,
 } from '../audio/AudioManager';
 import { showAudioBlockedHint } from '../audio/AudioBlockedHint';
 import { AUDIO_ENGINE_REGISTRY_KEY } from '../audio/ISfxEngine';
@@ -171,11 +173,36 @@ class FakeMediaElement implements MediaElementLike {
   }
 }
 
+class FakeVisibilityTarget implements VisibilityEventTarget {
+  visibilityState: DocumentVisibilityStateLike = 'visible';
+  removed = 0;
+  private listener: (() => void) | null = null;
+
+  addEventListener(_type: 'visibilitychange', handler: () => void): void {
+    this.listener = handler;
+  }
+
+  removeEventListener(_type: 'visibilitychange', handler: () => void): void {
+    if (this.listener === handler) {
+      this.listener = null;
+    }
+    this.removed += 1;
+  }
+
+  /** Simula el cambio de visibilidad del documento (dispara el listener). */
+  change(state: DocumentVisibilityStateLike): void {
+    this.visibilityState = state;
+    this.listener?.();
+  }
+}
+
 class FakeAudioContext implements AudioContextLike {
   currentTime = 0;
   readonly sampleRate = 48000;
   state: AudioContextStateLike = 'suspended';
   readonly destination: AudioDestinationNodeLike = new FakeNode();
+  /** Handler de cambio de estado (el real lo dispara en cada paso de estado). */
+  onstatechange: (() => void) | null = null;
 
   resumeCount = 0;
   closeCount = 0;
@@ -188,6 +215,7 @@ class FakeAudioContext implements AudioContextLike {
   resume(): Promise<void> {
     this.resumeCount += 1;
     this.state = 'running';
+    this.onstatechange?.(); // el real también dispara statechange al recuperar
     return Promise.resolve();
   }
 
@@ -195,6 +223,12 @@ class FakeAudioContext implements AudioContextLike {
     this.closeCount += 1;
     this.state = 'closed';
     return Promise.resolve();
+  }
+
+  /** Simula el paso de estado del navegador (dispara `onstatechange`). */
+  simulateStateChange(state: AudioContextStateLike): void {
+    this.state = state;
+    this.onstatechange?.();
   }
 
   createOscillator(): OscillatorNodeLike {
@@ -237,6 +271,8 @@ interface Harness {
   ctx: FakeAudioContext;
   /** Media element silencioso fake (lo que el workaround reproduce). */
   media: FakeMediaElement;
+  /** Target de visibilidad fake (para simular `visibilitychange`). */
+  visibility: FakeVisibilityTarget;
   /** Cantidad de veces que el manager disparó el aviso de audio bloqueado. */
   hintCalls: () => number;
   factoryCalls: () => number;
@@ -255,6 +291,7 @@ function makeHarness(options?: {
   let hints = 0;
   const ctx = new FakeAudioContext();
   const media = new FakeMediaElement();
+  const visibility = new FakeVisibilityTarget();
   const factory: AudioContextFactory = () => {
     calls += 1;
     if (options?.throws) {
@@ -266,6 +303,8 @@ function makeHarness(options?: {
     contextFactory: factory,
     storage: options?.storage === undefined ? new FakeStorage() : options.storage,
     mediaElementFactory: options?.mediaElement === null ? () => null : () => media,
+    // El default real es el document: acá se usa el fake, para no tocar DOM.
+    visibilityTarget: visibility,
     // El default real es el overlay DOM: acá se cuenta, para no tocar DOM.
     onAudioBlocked: () => {
       hints += 1;
@@ -275,7 +314,15 @@ function makeHarness(options?: {
   if (options?.withBus) {
     manager.attachBus(bus);
   }
-  return { manager, ctx, media, hintCalls: () => hints, factoryCalls: () => calls, bus };
+  return {
+    manager,
+    ctx,
+    media,
+    visibility,
+    hintCalls: () => hints,
+    factoryCalls: () => calls,
+    bus,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -620,6 +667,119 @@ describe('AudioManager — hint de audio bloqueado (una vez por sesión)', () =>
     await Promise.resolve();
 
     expect(hints).toBe(0);
+  });
+});
+
+describe('AudioManager — recuperación tras interrupción (Fase 3, issue #4)', () => {
+  /** Dos ticks de microtask: alcanzan para el veredicto post-resume. */
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('estado → `interrupted` con documento visible reanuda SIN nuevo gesto', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock(); // desbloqueo inicial (sin resume: ya running)
+
+    ctx.simulateStateChange('interrupted'); // llamada/Siri/bloqueo de pantalla
+
+    expect(ctx.resumeCount).toBe(1); // recuperación automática
+    expect(ctx.state).toBe('running');
+  });
+
+  it('`suspended` también se recupera automáticamente tras el desbloqueo', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    ctx.simulateStateChange('suspended');
+
+    expect(ctx.resumeCount).toBe(1);
+    expect(ctx.state).toBe('running');
+  });
+
+  it('con documento oculto NO reintenta; al volver a visible sí', () => {
+    const { manager, ctx, visibility } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    visibility.change('hidden');
+    ctx.simulateStateChange('suspended');
+    expect(ctx.resumeCount).toBe(0); // iOS deniega el resume en background
+
+    visibility.change('visible'); // vuelve la pestaña: reintenta
+    expect(ctx.resumeCount).toBe(1);
+    expect(ctx.state).toBe('running');
+  });
+
+  it('sin desbloqueo previo NO se fuerza resume (política de autoplay)', () => {
+    const { manager, ctx } = makeHarness();
+    manager.play('coin'); // crea el contexto SIN gesto (sin unlock)
+
+    ctx.simulateStateChange('suspended');
+    ctx.simulateStateChange('interrupted');
+
+    expect(ctx.resumeCount).toBe(0);
+  });
+
+  it('el handler es idempotente: volver a `running` no dispara nada (sin loops)', () => {
+    const { manager, ctx } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    ctx.simulateStateChange('running'); // estado sano: no-op
+    expect(ctx.resumeCount).toBe(0);
+
+    ctx.simulateStateChange('interrupted'); // interrupción → auto-resume
+    // El propio resume dispara onstatechange (fake) con `running`: si el
+    // handler no fuera idempotente, acá entraría en loop.
+    expect(ctx.resumeCount).toBe(1);
+    expect(ctx.state).toBe('running');
+
+    ctx.simulateStateChange('running');
+    expect(ctx.resumeCount).toBe(1);
+  });
+
+  it('dispose remueve los listeners: el handler post-dispose no reanuda', () => {
+    const { manager, ctx, visibility } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    manager.dispose();
+    expect(ctx.onstatechange).toBeNull();
+    expect(visibility.removed).toBe(1);
+
+    ctx.simulateStateChange('interrupted');
+    visibility.change('visible');
+    expect(ctx.resumeCount).toBe(0);
+  });
+
+  it('tras la recuperación a `running` NO se muestra el hint de audio bloqueado', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+
+    ctx.simulateStateChange('interrupted');
+    await flushMicrotasks(); // deja correr el veredicto post-resume
+
+    expect(ctx.state).toBe('running');
+    expect(hintCalls()).toBe(0);
+  });
+
+  it('auto-resume que falla (sigue suspended) evalúa el hint como el unlock (fase 2)', async () => {
+    const { manager, ctx, hintCalls } = makeHarness();
+    ctx.state = 'running';
+    manager.unlock();
+    ctx.resume = () => {
+      ctx.resumeCount += 1;
+      return Promise.resolve(); // Safari terco: no pasa a running
+    };
+
+    ctx.simulateStateChange('interrupted');
+    await flushMicrotasks();
+
+    expect(hintCalls()).toBe(1);
   });
 });
 

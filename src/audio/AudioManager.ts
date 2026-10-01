@@ -28,6 +28,16 @@
  *   de iOS hace que la Web Audio posterior ignore el switch — y, si el
  *   contexto igualmente no queda `running`, se dispara `onAudioBlocked`
  *   (default: overlay DOM con un hint discreto, una sola vez por sesión).
+ * - **Recuperación tras interrupción (Fase 3, issue #4).** Tras una llamada,
+ *   Siri o el bloqueo de pantalla, Safari pasa el contexto a `interrupted`
+ *   (o `suspended`) y el audio queda mudo hasta el próximo gesto. Con
+ *   `onstatechange` del contexto y `visibilitychange` del documento se
+ *   reintenta `resume()` automáticamente, SOLO si el documento está visible
+ *   (iOS deniega el resume en background) y solo si ya hubo desbloqueo por
+ *   gesto (la política de autoplay no se fuerza). El handler es idempotente
+ *   (solo actúa en estados problemáticos: el propio `resume()` re-dispara
+ *   `onstatechange` en `running`) y los listeners tienen cleanup en
+ *   `dispose()`.
  * - **Mute persistido en clave PROPIA versionada** (`formulita.audio.v1`,
  *   decisión documentada): es un ajuste de dispositivo, no progreso de
  *   carrera, así no se mezcla con `SaveData` ni depende del flujo de
@@ -116,12 +126,18 @@ export type MediaElementFactory = () => MediaElementLike | null;
 /** Igual que `AudioContextState` del DOM (`'interrupted'` existe en Safari). */
 export type AudioContextStateLike = 'running' | 'suspended' | 'closed' | 'interrupted';
 
-/** Porción del `AudioContext` que el manager usa (el real la satisface). */
+/**
+ * Porción del `AudioContext` que el manager usa (el real la satisface).
+ * `onstatechange` usa la firma DOM (`event: Event`) para que el contexto
+ * real sea estructuralmente asignable; el manager solo lo ASIGNA, jamás lo
+ * dispara.
+ */
 export interface AudioContextLike {
   readonly currentTime: number;
   readonly sampleRate: number;
   readonly state: AudioContextStateLike;
   readonly destination: AudioDestinationNodeLike;
+  onstatechange: ((event: Event) => unknown) | null;
   resume(): Promise<void>;
   close(): Promise<void>;
   createOscillator(): OscillatorNodeLike;
@@ -144,6 +160,20 @@ export interface UnlockEventTarget {
     type: 'pointerdown' | 'pointerup' | 'touchend' | 'keydown',
     handler: () => void,
   ): void;
+}
+
+/** Estados de visibilidad del documento que importan acá (el DOM los tiene). */
+export type DocumentVisibilityStateLike = 'visible' | 'hidden';
+
+/**
+ * Objetivo de listeners de visibilidad para la recuperación tras
+ * interrupción (el `document` del navegador lo satisface; inyectable para
+ * testear sin DOM real).
+ */
+export interface VisibilityEventTarget {
+  readonly visibilityState: DocumentVisibilityStateLike;
+  addEventListener(type: 'visibilitychange', handler: () => void): void;
+  removeEventListener(type: 'visibilitychange', handler: () => void): void;
 }
 
 interface WindowWithWebAudio {
@@ -318,6 +348,12 @@ export interface AudioManagerOptions {
    * el contexto no queda `running` (default: overlay DOM discreto).
    */
   readonly onAudioBlocked?: () => void;
+  /**
+   * Objetivo de listeners de visibilidad para la recuperación tras
+   * interrupción (default: el `document`; `null` = sin red de visibilidad,
+   * se asume visible).
+   */
+  readonly visibilityTarget?: VisibilityEventTarget | null;
 }
 
 export class AudioManager implements ISfxEngine {
@@ -332,6 +368,9 @@ export class AudioManager implements ISfxEngine {
 
   /** Aviso de audio bloqueado (default: overlay DOM). */
   private readonly onAudioBlocked: () => void;
+
+  /** Target de visibilidad para la recuperación (null = se asume visible). */
+  private readonly visibilityTarget: VisibilityEventTarget | null;
 
   /** Contexto creado lazy (primer unlock / primer play). */
   private context: AudioContextLike | null = null;
@@ -371,6 +410,17 @@ export class AudioManager implements ISfxEngine {
   /* --- Listeners de desbloqueo --- */
   private unlockTarget: UnlockEventTarget | null = null;
 
+  /* --- Recuperación tras interrupción (Fase 3, issue #4) --- */
+  /**
+   * El desbloqueo por gesto ya ocurrió al menos una vez: es el permiso de la
+   * política de autoplay para los re-resume automáticos (sin gesto previo,
+   * el contexto NO se despierta solo).
+   */
+  private unlockedOnce = false;
+
+  /** Los listeners de recuperación ya están instalados (una vez por contexto). */
+  private recoveryAttached = false;
+
   /**
    * El primer buffer silencioso ya se sirvió para el contexto vigente. iOS
    * Safari necesita UNA reproducción de buffer dentro de un gesto para abrir
@@ -400,6 +450,16 @@ export class AudioManager implements ISfxEngine {
     this.unlock();
   };
 
+  /** Cambio de estado del contexto (llamada/Siri/bloqueo → recuperación). */
+  private readonly handleContextStateChange = (): void => {
+    this.tryAutoResume();
+  };
+
+  /** La pestaña volvió a visible (reintenta si el contexto quedó mudo). */
+  private readonly handleVisibilityChange = (): void => {
+    this.tryAutoResume();
+  };
+
   constructor(options: AudioManagerOptions = {}) {
     this.contextFactory = options.contextFactory ?? defaultAudioContextFactory;
     this.storage = options.storage === undefined ? defaultSettingsStorage() : options.storage;
@@ -408,6 +468,8 @@ export class AudioManager implements ISfxEngine {
         ? defaultMediaElementFactory
         : options.mediaElementFactory;
     this.onAudioBlocked = options.onAudioBlocked ?? showAudioBlockedHint;
+    this.visibilityTarget =
+      options.visibilityTarget === undefined ? defaultVisibilityTarget() : options.visibilityTarget;
     this.muted = this.loadMuted();
   }
 
@@ -625,6 +687,8 @@ export class AudioManager implements ISfxEngine {
     if (!ctx) {
       return;
     }
+    // Hubo gesto: a partir de acá los re-resume automáticos están permitidos.
+    this.unlockedOnce = true;
     if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
       try {
         // El veredicto del hint es POST-resume: el estado del contexto se
@@ -743,6 +807,7 @@ export class AudioManager implements ISfxEngine {
   /** Libera listeners, dron, media element y contexto. No usar después. */
   dispose(): void {
     this.detachUnlockListeners();
+    this.detachRecoveryListeners();
     this.stopEngine();
     const ctx = this.context;
     this.context = null;
@@ -752,6 +817,7 @@ export class AudioManager implements ISfxEngine {
     this.primedContext = false;
     this.mediaElementAttempted = false;
     this.blockedHintShown = false;
+    this.unlockedOnce = false;
     const media = this.mediaElement;
     this.mediaElement = null;
     if (media) {
@@ -1028,6 +1094,93 @@ export class AudioManager implements ISfxEngine {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Recuperación tras interrupción (Fase 3, issue #4)                 */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Instala los listeners de recuperación: `onstatechange` del contexto y
+   * `visibilitychange` del documento. Se llama UNA vez, al crear el contexto
+   * (que puede existir antes del primer gesto si un `play()` lo creó): el
+   * handler decide con el estado vigente, así que instalarlo temprano no
+   * viola la política de autoplay.
+   */
+  private attachRecoveryListeners(ctx: AudioContextLike): void {
+    if (this.recoveryAttached) {
+      return;
+    }
+    try {
+      ctx.onstatechange = this.handleContextStateChange;
+    } catch {
+      // Sin onstatechange queda la red de visibilitychange y los gestos.
+    }
+    const visibility = this.visibilityTarget;
+    if (visibility) {
+      try {
+        visibility.addEventListener('visibilitychange', this.handleVisibilityChange);
+      } catch {
+        // Idem: el desbloqueo por gesto sigue disponible igualmente.
+      }
+    }
+    this.recoveryAttached = true;
+  }
+
+  /** Quita los listeners instalados por `attachRecoveryListeners` (si hay). */
+  private detachRecoveryListeners(): void {
+    const ctx = this.context;
+    if (ctx) {
+      try {
+        ctx.onstatechange = null;
+      } catch {
+        // El contexto ya no es nuestro: nada que hacer.
+      }
+    }
+    const visibility = this.visibilityTarget;
+    if (visibility) {
+      try {
+        visibility.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      } catch {
+        // Idem.
+      }
+    }
+    this.recoveryAttached = false;
+  }
+
+  /**
+   * Reintenta `resume()` sin nuevo gesto. Guards, en orden: contexto creado,
+   * desbloqueo previo (política de autoplay: sin gesto no se despierta),
+   * estado problemático (idempotencia: el propio `resume()` re-dispara
+   * `onstatechange` en `running` y corta acá, sin loops) y documento visible
+   * (iOS deniega el resume con la pestaña oculta).
+   */
+  private tryAutoResume(): void {
+    const ctx = this.context;
+    if (!ctx || !this.unlockedOnce) {
+      return;
+    }
+    if (ctx.state !== 'suspended' && ctx.state !== 'interrupted') {
+      return;
+    }
+    if (!this.isDocumentVisible()) {
+      return;
+    }
+    try {
+      // Veredicto del hint POST-resume, igual que en unlock() (fase 2): el
+      // estado se actualiza asincrónico y en `running` el hint no corresponde.
+      void ctx.resume().then(
+        () => this.notifyAudioBlockedHint(),
+        () => this.notifyAudioBlockedHint(),
+      );
+    } catch {
+      this.notifyAudioBlockedHint(); // resume lanzó sincrónico
+    }
+  }
+
+  /** false solo con documento OCULTO (sin target inyectado se asume visible). */
+  private isDocumentVisible(): boolean {
+    return this.visibilityTarget?.visibilityState !== 'hidden';
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Internos                                                          */
   /* ---------------------------------------------------------------- */
 
@@ -1046,7 +1199,9 @@ export class AudioManager implements ISfxEngine {
     }
     if (!this.context) {
       this.contextFailed = true;
+      return null;
     }
+    this.attachRecoveryListeners(this.context);
     return this.context;
   }
 
@@ -1136,6 +1291,15 @@ function looksLikeSfxEngine(value: unknown): value is AudioManager {
 function defaultUnlockTarget(): UnlockEventTarget | null {
   try {
     return typeof window === 'undefined' ? null : window;
+  } catch {
+    return null;
+  }
+}
+
+/** Target default de visibilidad: el document del navegador (o null). */
+function defaultVisibilityTarget(): VisibilityEventTarget | null {
+  try {
+    return typeof document === 'undefined' ? null : document;
   } catch {
     return null;
   }
