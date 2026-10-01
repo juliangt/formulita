@@ -686,6 +686,42 @@ export const LEADERBOARD = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Chat social (C0 — issue #2)                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Largo máximo de un mensaje de chat (caracteres), ya sanitizado: trim,
+ * whitespace interno colapsado y recorte a este tope (issue #2 §6). Corre la
+ * misma regla en el emisor (antes de viajar) y en el receptor (antes de
+ * renderizar): un peer malicioso que mande 10 KB recibe igual 200.
+ */
+export const CHAT_MAX_LEN = 200;
+
+/**
+ * Enfriamiento entre mensajes propios POR HILO (ms, issue #2 §6): 1 mensaje
+ * cada 1,5 s en el hilo `room` y 1 cada 1,5 s en cada hilo de DM (los hilos
+ * son independientes — no se comparte el enfriamiento). El tope se mide desde
+ * el último envío ACEPTADO: los intentos rechazados no re-arman el reloj.
+ */
+export const CHAT_SEND_COOLDOWN_MS = 1500;
+
+/**
+ * Intervalo del heartbeat de presencia (ms, C2): cada cliente difunde un
+ * `ping` vacío a la sala pública de presencia cada 5 s para anunciar que
+ * sigue conectado (la sala pública no tiene estado de carrera que sirva de
+ * señal de vida).
+ */
+export const PRESENCE_HEARTBEAT_MS = 5000;
+
+/**
+ * Staleness de presencia (ms, C2): un peer de la sala pública que lleva más
+ * de 20 s (≈4 heartbeats perdidos) sin hacer ping se considera DESCONECTADO:
+ * su hilo de DM se marca como desconectado y sale de la lista de disponibles.
+ * Cubre pestañas muertas y desconexiones que no dispararon `onPeerLeave`.
+ */
+export const PRESENCE_STALE_MS = 20000;
+
+/* ------------------------------------------------------------------ */
 /* Countdown, pausa y viñeta (Fase 7)                                  */
 /* ------------------------------------------------------------------ */
 

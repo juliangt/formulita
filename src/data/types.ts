@@ -57,6 +57,44 @@ export function defaultSaveData(): SaveData {
 }
 
 /**
+ * Ajustes del chat social (issue #2, C0): lo único del chat que se persiste.
+ * El BLOQUEO de peers NO vive acá a propósito: los peerId de Trystero son
+ * efímeros (cambian en cada conexión), así que persistirlos no serviría; el
+ * bloqueo es por sesión y vive en `ChatStore`.
+ */
+export interface ChatSettings {
+  /**
+   * true si la lista de jugadores disponibles (sala pública de presencia)
+   * se muestra en el menú. Default `false`: ESCONDIDA — opt-in explícito,
+   * el menú queda limpio en el primer arranque.
+   */
+  readonly showAvailable: boolean;
+}
+
+/** Ajustes de chat por defecto: sala pública de presencia escondida. */
+export function defaultChatSettings(): ChatSettings {
+  return { showAvailable: false };
+}
+
+/**
+ * Merge defensivo de los ajustes de chat (espejo de `sanitizeSaveData`):
+ * acepta cualquier valor crudo (JSON corrupto, parcial, con tipos
+ * inválidos) y devuelve un `ChatSettings` completo. Los campos válidos se
+ * conservan; los ausentes o basura toman el default. Nunca lanza.
+ */
+export function sanitizeChatSettings(raw: unknown): ChatSettings {
+  const fallback = defaultChatSettings();
+  if (typeof raw !== 'object' || raw === null) {
+    return fallback;
+  }
+  const record = raw as Record<string, unknown>;
+  return {
+    showAvailable:
+      typeof record.showAvailable === 'boolean' ? record.showAvailable : fallback.showAvailable,
+  };
+}
+
+/**
  * Coacciona un valor desconocido a un entero ≥ 0: acepta el `fallback` si el
  * valor no es un número finito y trunca los fraccionales.
  */
