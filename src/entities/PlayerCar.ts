@@ -31,6 +31,34 @@ function defaultTrackBounds(): TrackBounds {
 const DAMAGE_FLASH_SECONDS = 0.14;
 
 /**
+ * Medio periodo del parpadeo de i-frames (s, issue #10, H4): con los 0,6 s de
+ * `HEALTH.invulnerabilitySeconds` el auto titila 2 ciclos completos (visible
+ * medio ciclo, oculto el otro). Es presentation-only: cambiarlo no toca lógica.
+ */
+export const INVULNERABLE_BLINK_HALF_PERIOD_SECONDS = 0.15;
+
+/**
+ * Fase del parpadeo de i-frames (pura, issue #10, H4): `true` = auto VISIBLE
+ * en ese instante del titileo (visible el primer medio periodo, oculto el
+ * siguiente, y así). Distinto del flash de color del impacto: acá oscila la
+ * opacidad rítmicamente mientras dura la invulnerabilidad. Entradas raras
+ * (NaN/negativas o periodo inválido) devuelven visible (defensivo: nunca
+ * desaparece el auto por un bug de tiempo).
+ */
+export function blinkVisible(
+  elapsedSeconds: number,
+  halfPeriodSeconds: number = INVULNERABLE_BLINK_HALF_PERIOD_SECONDS,
+): boolean {
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 0) {
+    return true;
+  }
+  if (!Number.isFinite(halfPeriodSeconds) || halfPeriodSeconds <= 0) {
+    return true;
+  }
+  return elapsedSeconds % (halfPeriodSeconds * 2) < halfPeriodSeconds;
+}
+
+/**
  * Steering durante el derrape de aceite (puro): la dirección pedida se
  * INVIERTE (el auto no obedece) y, si el jugador no está doblando, zigzaguea
  * solo hacia los lados. `slipElapsed` son los segundos transcurridos derrapando.
@@ -49,6 +77,8 @@ export function slipSteer(steer: number, slipElapsed: number): number {
  *   fricción (nada de teletransporte: la velocidad se construye sola).
  * - Clamp a los límites de pista con anulación de velocidad al llegar al tope.
  * - Inclinación visual sutil proporcional a la velocidad lateral.
+ * - Feedback de daño (issue #10): flash de tinte al impacto (H2) y parpadeo
+ *   rítmico de opacidad durante los i-frames (H4, `setBlinking`).
  *
  * INPUT (Fase 2): la fuente se inyecta por constructor como `IInputSource`
  * (teclado, táctil o la fusión de ambas hecha por InputSystem — son
@@ -70,6 +100,11 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
   /* Salud (issue #10, H2): contacto con el tope de pista + flash de daño. */
   private wallContact = false;
   private damageFlashSeconds = 0;
+
+  /* Parpadeo de i-frames (issue #10, H4): GameScene lo marca por frame con
+   * `setBlinking(healthSystem.isInvulnerable)`; acá solo oscila la opacidad. */
+  private blinkActive = false;
+  private blinkElapsed = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -131,6 +166,28 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
     this.damageFlashSeconds = Math.max(this.damageFlashSeconds, duration);
   }
 
+  /** `true` mientras dure el parpadeo de i-frames (flag expuesto a tests). */
+  get isBlinking(): boolean {
+    return this.blinkActive;
+  }
+
+  /**
+   * Activa/desactiva el parpadeo de i-frames (issue #10, H4): GameScene lo
+   * llama por frame con `healthSystem.isInvulnerable`. Re-armarlo reinicia la
+   * fase (cada invulnerabilidad arranca VISIBLE); al desactivar se restaura
+   * la opacidad. No toca el tinte: el flash de color del impacto es otra capa.
+   */
+  setBlinking(active: boolean): void {
+    if (active && !this.blinkActive) {
+      this.blinkElapsed = 0;
+    }
+    this.blinkActive = active;
+    if (!active) {
+      this.blinkElapsed = 0;
+      this.setAlpha(1);
+    }
+  }
+
   /**
    * Pisó aceite: pérdida de control lateral breve (no destructiva). Si se
    * pisa de nuevo mientras derrapa, refresca la duración. Duración inválida
@@ -163,6 +220,12 @@ export class PlayerCar extends Phaser.Physics.Arcade.Sprite {
 
     if (this.damageFlashSeconds > 0) {
       this.damageFlashSeconds = Math.max(0, this.damageFlashSeconds - dt);
+    }
+
+    // Parpadeo de i-frames (issue #10, H4): opacidad rítmica por fase pura.
+    if (this.blinkActive) {
+      this.blinkElapsed += dt;
+      this.setAlpha(blinkVisible(this.blinkElapsed) ? 1 : 0);
     }
 
     this.clampToTrack();

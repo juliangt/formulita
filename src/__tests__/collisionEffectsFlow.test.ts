@@ -12,6 +12,7 @@ import {
 } from '../config/balance';
 import { EventBus, type GameEvents } from '../core/EventBus';
 import { applyRaceResult } from '../data/types';
+import { blinkVisible } from '../entities/PlayerCar';
 import { ENTITY_DEFINITIONS, type EntityKind } from '../entities/entityTypes';
 import { DrsSystem } from '../systems/DrsSystem';
 import { HealthSystem } from '../systems/HealthSystem';
@@ -20,8 +21,8 @@ import { SpeedSystem } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
 
 /**
- * Integración Fases 4/5 + issue #10 (H2) — el flujo de puntos y de daño de
- * las colisiones SIN Phaser.
+ * Integración Fases 4/5 + issue #10 (H2/H4) — el flujo de puntos y de daño
+ * de las colisiones SIN Phaser.
  *
  * Es la composición que GameScene ejecuta en `handleTrackContact`: el efecto
  * declarado en `entityTypes` (data-driven, `CollisionEffect`) se despacha
@@ -67,6 +68,16 @@ class RaceCollisions {
   /** Pickups reciclados al pool (`spawnSystem.release` en GameScene). */
   pickupsReleased = 0;
   readonly emissions: Emission[] = [];
+
+  /* Issue #10 (H4) — espejos del bloque de efectos de daño de GameScene
+   * (`setBlinking` + `updateDamageEffects`): flags derivados del estado de
+   * salud y del scraping, en el mismo orden en que la escena los computa. */
+  /** Espejo de `playerCar.setBlinking(healthSystem.isInvulnerable)`. */
+  carBlinking = false;
+  /** Espejo de `smokeEmitter.emitting` (crítico con el auto vivo). */
+  smokeEmitting = false;
+  /** Espejo de `sparkEmitter.emitting` (roce con pared con el auto vivo). */
+  sparkEmitting = false;
 
   /** Espejo del guard `lastEmittedHp` de `GameScene.emitHealth`. */
   private lastEmittedHp: number = HEALTH.max;
@@ -116,6 +127,9 @@ class RaceCollisions {
         this.applyImpact(def.kind);
         break;
     }
+    // Espejo del `updateDamageEffects` + `setBlinking` del próximo frame de
+    // GameScene: los flags de efectos se derivan del estado POST-contacto.
+    this.syncDamageEffects();
   }
 
   /**
@@ -136,6 +150,7 @@ class RaceCollisions {
     if (result === 'dead') {
       this.emitHealth();
       this.gameOver = true;
+      this.stopDamageEffects(); // crash() apaga humo/chispas/blink
       this.bus.emit('game-over', {
         score: this.score.score,
         distance: this.score.distance,
@@ -146,6 +161,24 @@ class RaceCollisions {
     this.speed.penalize(HEALTH.impactSpeedLoss);
     this.bus.emit('damage', undefined);
     this.emitHealth();
+  }
+
+  /**
+   * Espejo del bloque de efectos de daño de `GameScene.update` (issue #10,
+   * H4): blink de i-frames, humo solo en crítico con el auto vivo y chispas
+   * solo rozando la pared con el auto vivo.
+   */
+  private syncDamageEffects(scrapingWall = false): void {
+    this.carBlinking = this.health.isInvulnerable;
+    this.smokeEmitting = this.health.isAlive && this.health.isCritical;
+    this.sparkEmitting = scrapingWall && this.health.isAlive;
+  }
+
+  /** Espejo del crash() de GameScene: el auto explota y los efectos mueren. */
+  private stopDamageEffects(): void {
+    this.carBlinking = false;
+    this.smokeEmitting = false;
+    this.sparkEmitting = false;
   }
 
   /** `GameScene.emitHealth`: emite el estado de salud cuando el HP cambia. */
@@ -165,6 +198,7 @@ class RaceCollisions {
     for (let i = 0; i < Math.round(seconds / DT); i += 1) {
       this.health.update(DT);
     }
+    this.syncDamageEffects();
   }
 
   /**
@@ -181,6 +215,7 @@ class RaceCollisions {
       if (this.health.scrape(DT) === 'dead') {
         this.emitHealth();
         this.gameOver = true;
+        this.stopDamageEffects(); // crash() apaga humo/chispas/blink
         this.bus.emit('game-over', {
           score: this.score.score,
           distance: this.score.distance,
@@ -192,6 +227,7 @@ class RaceCollisions {
         this.emitHealth();
       }
     }
+    this.syncDamageEffects(true);
   }
 
   /** Avanza el puntaje por distancia (scroll de la carrera) a la velocidad dada. */
@@ -200,6 +236,7 @@ class RaceCollisions {
       this.score.update(DT, speed);
       this.health.update(DT);
     }
+    this.syncDamageEffects();
   }
 }
 
@@ -528,5 +565,71 @@ describe('integración colisiones → botiquín (issue #10, H3)', () => {
     // SFX (por `pickup`) y burst ocurren en GameScene; el bus NO emite
     // `health` (guard de emitHealth: el HP mostrado no cambió).
     expect(race.emissions).toEqual([{ event: 'pickup', kind: 'repair' }]);
+  });
+});
+
+describe('integración colisiones → feedback visual del daño (issue #10, H4)', () => {
+  it('la colisión arma el parpadeo de i-frames y el auto reaparece al expirar', () => {
+    const race = new RaceCollisions();
+    expect(race.carBlinking).toBe(false);
+
+    race.contact('rivalBlue'); // golpe aplicado → i-frames → blink ON
+    expect(race.health.isInvulnerable).toBe(true);
+    expect(race.carBlinking).toBe(true);
+    // El blink es la capa de opacidad: la fase pura alterna visible/oculto
+    // (PlayerCar pinta alpha 1/0 según `blinkVisible(blinkElapsed)`).
+    expect(blinkVisible(0)).toBe(true);
+    expect(blinkVisible(0.2)).toBe(false);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT); // expiran los i-frames
+    expect(race.health.isInvulnerable).toBe(false);
+    expect(race.carBlinking).toBe(false);
+  });
+
+  it('el roce con pared NO arma el blink (la pared no usa i-frames)', () => {
+    const race = new RaceCollisions();
+
+    race.scrapeAgainstWall(0.5);
+
+    expect(race.health.hp).toBeLessThan(HEALTH.max); // sí drenó
+    expect(race.health.isInvulnerable).toBe(false); // sin i-frames
+    expect(race.carBlinking).toBe(false); // y por lo tanto sin blink
+  });
+
+  it('el humo se emite SOLO en estado crítico (isCritical) y se apaga al reparar', () => {
+    const race = new RaceCollisions();
+
+    race.contact('rivalBlue'); // 100 → 65: lejos del umbral
+    expect(race.smokeEmitting).toBe(false);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('debris'); // 65 → 45: todavía no es crítico
+    expect(race.smokeEmitting).toBe(false);
+
+    race.tick(HEALTH.invulnerabilitySeconds + DT);
+    race.contact('rivalBlue'); // 45 → 10: por debajo del 25% → humo ON
+    expect(race.health.isCritical).toBe(true);
+    expect(race.smokeEmitting).toBe(true);
+
+    race.contact('repair'); // 10 → 45: fuera del umbral → humo OFF
+    expect(race.health.isCritical).toBe(false);
+    expect(race.smokeEmitting).toBe(false);
+  });
+
+  it('las chispas se emiten mientras se roza la pared viva y mueren con el crash', () => {
+    const race = new RaceCollisions();
+
+    race.scrapeAgainstWall(0.5);
+
+    expect(race.health.hp).toBe(HEALTH.max - Math.floor(HEALTH.scrapePerSecond * 0.5));
+    expect(race.sparkEmitting).toBe(true);
+    expect(race.smokeEmitting).toBe(false); // ~93 HP: no crítico
+
+    race.scrapeAgainstWall(7); // drena el resto hasta HP 0 → crash
+    expect(race.gameOver).toBe(true);
+    // El crash apaga TODOS los efectos del auto (humo, chispas y blink).
+    expect(race.sparkEmitting).toBe(false);
+    expect(race.smokeEmitting).toBe(false);
+    expect(race.carBlinking).toBe(false);
   });
 });

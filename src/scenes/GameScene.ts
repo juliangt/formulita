@@ -75,6 +75,12 @@ import { PauseScene } from './PauseScene';
 type HudWidget = { destroy(): void };
 
 /**
+ * Offset X del punto de contacto de las chispas de pared (issue #10, H4)
+ * respecto del centro del auto: el borde que toca el kerb. Solo presentación.
+ */
+const SPARK_CONTACT_OFFSET_X = 26;
+
+/**
  * GameScene — carrera (Fase 4).
  *
  * - Pista vertical: un `TileSprite` que cubre la pantalla con el tile
@@ -92,6 +98,9 @@ type HudWidget = { destroy(): void };
  *   bus; rival/resto → explosión, shake y transición a GameOverScene (Fase
  *   5); aceite → derrape no destructivo.
  * - Efectos visuales del turbo (partículas de escape + líneas de velocidad).
+ * - Issue #10 (H4) — feedback del daño: parpadeo rítmico de i-frames del
+ *   auto, humo gris en estado crítico, chispas al rozar la pared y barra
+ *   CHASIS parpadeante por debajo del umbral crítico.
  * - HUD de la fase desacoplado por `EventBus` (velocímetro, turbo, DRS,
  *   puntaje y monedas), más el botón de mute (Fase 6) abajo al centro.
  * - Fase 5 — puntaje y persistencia: `ScoreSystem` suma puntos por distancia
@@ -189,11 +198,13 @@ export class GameScene extends Phaser.Scene {
   /** Último puntaje entero emitido por el bus (evita emitir de más). */
   private lastEmittedScore = -1;
 
-  /* Efectos visuales (turbo Fase 3; recolección/crash Fase 4). */
+  /* Efectos visuales (turbo Fase 3; recolección/crash Fase 4; daño H4). */
   private exhaustEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private speedLinesEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private collectEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
   private crashEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private smokeEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private sparkEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
 
   /* HUD de la fase (widgets en ui/, conectados por EventBus). */
   private hudWidgets: HudWidget[] = [];
@@ -322,6 +333,7 @@ export class GameScene extends Phaser.Scene {
 
     this.createTurboEffects();
     this.createCollectEffects();
+    this.createDamageEffects();
     this.createSpeedVignette(width, height);
     this.createHud(width, height);
     this.createPauseControls();
@@ -368,6 +380,8 @@ export class GameScene extends Phaser.Scene {
       this.hudWidgets = [];
       this.exhaustEmitter.stop();
       this.speedLinesEmitter.stop();
+      this.smokeEmitter.stop();
+      this.sparkEmitter.stop();
       this.spawnSystem.destroy();
       this.game.events.off(Phaser.Core.Events.HIDDEN, this.persistProgress);
       this.game.events.off(Phaser.Core.Events.BLUR, this.persistProgress);
@@ -549,6 +563,8 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.shake(420, 0.014);
     this.exhaustEmitter.stop();
     this.speedLinesEmitter.stop();
+    this.smokeEmitter.stop();
+    this.sparkEmitter.stop();
 
     if (this.multiInit) {
       this.eliminateSelf();
@@ -1284,6 +1300,71 @@ export class GameScene extends Phaser.Scene {
       .setDepth(12);
   }
 
+  /**
+   * Efectos del daño (issue #10, H4): humo del chasis en estado crítico y
+   * chispas del roce con pared. Mismo criterio que los demás emisores: pool
+   * fijo (`maxParticles`), `emitting` como llave por frame y cero objetos
+   * creados en update.
+   */
+  private createDamageEffects(): void {
+    // Humo gris del motor dañado: lento y denso, sale del capó (el auto mira
+    // hacia arriba) y queda sobre el auto para que se lea incluso con la
+    // pista scrolleando. GameScene lo enciende solo con HP crítico.
+    this.smokeEmitter = this.add
+      .particles(0, 0, TEXTURE_KEYS.particle, {
+        follow: this.playerCar,
+        followOffset: { x: 0, y: -28 },
+        lifespan: 650,
+        speed: { min: 30, max: 110 },
+        angle: { min: 150, max: 210 },
+        scale: { start: 2.2, end: 0 },
+        alpha: { start: 0.5, end: 0 },
+        tint: [0x9aa0a8, 0x6a6f78, 0x4a4a52],
+        quantity: 1,
+        frequency: 55,
+        maxParticles: 24,
+        emitting: false,
+      })
+      .setDepth(11);
+
+    // Chispas del roce con la pared: partículas chicas cálidas que saltan del
+    // borde del auto contra el kerb (la posición se fija por frame en
+    // `updateDamageEffects`, según el lado del contacto).
+    this.sparkEmitter = this.add
+      .particles(0, 0, TEXTURE_KEYS.particle, {
+        lifespan: 260,
+        speed: { min: 120, max: 320 },
+        angle: { min: 140, max: 220 },
+        scale: { start: 1.1, end: 0 },
+        alpha: { start: 0.95, end: 0 },
+        tint: [0xffd23c, 0xfff3b0, 0xffffff],
+        quantity: 2,
+        frequency: 30,
+        maxParticles: 24,
+        emitting: false,
+      })
+      .setDepth(11);
+  }
+
+  /**
+   * Llave por frame de los efectos de daño (issue #10, H4): humo solo en
+   * estado crítico (`isCritical`, con el auto vivo), chispas solo mientras
+   * `scrapingWall` — posicionadas en el borde del auto que toca la pared.
+   */
+  private updateDamageEffects(): void {
+    this.smokeEmitter.emitting = this.healthSystem.isAlive && this.healthSystem.isCritical;
+
+    const scraping = this.playerCar.scrapingWall && this.healthSystem.isAlive;
+    this.sparkEmitter.emitting = scraping;
+    if (scraping) {
+      const side = this.playerCar.x <= (TRACK.roadLeft + TRACK.roadRight) / 2 ? -1 : 1;
+      this.sparkEmitter.setPosition(
+        this.playerCar.x + side * SPARK_CONTACT_OFFSET_X,
+        this.playerCar.y,
+      );
+    }
+  }
+
   /** HUD de la Fase 3: velocímetro + barra de turbo + chip DRS (+ mute F6). */
   private createHud(width: number, height: number): void {
     const centerX = width / 2;
@@ -1327,6 +1408,8 @@ export class GameScene extends Phaser.Scene {
     // Issue #10 (H2) — barra de salud del chasis, debajo del chip DRS. Verde
     // (sano) → amarillo → rojo, invertidos respecto al turbo (acá el nivel
     // ALTO es bueno). Visible también en multi (el HP propio es el que corre).
+    // Issue #10 (H4) — en estado crítico (≤ HEALTH.criticalRatio) la barra
+    // parpadea: el jugador no puede no enterarse de que el chasis agoniza.
     const healthBar = new EnergyBar(this, {
       x: centerX,
       y: RACE_HUD.healthBarY,
@@ -1338,6 +1421,7 @@ export class GameScene extends Phaser.Scene {
         { minRatio: 0.25, color: 0xd8a72c },
         { minRatio: 0.6, color: 0x3c9e52 },
       ],
+      criticalRatio: HEALTH.criticalRatio,
       depth,
     });
     this.hudWidgets.push(healthBar);
@@ -1417,6 +1501,10 @@ export class GameScene extends Phaser.Scene {
     // el frame; gameOver/selfEliminated retornaron antes). Al morir por
     // scrape, `crash()` con el mismo destino que cualquier choque.
     this.healthSystem.update(dt);
+    // Issue #10 (H4) — parpadeo de i-frames: titileo rítmico de opacidad
+    // mientras dura la invulnerabilidad (el flash de color del impacto es
+    // otra capa, y conviven sin pisarse).
+    this.playerCar.setBlinking(this.healthSystem.isInvulnerable);
     if (this.playerCar.scrapingWall) {
       if (this.healthSystem.scrape(dt) === 'dead') {
         this.emitHealth();
@@ -1425,6 +1513,8 @@ export class GameScene extends Phaser.Scene {
       }
       this.emitHealth();
     }
+    // Issue #10 (H4) — humo del chasis crítico + chispas del roce con pared.
+    this.updateDamageEffects();
 
     // Velocidad final = SpeedSystem × turbo (si activo) × DRS (si activo),
     // con clamps defensivos: nunca NaN ni aceleraciones infinitas.
