@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { MULTIPLAYER } from '../config/balance';
+import { CHAT_MAX_LEN, MULTIPLAYER } from '../config/balance';
 import {
+  isValidChatText,
   isValidPlayerName,
   isValidRoomWord,
+  makeChatPayload,
+  makeDmPayload,
+  makeInvitePayload,
+  makePingPayload,
   parseMultiplayerInit,
   roundStatePayload,
+  sanitizeChatText,
   sanitizePlayerName,
   sanitizeRoomWord,
 } from '../net/protocol';
@@ -194,5 +200,61 @@ describe('protocol — roundStatePayload (wire de `state`, M2)', () => {
         score: 1,
       }),
     ).toEqual({ distance: 0, x: 0, speed: -12, turboActive: false, coins: 0, score: 1 });
+  });
+});
+
+describe('protocol — chat social (issue #2, C0): sanitizeChatText', () => {
+  it('trim + colapso de whitespace interno + máx CHAT_MAX_LEN', () => {
+    expect(CHAT_MAX_LEN).toBe(200);
+    expect(sanitizeChatText('  hola   gente  ')).toBe('hola gente');
+    expect(sanitizeChatText('una\tlínea\n nueva')).toBe('una línea nueva');
+    expect(sanitizeChatText('a'.repeat(CHAT_MAX_LEN))).toHaveLength(CHAT_MAX_LEN);
+    expect(sanitizeChatText(`a`.repeat(CHAT_MAX_LEN + 50))).toHaveLength(CHAT_MAX_LEN);
+  });
+
+  it('vacío y solo whitespace quedan vacíos; isValidChatText los rechaza', () => {
+    expect(sanitizeChatText('')).toBe('');
+    expect(sanitizeChatText(' \t\n ')).toBe('');
+    expect(isValidChatText('hola')).toBe(true);
+    expect(isValidChatText('   ')).toBe(false);
+    expect(isValidChatText('')).toBe(false);
+  });
+
+  it('respeta unicode y es idempotente (misma regla en emisor y receptor)', () => {
+    const once = sanitizeChatText('  ñandú   voló  ');
+    expect(once).toBe('ñandú voló');
+    expect(sanitizeChatText(once)).toBe(once);
+  });
+});
+
+describe('protocol — factories de payloads del chat', () => {
+  it('makeChatPayload: solo {text}, ya sanitizado', () => {
+    expect(makeChatPayload('  hola   sala  ')).toEqual({ text: 'hola sala' });
+    expect(Object.keys(makeChatPayload('x'))).toEqual(['text']);
+    expect(makeChatPayload('b'.repeat(400)).text).toHaveLength(CHAT_MAX_LEN);
+    // Vacío viaja como vacío: quien llama decide no enviarlo (ChatStore lo
+    // valida con isValidChatText/sanitizeText antes de armar el payload).
+    expect(makeChatPayload('   ')).toEqual({ text: '' });
+  });
+
+  it('makeDmPayload: {text, targetPeerId} con texto sanitizado y target limpio', () => {
+    expect(makeDmPayload('  pst  estás? ', ' peer-a ')).toEqual({
+      text: 'pst estás?',
+      targetPeerId: 'peer-a',
+    });
+    expect(makeDmPayload('z'.repeat(300), 'peer-a').text).toHaveLength(CHAT_MAX_LEN);
+    expect(Object.keys(makeDmPayload('x', 'y')).sort()).toEqual(['targetPeerId', 'text']);
+  });
+
+  it('makePingPayload: heartbeat VACÍO (la señal es el hecho, no el contenido)', () => {
+    expect(makePingPayload()).toEqual({});
+    expect(Object.keys(makePingPayload())).toHaveLength(0);
+  });
+
+  it('makeInvitePayload: la keyword es una room word (trim, NFD, A-Z)', () => {
+    expect(makeInvitePayload('parrilla')).toEqual({ keyword: 'PARRILLA' });
+    expect(makeInvitePayload('  párrilla  ')).toEqual({ keyword: 'PARRILLA' });
+    expect(makeInvitePayload('chicane9')).toEqual({ keyword: 'CHICANE' });
+    expect(Object.keys(makeInvitePayload('boxes'))).toEqual(['keyword']);
   });
 });

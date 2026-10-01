@@ -8,10 +8,12 @@
  *
  * Las acciones `state` / `eliminated` / `match-over` se DECLARAN acá y se
  * usan recién en M2 (estado por frame y eliminación compartida); registrar
- * los tipos ahora evita tocar el protocolo cuando lleguen.
+ * los tipos ahora evita tocar el protocolo cuando lleguen. Lo mismo aplica a
+ * las acciones del chat social del issue #2 (`chat`/`dm`/`ping`/`invite`),
+ * cuya base pura (`ChatStore`) llega en C0 y la red en C1/C3.
  */
 
-import { MULTIPLAYER } from '../config/balance';
+import { CHAT_MAX_LEN, MULTIPLAYER } from '../config/balance';
 
 /* ------------------------------------------------------------------ */
 /* Meta y roster                                                       */
@@ -94,6 +96,49 @@ export interface MatchOverPayload {
   readonly coins: number;
   readonly score: number;
   readonly distance: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Acciones del chat social (issue #2, C0 — se declaran acá, la UI       */
+/* llega en C1/C3 y la red como adaptador de NetClient)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `chat` (sala de PARTIDA, broadcast): un mensaje del chat de sala. Viaja
+ * solo el texto ya sanitizado (`sanitizeChatText`): el remitente lo deduce
+ * del peerId que Trystero entrega al recibir, y el color del roster
+ * (`colorForPeer`) — nada más viaja ni se confía del wire.
+ */
+export interface ChatPayload {
+  /** Texto sanitizado: trim, whitespace colapsado, máx. `CHAT_MAX_LEN`. */
+  readonly text: string;
+}
+
+/**
+ * `dm` (sala PÚBLICA de presencia): mensaje DIRIGIDO a un peer concreto. El
+ * `targetPeerId` viaja en el payload porque Trystero solo ofrece broadcast
+ * por acción: cada cliente descarta los dm que no son para su peerId.
+ */
+export interface DmPayload {
+  /** Texto sanitizado con la misma regla que `chat`. */
+  readonly text: string;
+  /** Destinatario (peerId): todos lo reciben, solo él lo procesa. */
+  readonly targetPeerId: string;
+}
+
+/**
+ * `ping` (sala pública de presencia): heartbeat VACÍO cada
+ * `PRESENCE_HEARTBEAT_MS`; la señal es el hecho del mensaje, no su contenido.
+ */
+export type PingPayload = Record<string, never>;
+
+/**
+ * `invite` (C3): invita a un peer de la sala pública a la partida por
+ * palabra de sala; `keyword` es una palabra de sala normal (A–Z, 5–9).
+ */
+export interface InvitePayload {
+  /** Palabra de la sala a la que se invita (sanitizada como room word). */
+  readonly keyword: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -196,6 +241,48 @@ export function isValidRoomWord(raw: string): boolean {
     return false;
   }
   return raw.length >= MULTIPLAYER.roomWordMinLength && raw.length <= MULTIPLAYER.roomWordMaxLength;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat social — sanitización y factories (emisor y receptor)           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Normaliza el texto de un mensaje de chat (`chat` y `dm`): trim, corridas
+ * de whitespace interno colapsadas a un espacio y recorte a `CHAT_MAX_LEN`
+ * (200). Es la MISMA función en el emisor (antes de viajar) y en el receptor
+ * (antes de entrar al store/render), y es la que usa `ChatStore.sanitizeText`
+ * — una sola regla de texto para todo el chat. Como los mensajes se dibujan
+ * como `Phaser.GameObjects.Text` (nunca HTML/innerHTML), no hay vector XSS:
+ * esto es límite de largo/limpieza, no sanitización HTML.
+ */
+export function sanitizeChatText(raw: string): string {
+  return collapseSpaces(raw.trim()).slice(0, CHAT_MAX_LEN);
+}
+
+/** true si a `raw` le queda texto utilizable tras sanitizar (no vacío). */
+export function isValidChatText(raw: string): boolean {
+  return sanitizeChatText(raw).length > 0;
+}
+
+/** Factory del payload `chat` (sala de partida, broadcast). */
+export function makeChatPayload(rawText: string): ChatPayload {
+  return { text: sanitizeChatText(rawText) };
+}
+
+/** Factory del payload `dm` (sala pública, dirigido por `targetPeerId`). */
+export function makeDmPayload(rawText: string, targetPeerId: string): DmPayload {
+  return { text: sanitizeChatText(rawText), targetPeerId: targetPeerId.trim() };
+}
+
+/** Factory del payload `ping` (heartbeat vacío de presencia). */
+export function makePingPayload(): PingPayload {
+  return {};
+}
+
+/** Factory del payload `invite` (C3): la keyword es una room word A–Z. */
+export function makeInvitePayload(rawKeyword: string): InvitePayload {
+  return { keyword: sanitizeRoomWord(rawKeyword) };
 }
 
 /* ------------------------------------------------------------------ */
