@@ -7,6 +7,7 @@ import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { sanitizePlayerName } from '../net/protocol';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
 import { LobbyScene } from './LobbyScene';
 import { MenuButton } from '../ui/MenuButton';
@@ -166,6 +167,21 @@ export class MenuScene extends Phaser.Scene {
       fontSize: MENU.multiFontSize,
       bus,
       onPress: this.openMultiplayerOverlay,
+    });
+
+    // C2 (issue #2) — CHAT: abre el overlay social con la tab PÚBLICO por
+    // default (en el menú no hay sala de partida: SALA llega deshabilitada).
+    // El overlay NO está en gameConfig: se registra on-demand como en C1.
+    new MenuButton(this, {
+      x: centerX,
+      y: MENU.chatY,
+      width: MENU.chatWidth,
+      height: MENU.chatHeight,
+      label: 'CHAT',
+      tint: 0xb04ee0,
+      fontSize: MENU.chatFontSize,
+      bus,
+      onPress: this.openChatOverlay,
     });
 
     // Ayuda de controles y extras según el dispositivo. El fullscreen (Fase
@@ -356,6 +372,23 @@ export class MenuScene extends Phaser.Scene {
     this.multiNameInput = null;
     this.multiOverlay?.destroy();
     this.multiOverlay = null;
+  };
+
+  /**
+   * C2 (issue #2) — abre el overlay de chat ENCIMA del menú (launch, patrón
+   * PauseScene) con la tab PÚBLICO activa por default: en el menú no hay sala
+   * de partida y la tab SALA aparece deshabilitada con su aviso. ChatScene se
+   * registra on-demand (igual que en el lobby): gameConfig no se toca.
+   */
+  private readonly openChatOverlay = (): void => {
+    // Con el overlay multijugador abierto, CHAT no pisa el foco del nombre.
+    if (this.multiOverlay) {
+      return;
+    }
+    if (!this.scene.get(ChatScene.KEY)) {
+      this.scene.add(ChatScene.KEY, ChatScene, false);
+    }
+    this.scene.launch(ChatScene.KEY, { tab: 'public' });
   };
 
   /**
