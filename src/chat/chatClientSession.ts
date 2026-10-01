@@ -9,8 +9,11 @@
  * (singleton perezoso en el registry), no una propiedad que las escenas se
  * transfieren:
  *
- * 1. La PRIMERA consumidora (ChatScene, abierta desde el menú o el lobby) lo
- *    resuelve con `getChatClient` y queda cacheado para toda la sesión.
+ * 1. La PRIMERA consumidora lo resuelve con `getChatClient` y queda cacheado
+ *    para toda la sesión. Desde la auditoría #2 (MENOR 2) esa primera
+ *    consumidora es la SESIÓN SOCIAL resuelta EAGER por BootScene (la
+ *    disponibilidad persistida se aplica al arrancar); ChatScene, el lobby y
+ *    el menú reciben el mismo cacheado.
  * 2. Las escenas NUNCA lo destruyen: cerrar el chat o salir de una partida
  *    no toca la presencia (solo el TOGGLE la enciende/apaga). Las escenas
  *    solo llaman `setAvailable` según el ajuste persistido.
@@ -24,6 +27,8 @@
  *
  * PRIVACIDAD: resolver el cliente NO conecta a nada — sin `setAvailable(true)`
  * (decisión persistida en `ChatSettingsRepository`, default NO) no hay join.
+ * (Con el ajuste SÍ, quien lo aplica es la sesión social al CREARSE — ver
+ * `socialChatSession` — nunca la resolución del cliente por sí misma.)
  */
 
 import type { ChatClient } from '../net/ChatClient';

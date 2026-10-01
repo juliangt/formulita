@@ -116,13 +116,17 @@ export interface ChatPayload {
 
 /**
  * `dm` (sala PÚBLICA de presencia): mensaje DIRIGIDO a un peer concreto. El
- * `targetPeerId` viaja en el payload porque Trystero solo ofrece broadcast
- * por acción: cada cliente descarta los dm que no son para su peerId.
+ * transporte YA envía dirigido — la acción de Trystero acepta `{target}` y
+ * entrega SOLO al destinatario (ver `TrysteroChatClient.sendDm`) — así que el
+ * `targetPeerId` del payload es REDUNDANTE A PROPÓSITO: defensa en
+ * profundidad para que el receptor re-verifique el destinatario antes de
+ * despachar, y si un transporte futuro degradara el dirigido a broadcast,
+ * cada cliente descartaría igual los dm ajenos.
  */
 export interface DmPayload {
   /** Texto sanitizado con la misma regla que `chat`. */
   readonly text: string;
-  /** Destinatario (peerId): todos lo reciben, solo él lo procesa. */
+  /** Destinatario (peerId): redundante con `{target}` por defensa en profundidad. */
   readonly targetPeerId: string;
 }
 

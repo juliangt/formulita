@@ -15,8 +15,12 @@
  *   un aviso: el chat de sala solo existe en una partida.
  * - PÚBLICO: sala pública de presencia OPT-IN — toggle grande
  *   "MOSTRARME DISPONIBLE" (estado inicial desde `ChatSettingsRepository`,
- *   default NO = nunca conecta) + lista en vivo de los demás disponibles
- *   (excluyéndome) con BADGE de no leídos del hilo de DM (C3).
+ *   default NO = nunca conecta; el ajuste SÍ ya se aplicó EAGER al arrancar —
+ *   ver BootScene/socialChatSession) + hint de efimeridad (§10: los mensajes
+ *   no se guardan) + lista en vivo de los demás disponibles (excluyéndome)
+ *   PAGINADA de a `visiblePeers` filas con ◀ "N–M DE T" ▶ (auditoría #2:
+ *   MENOR 1) y badge de no leídos del hilo de DM por fila (C3). Toda la fila
+ *   (swatch + nombre + badge) es zona táctil (COSMÉTICA 3).
  *
  * C3 — HILO DE DM: tocar una fila de la lista abre el hilo con ese peer
  * (sub-vista de PÚBLICO): header con nombre/color, panel de chat reutilizado
@@ -75,12 +79,16 @@ import {
   CHAT_TAB_LABELS,
   CHAT_TAB_ORDER,
   EMPTY_PEERS_HINT,
+  EPHEMERAL_MESSAGES_HINT,
   formatAvailablePeerRow,
+  paginatePeers,
   parseChatTab,
+  PEER_PAGE_NEXT_LABEL,
+  PEER_PAGE_PREV_LABEL,
   ROOM_TAB_MENU_HINT,
   toggleAvailability,
-  visibleAvailablePeers,
   type ChatTabId,
+  type PaginatedPeers,
 } from '../chat/presenceView';
 import { getChatSettingsRepository } from '../data/ChatSettingsRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
@@ -127,6 +135,20 @@ const PEER_DETAIL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
 /** Color del texto del banner de invitación (amarillo destacado del repo). */
 const INVITE_BANNER_COLOR = '#f7c531';
 
+/** Estilo del indicador "N–M DE T" de la paginación de la lista pública. */
+const PAGER_LABEL_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: `${CHAT.peerPageLabelFontSize}px`,
+  color: '#9aa0a8',
+};
+
+/** Estilo del hint de efimeridad (discreto, bajo el toggle de PÚBLICO). */
+const EPHEMERAL_HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: `${CHAT.ephemeralHintFontSize}px`,
+  color: '#525868',
+};
+
 /** Colores de los chips de tab (activo / inactivo / deshabilitado). */
 const TAB_ACTIVE_FILL = 0x1d8f43;
 const TAB_INACTIVE_FILL = 0x2a2a34;
@@ -172,10 +194,12 @@ export class ChatScene extends Phaser.Scene {
   private tabLabels: Partial<Record<ChatTabId, Phaser.GameObjects.Text>> = {};
   /** Objetos del tab activo (se destruyen al cambiar de tab / apagarse). */
   private tabContent: Array<{ destroy(): void }> = [];
-  /** Filas actuales de la lista de disponibles (se recrean en cada cambio). */
-  private peerRows: Phaser.GameObjects.GameObject[] = [];
+  /** Filas actuales de la lista de disponibles + pager (se recrean en cada cambio). */
+  private peerRows: Array<{ destroy(): void }> = [];
   /** Línea de detalle bajo la lista (peer tocado / error de presencia). */
   private peerDetailText: Phaser.GameObjects.Text | null = null;
+  /** Página actual de la lista pública (0-based; el clamp vive en `paginatePeers`). */
+  private peerPage = 0;
   private availabilityButton: MenuButton | null = null;
   private chatClient: ChatClient | null = null;
   private unsubscribePeers: (() => void) | null = null;
@@ -212,6 +236,7 @@ export class ChatScene extends Phaser.Scene {
     this.tabContent = [];
     this.inviteObjects = [];
     this.availabilityButton = null;
+    this.peerPage = 0; // cada apertura del overlay arranca en la primera página
     this.chatClient = null;
     this.unsubscribePeers = null;
     this.unsubscribeChatError = null;
@@ -455,6 +480,14 @@ export class ChatScene extends Phaser.Scene {
         .setStrokeStyle(6, 0x3a3a44),
     );
 
+    // Auditoría #2 (COSMÉTICA 4) — hint de efimeridad entre el toggle y la
+    // lista: los mensajes viven en la sesión, no se persisten (§10 del issue).
+    this.tabContent.push(
+      this.add
+        .text(centerX, CHAT.ephemeralHintY, EPHEMERAL_MESSAGES_HINT, EPHEMERAL_HINT_STYLE)
+        .setOrigin(0.5),
+    );
+
     // Detalle del peer tocado / errores de presencia (empieza vacío). Se
     // crea ANTES de suscribir/aplicar: un error sincrónico del join (appId
     // faltante) ya tiene dónde pintarse.
@@ -518,7 +551,13 @@ export class ChatScene extends Phaser.Scene {
     this.createAvailabilityButton(next, this.scale.width / 2, getSessionEventBus(this.registry));
   }
 
-  /** Repinta la lista de disponibles (filas nombre + swatch, o el aviso). */
+  /**
+   * Repinta la lista de disponibles (filas nombre + swatch, o el aviso).
+   * Auditoría #2 (MENOR 1): la lista se PAGINA (`paginatePeers`, pura) — 8
+   * filas por página con fila ◀ "N–M DE T" ▶ cuando hay más filas que la
+   * página; si la lista se encogió (un peer se fue), el clamp de la pura
+   * devuelve la última página que existe y `peerPage` se re-sincroniza.
+   */
   private renderPeerList(peers: readonly AvailablePeer[]): void {
     // Solo importa si la tab PÚBLICO sigue visible (el evento puede llegar
     // tras un cambio de tab — las suscripciones viven hasta el shutdown).
@@ -531,9 +570,10 @@ export class ChatScene extends Phaser.Scene {
     this.peerRows = [];
 
     const centerX = this.scale.width / 2;
-    const visible = visibleAvailablePeers(peers, CHAT.visiblePeers);
+    const page = paginatePeers(peers, this.peerPage, CHAT.visiblePeers);
+    this.peerPage = page.page; // clamp: la página pedida puede ya no existir
 
-    if (visible.length === 0) {
+    if (peers.length === 0) {
       const hint = this.add
         .text(centerX, (CHAT.peerListTopY + CHAT.listBottomY) / 2, EMPTY_PEERS_HINT, HINT_STYLE)
         .setOrigin(0.5);
@@ -541,7 +581,7 @@ export class ChatScene extends Phaser.Scene {
       return;
     }
 
-    visible.forEach((peer, index) => {
+    page.rows.forEach((peer, index) => {
       // C3 — badge de no leídos del hilo de DM con este peer.
       const row = formatAvailablePeerRow(peer, this.store?.getUnreadCount(peer.peerId) ?? 0);
       const y = CHAT.peerRowStartY + index * CHAT.peerRowHeight;
@@ -560,11 +600,82 @@ export class ChatScene extends Phaser.Scene {
           fontSize: `${CHAT.peerRowFontSize}px`,
           color: row.color,
         })
-        .setOrigin(0, 0.5)
+        .setOrigin(0, 0.5);
+      // Auditoría #2 (COSMÉTICA 3) — TODA la fila es táctil: hit invisible del
+      // ancho completo (swatch + nombre + badge), agregado AL FINAL para quedar
+      // por encima y quedarse con el tap.
+      const hit = this.add
+        .rectangle(
+          centerX,
+          y,
+          CHAT.listWidth - CHAT.listPadding * 2,
+          CHAT.peerRowHeight,
+          0x000000,
+          0,
+        )
         .setInteractive({ useHandCursor: true });
-      label.on('pointerdown', () => this.onPeerTapped(peer));
-      this.peerRows.push(swatch, label);
+      hit.on('pointerdown', () => this.onPeerTapped(peer));
+      this.peerRows.push(swatch, label, hit);
     });
+
+    // Fila de paginación SOLO con más filas que la página (página única = sin
+    // botones ni indicador).
+    if (page.pageCount > 1) {
+      this.createPeerPager(page, centerX);
+    }
+  }
+
+  /**
+   * Fila de paginación bajo el panel: ◀ (solo si hay anterior) + indicador
+   * "N–M DE T" + ▶ (solo si hay siguiente). Vive en `peerRows` para
+   * destruirse y recrearse con cada repintado de la lista.
+   */
+  private createPeerPager(page: PaginatedPeers, centerX: number): void {
+    const bus = getSessionEventBus(this.registry);
+    if (page.hasPrev) {
+      this.peerRows.push(
+        new MenuButton(this, {
+          x: centerX - CHAT.peerPageOffsetX,
+          y: CHAT.peerPageY,
+          width: CHAT.peerPageButtonWidth,
+          height: CHAT.peerPageButtonHeight,
+          label: PEER_PAGE_PREV_LABEL,
+          tint: 0x525868,
+          fontSize: CHAT.peerPageButtonFontSize,
+          bus,
+          onPress: () => this.goToPeerPage(page.page - 1),
+        }),
+      );
+    }
+    this.peerRows.push(
+      this.add
+        .text(centerX, CHAT.peerPageY, page.rangeLabel, PAGER_LABEL_STYLE)
+        .setOrigin(0.5),
+    );
+    if (page.hasNext) {
+      this.peerRows.push(
+        new MenuButton(this, {
+          x: centerX + CHAT.peerPageOffsetX,
+          y: CHAT.peerPageY,
+          width: CHAT.peerPageButtonWidth,
+          height: CHAT.peerPageButtonHeight,
+          label: PEER_PAGE_NEXT_LABEL,
+          tint: 0x525868,
+          fontSize: CHAT.peerPageButtonFontSize,
+          bus,
+          onPress: () => this.goToPeerPage(page.page + 1),
+        }),
+      );
+    }
+  }
+
+  /** Navega a una página de la lista y la repinta (el clamp es de `paginatePeers`). */
+  private goToPeerPage(page: number): void {
+    if (!this.chatClient) {
+      return;
+    }
+    this.peerPage = page;
+    this.renderPeerList(this.chatClient.getAvailablePeers());
   }
 
   /**

@@ -3,9 +3,11 @@
  *
  * Todo lo decidible de la tab PÚBLICO del ChatScene vive acá como funciones
  * puras (sin Phaser, sin red) para testearlo directo: estados/labels de tabs,
- * el texto del toggle de disponibilidad, las filas de la lista y el flujo
- * toggle → persistencia + `setAvailable`. El wiring Phaser (crear botones,
- * repintar textos) queda en la escena y se documenta como en C1.
+ * el texto del toggle de disponibilidad, las filas de la lista y su
+ * PAGINACIÓN ligera (v1, auditoría #2 MENOR 1), el hint de efimeridad (§10)
+ * y el flujo toggle → persistencia + `setAvailable` (que también aplica la
+ * sesión social al crearse eager en el Boot). El wiring Phaser (crear
+ * botones, repintar textos) queda en la escena y se documenta como en C1.
  *
  * PRIVACIDAD: `applyAvailabilitySetting`/`toggleAvailability` son los ÚNICOS
  * puntos donde la UI toca la disponibilidad — siempre reflejan el ajuste
@@ -131,6 +133,78 @@ export function visibleAvailablePeers(
   }
   return peers.slice(0, maxVisible);
 }
+
+/* ------------------------------------------------------------------ */
+/* Paginación de la lista (v1 — auditoría #2, MENOR 1)                 */
+/* ------------------------------------------------------------------ */
+
+/** Label del botón de página anterior (táctil). */
+export const PEER_PAGE_PREV_LABEL = '◀';
+
+/** Label del botón de página siguiente (táctil). */
+export const PEER_PAGE_NEXT_LABEL = '▶';
+
+/** Una página de la lista lista para renderizar (la escena solo cablea). */
+export interface PaginatedPeers {
+  /** Filas de ESTA página (el orden del cliente, sin copiar la lista). */
+  readonly rows: readonly AvailablePeer[];
+  /** Página efectiva (0-based): la pedida, CLAMPEADA a las que existen. */
+  readonly page: number;
+  /** Total de páginas (0 si no hay peers; 1 = página única, sin botones). */
+  readonly pageCount: number;
+  /** Indicador "N–M DE T" de esta página ('' sin peers). */
+  readonly rangeLabel: string;
+  /** true si hay página siguiente (el botón ▶ solo existe con esto). */
+  readonly hasNext: boolean;
+  /** true si hay página anterior (el botón ◀ solo existe con esto). */
+  readonly hasPrev: boolean;
+}
+
+/**
+ * Pagina la lista de disponibles (v1 pragmática: la malla pública llega
+ * cómodamente a ~30–50 peers y `visiblePeers` cortaba a los 6+). Decide TODO
+ * lo mostrable — filas de la página, clamp, rango y habilitación de botones —
+ * para que la escena solo cablee taps; la lista viene ordenada por peerId del
+ * cliente, así la página N es estable entre clientes.
+ *
+ * Bordes: `pageSize <= 0` o lista vacía → resultado vacío sin páginas (la
+ * escena pinta `EMPTY_PEERS_HINT`); `page` fuera de rango (negativa, fracción
+ * o una página que DEJÓ de existir porque un peer se fue y la lista se encogió)
+ * se clampedea a la última página válida — nunca a una página sin filas.
+ */
+export function paginatePeers(
+  peers: readonly AvailablePeer[],
+  page: number,
+  pageSize: number,
+): PaginatedPeers {
+  if (pageSize <= 0 || peers.length === 0) {
+    return { rows: [], page: 0, pageCount: 0, rangeLabel: '', hasNext: false, hasPrev: false };
+  }
+  const pageCount = Math.ceil(peers.length / pageSize);
+  const requested = Number.isFinite(page) ? Math.floor(page) : 0;
+  const current = Math.min(Math.max(requested, 0), pageCount - 1);
+  const rows = peers.slice(current * pageSize, current * pageSize + pageSize);
+  const rangeLabel = `${current * pageSize + 1}–${current * pageSize + rows.length} DE ${peers.length}`;
+  return {
+    rows,
+    page: current,
+    pageCount,
+    rangeLabel,
+    hasNext: current < pageCount - 1,
+    hasPrev: current > 0,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Aviso de efimeridad (§10 del issue #2 — auditoría #2, COSMÉTICA 4)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Hint discreto de la tab PÚBLICO: los mensajes son EFÍMEROS (viven en la
+ * sesión, no se persisten) — mitiga el "chateé y desapareció todo" de quien
+ * cierra y vuelve a abrir esperando el historial.
+ */
+export const EPHEMERAL_MESSAGES_HINT = 'MENSAJES EFÍMEROS — NO SE GUARDAN AL CERRAR';
 
 /* ------------------------------------------------------------------ */
 /* Detalle al tocar un disponible (hook del DM de C3)                  */

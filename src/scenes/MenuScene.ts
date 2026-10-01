@@ -180,7 +180,8 @@ export class MenuScene extends Phaser.Scene {
     // default (en el menú no hay sala de partida: SALA llega deshabilitada).
     // El overlay NO está en gameConfig: se registra on-demand como en C1.
     // C3 — el label lleva el BADGE de no leídos de la sesión (sala + DMs):
-    // resolver la sesión social crea el store on-demand (nunca conecta).
+    // la sesión social ya existe desde el Boot (eager, auditoría #2) y su
+    // constructor aplicó el ajuste persistido — acá solo se lee el store.
     const social = getSocialChatSession(this.registry);
     this.lastChatLabel = chatMenuButtonLabel(social.store.totalUnread);
     this.chatButton = new MenuButton(this, {
