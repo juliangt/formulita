@@ -8,9 +8,16 @@ import {
 } from '../chat/socialChatSession';
 import { getSessionChatStore } from '../chat/chatSession';
 import { setSessionChatClient } from '../chat/chatClientSession';
+import { toggleAvailability } from '../chat/presenceView';
+import {
+  CHAT_SETTINGS_REGISTRY_KEY,
+  LocalStorageChatSettingsRepository,
+  type IChatSettingsRepository,
+} from '../data/ChatSettingsRepository';
 import { PLAYER_PROFILE_REGISTRY_KEY } from '../data/PlayerProfileRepository';
 import type { AvailablePeer, ChatClient } from '../net/ChatClient';
 import type { DmPayload, InvitePayload } from '../net/protocol';
+import { FakeStorage } from './fakeStorage';
 
 /**
  * Tests de la sesión SOCIAL de chat (C3): el cableado ChatClient ↔ ChatStore
@@ -101,6 +108,17 @@ function createSessionFixture(profileName = 'Tester') {
     save: vi.fn(),
   });
   return { registry, dump, client };
+}
+
+/** Repo de ajustes fake en memoria (se inyecta por el registry del fixture). */
+function memoryChatSettings(showAvailable: boolean): IChatSettingsRepository {
+  let current = showAvailable;
+  return {
+    load: () => ({ showAvailable: current }),
+    save: (settings) => {
+      current = settings.showAvailable;
+    },
+  };
 }
 
 const BETO_PEER: AvailablePeer = { peerId: 'bb-beto', name: 'Beto', color: 0x3c6cd6 };
@@ -324,5 +342,48 @@ describe('socialChatSession — invitaciones pendientes (banner de ChatScene)', 
     expect(onInvite).not.toHaveBeenCalled();
     // La pendiente igual queda para quien abra el chat después.
     expect(session.getLatestInvite()?.keyword).toBe('PARRILLA');
+  });
+});
+
+describe('socialChatSession — disponibilidad persistida al CREARSE (auditoría #2, MENOR 2)', () => {
+  it('ajuste SÍ: la sesión recién creada reconecta sola (join + heartbeat)', () => {
+    const { registry, client } = createSessionFixture();
+    registry.set(CHAT_SETTINGS_REGISTRY_KEY, memoryChatSettings(true));
+
+    getSocialChatSession(registry);
+
+    expect(client.setAvailableCalls).toEqual([true]); // disponible SIN abrir el chat
+  });
+
+  it('PRIVACIDAD: con el default NO, crear la sesión NI toca setAvailable (cero conexiones)', () => {
+    const { registry, client } = createSessionFixture();
+    registry.set(CHAT_SETTINGS_REGISTRY_KEY, memoryChatSettings(false));
+
+    getSocialChatSession(registry);
+
+    expect(client.setAvailableCalls).toEqual([]); // ni siquiera un setAvailable(false)
+  });
+
+  it('toggle OFF persiste: una sesión NUEVA (recarga) sobre el mismo storage ya no conecta', () => {
+    const storage = new FakeStorage();
+    const repo = new LocalStorageChatSettingsRepository(storage);
+    repo.save({ showAvailable: true }); // quien dejó SÍ
+
+    // Primera sesión (antes de la recarga): conecta por el ajuste persistido.
+    const first = createSessionFixture();
+    first.registry.set(CHAT_SETTINGS_REGISTRY_KEY, repo);
+    getSocialChatSession(first.registry);
+    expect(first.client.setAvailableCalls).toEqual([true]);
+
+    // El usuario apaga el toggle (lo que hace el botón de PÚBLICO).
+    expect(toggleAvailability(repo, first.client)).toBe(false);
+    expect(first.client.setAvailableCalls).toEqual([true, false]); // leave real
+
+    // "Recarga": registry nuevo (pestaña nueva), MISMO storage, cliente nuevo.
+    const reloaded = createSessionFixture();
+    reloaded.registry.set(CHAT_SETTINGS_REGISTRY_KEY, repo);
+    getSocialChatSession(reloaded.registry);
+
+    expect(reloaded.client.setAvailableCalls).toEqual([]); // ya no conecta
   });
 });

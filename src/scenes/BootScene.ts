@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { getAudioEngine } from '../audio/AudioManager';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getSessionEventBus } from '../core/EventBus';
+import { getSocialChatSession } from '../chat/socialChatSession';
 import { PreloadScene } from './PreloadScene';
 
 /**
@@ -17,6 +18,16 @@ import { PreloadScene } from './PreloadScene';
  * - Motor de audio (Fase 6): `getAudioEngine` — se conecta al bus (traduce
  *   eventos → SFX) y arma el desbloqueo del AudioContext en el primer gesto
  *   (pointerdown/keydown, política de autoplay móvil).
+ * - Sesión social de chat (issue #2, auditoría #2 MENOR 2):
+ *   `getSocialChatSession`. Este es el punto de creación EAGER deliberado:
+ *   Boot corre EXACTAMENTE UNA vez por carga de página (Preload → Menu →
+ *   Game → GameOver se reinician entre sí, Boot jamás), así la disponibilidad
+ *   persistida se aplica una sola vez y al arrancar — quien dejó el toggle
+ *   SÍ reconecta a la sala pública (join + heartbeat) sin abrir el chat,
+ *   cumpliendo el modelo mental del criterio C2. Con el default NO el
+ *   constructor de la sesión NI toca el ChatClient: cero conexión, cero
+ *   coste (el cliente Trystero se construye igual en el primer consumidor
+ *   que lo pida — resolverlo no abre red).
  *
  * Inversión de dependencias: para enchufar otros backends basta inyectarlos
  * ANTES con `game.registry.set(...)`; estas resoluciones los respetan.
@@ -40,6 +51,10 @@ export class BootScene extends Phaser.Scene {
     const audio = getAudioEngine(this.registry);
     audio.attachBus(getSessionEventBus(this.registry));
     audio.attachUnlockListeners();
+
+    // Issue #2 (auditoría #2, MENOR 2) — sesión social eager: aplica el
+    // ajuste persistido de disponibilidad al arrancar (ver header).
+    getSocialChatSession(this.registry);
 
     this.scene.start(PreloadScene.KEY);
   }

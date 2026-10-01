@@ -20,9 +20,13 @@
  * 3. La invitación PENDIENTE queda acá (no en la escena): si llega con el
  *    chat cerrado, el próximo ChatScene la muestra como banner.
  *
- * PRIVACIDAD: resolver la sesión NO conecta a nada — sin
- * `setAvailable(true)` (ajuste persistido, default NO) no hay join, no hay
- * DM, no hay invitaciones. Las escenas NUNCA llaman `destroy` sobre la
+ * PRIVACIDAD: resolver la sesión NO conecta a nada POR DEFAULT — quien nunca
+ * activó el toggle (ajuste persistido NO) no genera NI UNA llamada a
+ * `setAvailable`, no hay join, no hay DM, no hay invitaciones. La excepción
+ * deliberada (auditoría #2, MENOR 2): si el ajuste persistido es SÍ, el
+ * CONSTRUCTOR lo aplica (`applyAvailabilitySetting` → join + heartbeat) para
+ * que la preferencia sobreviva la recarga sin abrir el chat; BootScene crea
+ * la sesión EAGER al arrancar. Las escenas NUNCA llaman `destroy` sobre la
  * sesión social: vive lo mismo que la pestaña (ver nota en
  * `chatClientSession`).
  */
@@ -31,6 +35,8 @@ import type { ChatStore } from './ChatStore';
 import { ensureSessionChatStore } from './chatSession';
 import { receiveDirectMessage, syncDmThreadAvailability } from './dmChat';
 import { getChatClient } from './chatClientSession';
+import { applyAvailabilitySetting } from './presenceView';
+import { getChatSettingsRepository } from '../data/ChatSettingsRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import type { AvailablePeer, ChatClient } from '../net/ChatClient';
 import { isValidRoomWord, sanitizePlayerName, sanitizeRoomWord } from '../net/protocol';
@@ -84,6 +90,17 @@ export class SocialChatSession {
       name: profileName.length > 0 ? profileName : PROFILE_FALLBACK_NAME,
       color: 0,
     });
+    // Auditoría #2 (MENOR 2) — disponibilidad persistida aplicada AL CREAR la
+    // sesión (que BootScene resuelve eager al arrancar): quien dejó el toggle
+    // en SÍ vuelve a figurar disponible desde la recarga, sin abrir el chat
+    // (criterio C2: SÍ = estoy en la sala pública). PRIVACIDAD: con NO
+    // (default) NI se toca el cliente — cero setAvailable, cero conexión;
+    // quien nunca activó no conecta jamás. La decisión vive en
+    // `applyAvailabilitySetting` (pura, testeada).
+    const chatSettings = getChatSettingsRepository(registry);
+    if (chatSettings.load().showAvailable) {
+      applyAvailabilitySetting(chatSettings, this.client);
+    }
     this.unsubscribes.push(
       this.client.onDm((fromPeerId, payload) => {
         receiveDirectMessage(
@@ -173,7 +190,8 @@ function looksLikeSocialSession(value: unknown): value is SocialChatSession {
  * Devuelve la sesión social de chat (la crea la primera vez y la cachea en
  * el registry). Respeta una inyectada antes con `setSocialChatSession`
  * (tests) — inversión de dependencias igual que `getChatClient`. Responderla
- * NO conecta a nada (privacidad by default).
+ * NO conecta nada por default (privacidad): solo el ajuste persistido SÍ
+ * aplicado en el CONSTRUCTOR enciende la sala pública (ver header).
  */
 export function getSocialChatSession(registry: RegistrySlice): SocialChatSession {
   const existing = registry.get(SOCIAL_CHAT_REGISTRY_KEY);

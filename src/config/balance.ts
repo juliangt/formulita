@@ -824,18 +824,41 @@ export const CHAT = {
   publicToggleWidth: 600,
   publicToggleHeight: 104,
   publicToggleFontSize: 30,
+  /* Auditoría #2 (COSMÉTICA 4) — hint de efimeridad: línea discreta entre el
+   * toggle (termina en y≈440) y el panel de la lista (empieza en 480), para
+   * que "chateé y desapareció todo" no sorprenda a quien reabre el chat. */
+  /** Y del hint "MENSAJES EFÍMEROS" (centro). */
+  ephemeralHintY: 462,
+  /** Tamaño de fuente del hint (px). */
+  ephemeralHintFontSize: 24,
   /** Borde superior del panel de disponibles (Y del borde). */
   peerListTopY: 480,
   /** Y de la primera fila de disponibles; una fila por peer. */
-  peerRowStartY: 530,
+  peerRowStartY: 512,
   /** Separación vertical entre filas de disponibles (px). */
-  peerRowHeight: 64,
+  peerRowHeight: 44,
   /** Tamaño de fuente de las filas de disponibles (px). */
   peerRowFontSize: 30,
   /** Cuadrado de color a la izquierda del nombre (px). */
   peerSwatchSize: 28,
-  /** Máximo de filas renderizadas (siempre las PRIMERAS). */
-  visiblePeers: 5,
+  /* Auditoría #2 (MENOR 1) — paginación de la lista: la malla pública llega
+   * cómoda a ~30–50 peers y 5 filas volvían inalcanzables a los 6+. v1 sin
+   * scroll: 8 filas por página + fila de paginación (◀ "N–M DE T" ▶) bajo el
+   * panel, solo cuando hay más filas que la página (la lógica vive en
+   * `paginatePeers`, pura y testeada). Filas: 512..836 con separación 44. */
+  /** Filas por página de la lista de disponibles. */
+  visiblePeers: 8,
+  /** Y de la fila de paginación (centro; bajo el panel de la lista). */
+  peerPageY: 890,
+  /** Tamaño de los botones ◀ / ▶ de paginación. */
+  peerPageButtonWidth: 96,
+  peerPageButtonHeight: 48,
+  /** Tamaño de fuente de los botones ◀ / ▶ (px). */
+  peerPageButtonFontSize: 26,
+  /** Separación en X de cada botón respecto del centro (px). */
+  peerPageOffsetX: 220,
+  /** Tamaño de fuente del indicador "N–M DE T" (px). */
+  peerPageLabelFontSize: 24,
   /** Y del detalle del peer tocado / errores de presencia (centro). */
   peerDetailY: 948,
   /** Tamaño de fuente del detalle (px). */

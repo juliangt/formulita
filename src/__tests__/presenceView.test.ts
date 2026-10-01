@@ -5,10 +5,14 @@ import {
   CHAT_TAB_LABELS,
   CHAT_TAB_ORDER,
   EMPTY_PEERS_HINT,
+  EPHEMERAL_MESSAGES_HINT,
   formatAvailablePeerRow,
   formatPeerDetail,
   isRoomTabEnabled,
+  paginatePeers,
   parseChatTab,
+  PEER_PAGE_NEXT_LABEL,
+  PEER_PAGE_PREV_LABEL,
   ROOM_TAB_MENU_HINT,
   toggleAvailability,
   visibleAvailablePeers,
@@ -198,5 +202,110 @@ describe('presenceView — detalle al tocar un disponible (hook de C3)', () => {
 
   it('nombre vacío degrada a PILOTO también en el detalle', () => {
     expect(formatPeerDetail({ peerId: 'zz-9', name: '', color: 0 }).text).toBe('PILOTO · zz-9');
+  });
+});
+
+/** Fixture: N peers con peerId estable y ordenado (como los entrega el cliente). */
+function makePeers(count: number): Array<{ peerId: string; name: string; color: number }> {
+  return Array.from({ length: count }, (_, index) => ({
+    peerId: `peer-${String(index).padStart(2, '0')}`,
+    name: `P${index}`,
+    color: index + 1,
+  }));
+}
+
+describe('presenceView — paginación de la lista (v1, auditoría #2 MENOR 1)', () => {
+  it('página única: todas las filas, sin botones (pageCount 1, hasNext/hasPrev false)', () => {
+    const peers = makePeers(5);
+    const page = paginatePeers(peers, 0, 8);
+
+    expect(page.rows).toEqual(peers);
+    expect(page.page).toBe(0);
+    expect(page.pageCount).toBe(1);
+    expect(page.hasNext).toBe(false); // sin botón ▶
+    expect(page.hasPrev).toBe(false); // sin botón ◀
+    expect(page.rangeLabel).toBe('1–5 DE 5');
+  });
+
+  it('página exacta sin sobrante: pageCount 1 también con N múltiplo del tamaño', () => {
+    const page = paginatePeers(makePeers(8), 0, 8);
+    expect(page.pageCount).toBe(1);
+    expect(page.rangeLabel).toBe('1–8 DE 8');
+  });
+
+  it('multi-página navega: página 0 muestra las PRIMERAS filas y habilita ▶', () => {
+    const peers = makePeers(20);
+    const page = paginatePeers(peers, 0, 8);
+
+    expect(page.rows).toEqual(peers.slice(0, 8));
+    expect(page.pageCount).toBe(3);
+    expect(page.hasPrev).toBe(false);
+    expect(page.hasNext).toBe(true);
+    expect(page.rangeLabel).toBe('1–8 DE 20');
+  });
+
+  it('multi-página navega: página intermedia con ◀ y ▶ habilitados', () => {
+    const peers = makePeers(20);
+    const page = paginatePeers(peers, 1, 8);
+
+    expect(page.rows).toEqual(peers.slice(8, 16));
+    expect(page.page).toBe(1);
+    expect(page.hasPrev).toBe(true);
+    expect(page.hasNext).toBe(true);
+    expect(page.rangeLabel).toBe('9–16 DE 20');
+  });
+
+  it('borde: última página PARCIAL muestra lo que queda y deshabilita ▶', () => {
+    const peers = makePeers(20);
+    const page = paginatePeers(peers, 2, 8);
+
+    expect(page.rows).toEqual(peers.slice(16, 20));
+    expect(page.page).toBe(2);
+    expect(page.pageCount).toBe(3);
+    expect(page.hasPrev).toBe(true);
+    expect(page.hasNext).toBe(false);
+    expect(page.rangeLabel).toBe('17–20 DE 20');
+  });
+
+  it('clamp: una página que DEJÓ de existir (la lista se encogió) cae a la última válida', () => {
+    const peers = makePeers(10); // 2 páginas de 8: pedida la 5 → clamp a la 1
+    const page = paginatePeers(peers, 5, 8);
+
+    expect(page.page).toBe(1);
+    expect(page.rows).toEqual(peers.slice(8, 10));
+    expect(page.rangeLabel).toBe('9–10 DE 10');
+    expect(page.hasNext).toBe(false);
+  });
+
+  it('clamp: página negativa o basura degrada a la primera', () => {
+    const peers = makePeers(12);
+    expect(paginatePeers(peers, -3, 8).page).toBe(0);
+    expect(paginatePeers(peers, Number.NaN, 8).page).toBe(0);
+    expect(paginatePeers(peers, Number.POSITIVE_INFINITY, 8).page).toBe(0); // no finita → 0
+    expect(paginatePeers(peers, 1.9, 8).page).toBe(1); // fracción → floor
+  });
+
+  it('lista vacía o pageSize inválido: resultado vacío sin páginas (la escena pinta el placeholder)', () => {
+    expect(paginatePeers([], 0, 8)).toEqual({
+      rows: [],
+      page: 0,
+      pageCount: 0,
+      rangeLabel: '',
+      hasNext: false,
+      hasPrev: false,
+    });
+    expect(paginatePeers(makePeers(5), 0, 0).pageCount).toBe(0);
+    expect(paginatePeers(makePeers(5), 0, -3).rows).toEqual([]);
+  });
+
+  it('labels de los botones táctiles de paginación: ◀ y ▶', () => {
+    expect(PEER_PAGE_PREV_LABEL).toBe('◀');
+    expect(PEER_PAGE_NEXT_LABEL).toBe('▶');
+  });
+});
+
+describe('presenceView — hint de efimeridad (§10, auditoría #2 COSMÉTICA 4)', () => {
+  it('el texto del hint avisa que los mensajes NO se guardan al cerrar', () => {
+    expect(EPHEMERAL_MESSAGES_HINT).toBe('MENSAJES EFÍMEROS — NO SE GUARDAN AL CERRAR');
   });
 });
