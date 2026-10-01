@@ -575,6 +575,25 @@ export const PLAYER_STALE_MS = 20000;
  */
 export const MATCH_OVER_GRACE_MS = 1500;
 
+/**
+ * Ventana de asentamiento del lobby (ms). Trystero descubre los peers de una
+ * malla de forma PROGRESIVA (cada DataChannel abre a su ritmo y dispara
+ * `onPeerJoin` en AMBOS extremos), así que un joiner que acaba de entrar
+ * necesita este tiempo para saber cuántos jugadores hay realmente en la sala:
+ *
+ * - El JOINER evalúa SU PROPIA admisión al vencer la ventana (o antes, si ya
+ *   ve 10 peers): si con él la sala supera `maxPlayers`, emite `roomFull` y
+ *   se va solo. Los RESIDENTES ya establecidos NUNCA se auto-expulsan por
+ *   capacidad (evita la implosión cuando el 11º conecta con todos a la vez).
+ * - El CREADOR observa la misma ventana como detección de COLISIÓN de
+ *   palabra: si un peer aparece antes de que haya compartido nada, asume que
+ *   otra sala usó la misma palabra y regenera la suya.
+ *
+ * ~1500 ms cubre el establecimiento de una malla de 10 peers sin hacer
+ * esperar de más al jugador que entra a una sala llena.
+ */
+export const JOIN_SETTLE_MS = 1500;
+
 /** Alfa de los autos fantasma (semitransparentes y ATRAVESABLES). */
 export const GHOST_ALPHA = 0.55;
 

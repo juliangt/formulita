@@ -45,6 +45,19 @@ describe('lobbyState — resolveHostPeerId (anfitrión)', () => {
   it('con un solo sobreviviente, él es el anfitrión', () => {
     expect(resolveHostPeerId([entry('solo')])).toBe('solo');
   });
+
+  it('con DOS creadores (colisión de palabra) gana el de peerId MENOR, en cualquier orden', () => {
+    // Corrección de auditoría (M4): el Map de metas se arma en orden distinto
+    // en cada cliente, así que el `find(isCreator)` crudo elegía anfitriones
+    // DISTINTOS con dos creadores. Ordenar candidatos por peerId hace la
+    // elección idéntica para cualquier vista del mismo roster.
+    const vistaA = [entry('zz-b'), entry('mm-y', true), entry('aa-x', true)];
+    const vistaB = [entry('aa-x', true), entry('zz-b'), entry('mm-y', true)];
+    const vistaC = [entry('mm-y', true), entry('aa-x', true), entry('zz-b')];
+    expect(resolveHostPeerId(vistaA)).toBe('aa-x');
+    expect(resolveHostPeerId(vistaB)).toBe('aa-x');
+    expect(resolveHostPeerId(vistaC)).toBe('aa-x');
+  });
 });
 
 describe('lobbyState — colores por roster', () => {

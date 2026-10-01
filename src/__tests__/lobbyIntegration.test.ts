@@ -159,21 +159,48 @@ describe('Integración lobby — migración de anfitrión', () => {
 });
 
 describe('Integración lobby — capacidad', () => {
-  it('sala de 10: el 11º recibe roomFull y no entra', () => {
+  it('sala de 10: el 11º entra, se asienta y se va solo con roomFull', () => {
     const { hub, host } = createRoom('Ana', ['B2', 'C3', 'D4', 'E5', 'F6', 'G7', 'H8', 'I9', 'J10']);
     expect(host.getRoster().length).toBe(10); // sala llena de verdad
+    const word = host.roomWord ?? '';
 
     const eleventh = new FakeNetClient(hub, { peerId: 'k-11' });
     const onRoomFull = vi.fn();
     eleventh.onRoomFull(onRoomFull);
-    eleventh.join({ appId: 'formulita-dev', roomWord: host.roomWord ?? '', name: 'Once' });
+    eleventh.join({ appId: 'formulita-dev', roomWord: word, name: 'Once' });
 
+    // Semántica del cliente real: el 11º ENTRA, evalúa SU admisión (en el
+    // fake el asentamiento es síncrono: la malla se descubrió completa) y se
+    // va solo — roomFull + leave.
     expect(onRoomFull).toHaveBeenCalledTimes(1);
     expect(eleventh.roomWord).toBeNull();
-    expect(host.getRoster().length).toBe(10); // el roster de nadie cambió
+    expect(host.getRoster().length).toBe(10); // el roster volvió a 10
+    expect(hub.roomSize(word)).toBe(10); // ...y se fue de la sala de verdad
   });
 
-  it('la sala número 10 sí entra (máximo exacto)', () => {
+  it('sin implosión: al entrar (y irse) el 11º, los 10 residentes siguen', () => {
+    // Regresión del bug de auditoría: los residentes se auto-expulsaban en
+    // cadena cuando el 11º conectaba con todos a la vez. Con la semántica de
+    // auto-admisión del joiner, ningún residente se va por capacidad.
+    const { hub, host, guests } = createRoom('Ana', ['B2', 'C3', 'D4', 'E5', 'F6', 'G7', 'H8', 'I9', 'J10']);
+    const word = host.roomWord ?? '';
+    const roomFullCalls = guests.map(() => vi.fn());
+    guests.forEach((guest, index) => guest.onRoomFull(roomFullCalls[index]));
+    const hostFull = vi.fn();
+    host.onRoomFull(hostFull);
+
+    const eleventh = new FakeNetClient(hub, { peerId: 'k-11' });
+    eleventh.join({ appId: 'formulita-dev', roomWord: word, name: 'Once' });
+
+    for (const call of [hostFull, ...roomFullCalls]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+    expect(guests.every((guest) => guest.roomWord !== null)).toBe(true);
+    expect(host.roomWord).toBe(word);
+    expect(hub.roomSize(word)).toBe(10);
+  });
+
+  it('la sala número 10 sí entra (máximo exacto) y queda admitida', () => {
     const { hub, host } = createRoom('Ana', ['B2', 'C3', 'D4', 'E5', 'F6', 'G7', 'H8', 'I9']);
     const tenth = new FakeNetClient(hub, { peerId: 'j-10' });
     const onRoomFull = vi.fn();
@@ -183,6 +210,7 @@ describe('Integración lobby — capacidad', () => {
     expect(onRoomFull).not.toHaveBeenCalled();
     expect(host.getRoster().length).toBe(10);
     expect(tenth.getRoster().length).toBe(10);
+    expect(hub.roomSize(host.roomWord ?? '')).toBe(10);
   });
 
   it('palabra inválida no entra a ningún lado (error visible)', () => {

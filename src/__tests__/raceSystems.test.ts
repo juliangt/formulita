@@ -3,7 +3,7 @@ import { FIXED_VIRTUAL_STEP, VIRTUAL_SPEED } from '../config/balance';
 import { parseMultiplayerInit } from '../net/protocol';
 import { hashStringToSeed } from '../net/roomRng';
 import { DifficultySystem } from '../systems/DifficultySystem';
-import { buildRaceSystems } from '../systems/RaceSystems';
+import { buildRaceSystems, shouldPersistProgress } from '../systems/RaceSystems';
 import { SpawnScheduler } from '../systems/SpawnSystem';
 import { VirtualClock } from '../systems/VirtualClock';
 
@@ -120,5 +120,14 @@ describe('buildRaceSystems — modo multi', () => {
     expect(raceA.entityRng!('rival', 0)()).not.toBe(raceA.entityRng!('rival', 1)());
     // La familia no cambia la semilla (el índice manda).
     expect(raceA.entityRng!('coin', 7)()).toBe(raceB.entityRng!('rival', 7)());
+  });
+});
+
+describe('shouldPersistProgress — el save es del modo solo (límite v1 §9)', () => {
+  it('la carrera SOLO persiste monedas/récords; la multi NUNCA', () => {
+    // isMulti es exactamente `multiInit !== null` (el campo con el que
+    // GameScene decide todo lo demás por modo).
+    expect(shouldPersistProgress(false)).toBe(true);
+    expect(shouldPersistProgress(true)).toBe(false);
   });
 });

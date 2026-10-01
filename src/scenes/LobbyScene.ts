@@ -362,6 +362,12 @@ export class LobbyScene extends Phaser.Scene {
 
   /** Pinta el roster (nombre + swatch de color) y habilita INICIAR. */
   private renderRoster(roster: PlayerInfo[]): void {
+    // M4 — colisión de palabra: si el cliente regeneró la sala durante la
+    // ventana de asentamiento, la palabra en pantalla puede quedar vieja;
+    // se re-sincroniza con cada roster (roomWord === palabra vigente).
+    if (this.wordText.visible) {
+      this.wordText.setText(this.client?.roomWord ?? this.wordText.text);
+    }
     for (const row of this.rosterRows) {
       row.destroy();
     }

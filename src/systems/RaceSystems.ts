@@ -48,3 +48,17 @@ export function buildRaceSystems(init: MultiplayerInit | null): RaceSystems {
     entityRng: (_family, spawnIndex) => deriveRng(seed, spawnIndex),
   };
 }
+
+/**
+ * ¿Esta carrera persiste su progreso (monedas/récords) en el save local?
+ *
+ * NO en multijugador (límite v1 §9: "los récords/monedas del modo solo no
+ * se mezclan con el multi"): las monedas y récords del save son economía del
+ * modo de UN jugador; una partida multi (init presente) no debe tocarlos
+ * aunque sus mismos caminos de código (crash, fin de partida, hidden/blur)
+ * disparen el guardado. `isMulti` es exactamente `multiInit !== null`, el
+ * mismo campo con el que GameScene decide todo lo demás por modo.
+ */
+export function shouldPersistProgress(isMulti: boolean): boolean {
+  return !isMulti;
+}

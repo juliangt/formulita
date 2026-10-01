@@ -8,12 +8,23 @@
  * capacidad, todas sacadas de `lobbyState`), así los tests de integración
  * del lobby prueban comportamiento, no transporte.
  *
+ * CAPACIDAD (semántica del cliente real, corrección de auditoría): el joiner
+ * ENTRA a la sala y evalúa SU PROPIA admisión — si con él la sala supera
+ * `maxPlayers` emite `roomFull` y se va solo. En la red real el joiner
+ * descubre la malla de forma progresiva y decide al vencer la ventana de
+ * asentamiento (`JOIN_SETTLE_MS`); en el fake la red es síncrona (la malla
+ * completa se descubre dentro de `connect()`), así que el asentamiento ya
+ * terminó al volver de `join()`. Los RESIDENTES establecidos nunca se
+ * auto-expulsan por capacidad. Lo que el fake NO modela son las heurísticas
+ * de TIEMPO del real (la ventana en sí y la regeneración de palabra del
+ * creador por colisión), que dependen del transporte.
+ *
  * Todo es síncrono: `clientA.start(...)` dispara `onStart` en B y C dentro
  * de la propia llamada a `start`.
  */
 
 import { hashStringToSeed, mulberry32 } from '../../net/roomRng';
-import { pickRoomWord, ROOM_WORDS } from '../../net/roomWords';
+import { pickRoomWord } from '../../net/roomWords';
 import type { NetClient } from '../../net/NetClient';
 import {
   isValidRoomWord,
@@ -174,13 +185,9 @@ export class FakeNetClient implements NetClient {
   }
 
   create({ appId: _appId, name }: { appId: string; name: string }): void {
-    // Palabra fresca: si el hub ya tiene sala con la sorteada, re-sortea
-    // (elige de la misma lista que producción, sin Math.random).
-    let word = pickRoomWord(this.rng);
-    for (let attempt = 0; this.hub.hasRoom(word) && attempt < ROOM_WORDS.length; attempt += 1) {
-      word = pickRoomWord(this.rng);
-    }
-    this.enterRoom(word, name, true);
+    // Igual que el cliente real: sorte UNA palabra y entra (sin re-intento;
+    // la colisión de palabra se detecta por red en el cliente real, no acá).
+    this.enterRoom(pickRoomWord(this.rng), name, true);
   }
 
   join({ appId: _appId, roomWord, name }: { appId: string; roomWord: string; name: string }): void {
@@ -188,14 +195,18 @@ export class FakeNetClient implements NetClient {
       this.emitError(`Palabra de sala inválida: "${roomWord}"`);
       return;
     }
-    // Capacidad ANTES de entrar: si la sala ya tiene 10, este sería el 11º.
-    if (isRoomFull(this.hub.roomSize(roomWord) + 1)) {
+    this.enterRoom(roomWord, name, false);
+    // Ventana de asentamiento (semántica del cliente real): el joiner ENTRA
+    // y luego evalúa su PROPIA admisión. En el fake el descubrimiento de la
+    // malla es síncrono y completo al volver de enterRoom (connect() vio a
+    // todos los presentes), así que la evaluación es inmediata: si la sala
+    // (ya con este cliente adentro) supera maxPlayers, se va solo.
+    if (this.word === roomWord && isRoomFull(this.hub.roomSize(roomWord))) {
       for (const handler of this.handlers.roomFull) {
         handler();
       }
-      return;
+      this.leave();
     }
-    this.enterRoom(roomWord, name, false);
   }
 
   getRoster(): PlayerInfo[] {

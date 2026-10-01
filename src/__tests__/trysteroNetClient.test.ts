@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MULTIPLAYER } from '../config/balance';
+import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
 import { mulberry32 } from '../net/roomRng';
 import { ROOM_WORDS } from '../net/roomWords';
 import {
+  MAX_WORD_REGEN_ATTEMPTS,
   resolveAppId,
   TrysteroNetClient,
   type ActionSendOptions,
@@ -84,21 +85,50 @@ class FakeTrysteroRoom implements TrysteroRoom {
 /**
  * Crea un cliente con roomFactory fake; `room()` resuelve a la ÚLTIMA room
  * creada (acceso DIFERIDO: solo existe después de create/join).
+ *
+ * La ventana de asentamiento (JOIN_SETTLE_MS) se inyecta como cola manual:
+ * `fireSettle()` la vence sin esperar tiempo real, y `settleWindows` registra
+ * cada programación (para assertar la constante y el orden).
  */
 function createClientFixture(selfPeerId: string): {
   client: TrysteroNetClient;
   room(): FakeTrysteroRoom;
+  /** TODAS las rooms creadas por el factory (en orden). */
+  allRooms(): FakeTrysteroRoom[];
+  /** Vence TODAS las ventanas de asentamiento pendientes (timer inyectado). */
+  fireSettle(): void;
+  /** Una entrada por ventana programada: los ms pedidos y si ya venció. */
+  readonly settleWindows: Array<{ ms: number; fired: boolean }>;
 } {
   let latest: FakeTrysteroRoom | null = null;
+  const rooms: FakeTrysteroRoom[] = [];
+  const pending: Array<() => void> = [];
+  const settleWindows: Array<{ ms: number; fired: boolean }> = [];
   const client = new TrysteroNetClient({
     roomFactory: (appId: string, roomId: string) => {
       const room = new FakeTrysteroRoom();
       room.calls.push({ appId, roomId });
+      rooms.push(room);
       latest = room;
       return room;
     },
     selfIdProvider: () => selfPeerId,
     wordRng: mulberry32(7),
+    settleScheduler: (callback: () => void, ms: number) => {
+      const window = { ms, fired: false };
+      settleWindows.push(window);
+      const fire = () => {
+        window.fired = true;
+        callback();
+      };
+      pending.push(fire);
+      return () => {
+        const index = pending.indexOf(fire);
+        if (index >= 0) {
+          pending.splice(index, 1);
+        }
+      };
+    },
   });
   return {
     client,
@@ -108,6 +138,15 @@ function createClientFixture(selfPeerId: string): {
       }
       return latest;
     },
+    fireSettle(): void {
+      while (pending.length > 0) {
+        pending.shift()!();
+      }
+    },
+    allRooms(): FakeTrysteroRoom[] {
+      return rooms;
+    },
+    settleWindows,
   };
 }
 
@@ -188,6 +227,7 @@ describe('TrysteroNetClient — roster y meta', () => {
     const net = createClientFixture('self');
     const client = net.client;
     client.create({ appId: 'app', name: 'Ana' });
+    net.fireSettle(); // ventana de colisión vencida: la sala es suya
 
     net.room().connectPeer('remoto');
 
@@ -203,6 +243,7 @@ describe('TrysteroNetClient — roster y meta', () => {
     const onRoster = vi.fn();
     client.onRosterChange(onRoster);
     client.create({ appId: 'app', name: 'Ana' });
+    net.fireSettle(); // ventana de colisión vencida: la sala es suya
 
     net.room().connectPeer('zz-remoto');
     net.room().receive<PeerMeta>('meta', { name: 'Beto', color: 0, isCreator: false }, 'zz-remoto');
@@ -220,6 +261,7 @@ describe('TrysteroNetClient — roster y meta', () => {
     const net = createClientFixture('self');
     const client = net.client;
     client.create({ appId: 'app', name: 'Ana' });
+    net.fireSettle(); // ventana de colisión vencida: la sala es suya
     net.room().connectPeer('r2');
     net.room().receive<PeerMeta>('meta', { name: '  Nombre   Larguísimo  ', color: 0, isCreator: false }, 'r2');
 
@@ -253,48 +295,89 @@ describe('TrysteroNetClient — roster y meta', () => {
     const net = createClientFixture('self');
     const client = net.client;
     client.create({ appId: 'app', name: 'Ana' });
+    net.fireSettle(); // ventana de colisión vencida: la sala es suya
     net.room().connectPeer('mudo');
 
     expect(client.getRoster().length).toBe(1);
   });
 });
 
-describe('TrysteroNetClient — capacidad (11º rechazado)', () => {
-  it('un joiner que ve la sala llena emite roomFull y se va', () => {
+describe('TrysteroNetClient — capacidad (ventana de asentamiento)', () => {
+  it('al entrar se programa UNA ventana de asentamiento de JOIN_SETTLE_MS', () => {
     const net = createClientFixture('joiner');
+    net.client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'J' });
+
+    expect(net.settleWindows.length).toBe(1);
+    expect(net.settleWindows[0].ms).toBe(JOIN_SETTLE_MS);
+    expect(net.settleWindows[0].fired).toBe(false);
+  });
+
+  it('(a) sala con 10 exactos: el 11º se asienta, ve 10 peers y se va solo con roomFull', () => {
+    const net = createClientFixture('once');
     const client = net.client;
     const onRoomFull = vi.fn();
     client.onRoomFull(onRoomFull);
     client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'Once' });
 
-    // La sala ya tiene 10 peers conectados cuando llego.
+    // Descubrimiento progresivo de los 10 residentes (cada conexión dispara
+    // onPeerJoin en el joiner también — patrón Trystero).
+    for (let i = 0; i < MULTIPLAYER.maxPlayers; i += 1) {
+      net.room().connectPeer(`p${i}`);
+    }
+
+    // Con el 10º peer visto (11 contándose) anticipa el fallo SIN timer.
+    expect(onRoomFull).toHaveBeenCalledTimes(1);
+    expect(net.room().left).toBe(true);
+    expect(client.roomWord).toBeNull();
+    expect(net.settleWindows[0].fired).toBe(false); // anticipado, no vencido
+  });
+
+  it('(a-timer) el vencimiento de la ventana también expulsa al que está de más', () => {
+    const net = createClientFixture('once');
+    const client = net.client;
+    const onRoomFull = vi.fn();
+    client.onRoomFull(onRoomFull);
+    client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'Once' });
+
+    // 10 peers PRESENTES sin disparar onPeerJoin (la anticipación no corre):
+    // solo el vencimiento de la ventana decide la admisión.
     for (let i = 0; i < MULTIPLAYER.maxPlayers; i += 1) {
       net.room().peers[`p${i}`] = {};
     }
-    net.room().connectPeer('p0'); // dispara el control de capacidad
+    net.fireSettle();
 
     expect(onRoomFull).toHaveBeenCalledTimes(1);
     expect(net.room().left).toBe(true);
     expect(client.roomWord).toBeNull();
   });
 
-  it('el creador NUNCA se auto-rechaza (la sala es suya)', () => {
-    const net = createClientFixture('creator');
+  it('(b) un joiner RESIDENTE permanece cuando entra el 11º (no implosión)', () => {
+    // Este es el bug de la auditoría: los residentes veían 10 peers + ellos
+    // mismos = 11 y se auto-expulsaban en cadena al conectar el 11º.
+    const net = createClientFixture('residente');
     const client = net.client;
     const onRoomFull = vi.fn();
     client.onRoomFull(onRoomFull);
-    client.create({ appId: 'app', name: 'Host' });
+    client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'Residente' });
 
-    for (let i = 0; i < MULTIPLAYER.maxPlayers; i += 1) {
+    // Era el #10 legítimo (9 residentes + él): ventana vencida → admitido.
+    for (let i = 0; i < MULTIPLAYER.maxPlayers - 1; i += 1) {
       net.room().connectPeer(`p${i}`);
     }
+    net.fireSettle();
+    expect(onRoomFull).not.toHaveBeenCalled();
 
+    // Entra el 11º (el joiner residente lo descubre): se queda, pase lo que
+    // pase con el contador de capacidad. El que se va solo es el 11º (que
+    // evalúa SU propia admisión en su propia ventana).
+    net.room().connectPeer('p9');
     expect(onRoomFull).not.toHaveBeenCalled();
     expect(net.room().left).toBe(false);
+    expect(client.roomWord).toBe('PARRILLA');
   });
 
-  it('con 10 en total (9 remotos + yo) no hay rechazo', () => {
-    const net = createClientFixture('joiner');
+  it('(c) joiner #10 legítimo con 9 peers: admitido al vencer la ventana', () => {
+    const net = createClientFixture('diez');
     const client = net.client;
     const onRoomFull = vi.fn();
     client.onRoomFull(onRoomFull);
@@ -303,11 +386,86 @@ describe('TrysteroNetClient — capacidad (11º rechazado)', () => {
     for (let i = 0; i < MULTIPLAYER.maxPlayers - 1; i += 1) {
       net.room().connectPeer(`p${i}`);
     }
+    net.fireSettle(); // 9 peers + yo = 10: cabe justo
 
     expect(onRoomFull).not.toHaveBeenCalled();
     expect(net.room().left).toBe(false);
+    expect(net.settleWindows[0].fired).toBe(true);
     // 9 peers remotos + yo = 10 conectados.
     expect(Object.keys(net.room().getPeers()).length + 1).toBe(MULTIPLAYER.maxPlayers);
+  });
+
+  it('el creador NUNCA se auto-rechaza por capacidad (la sala es suya)', () => {
+    const net = createClientFixture('creator');
+    const client = net.client;
+    const onRoomFull = vi.fn();
+    client.onRoomFull(onRoomFull);
+    client.create({ appId: 'app', name: 'Host' });
+    net.fireSettle(); // ventana de colisión vencida: la sala es suya
+
+    for (let i = 0; i < MULTIPLAYER.maxPlayers; i += 1) {
+      net.room().connectPeer(`p${i}`);
+    }
+
+    expect(onRoomFull).not.toHaveBeenCalled();
+    expect(net.room().left).toBe(false);
+  });
+
+  it('leave() cancela la ventana pendiente (el timer vencido ya no decide nada)', () => {
+    const net = createClientFixture('joiner');
+    const client = net.client;
+    client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'J' });
+
+    client.leave();
+    net.fireSettle(); // no debe re-entrar ni emitir nada post-leave
+
+    expect(client.roomWord).toBeNull();
+    expect(client.getRoster()).toEqual([]);
+  });
+});
+
+describe('TrysteroNetClient — colisión de palabra (creador, plan §4)', () => {
+  it('un peer durante la ventana ⇒ regenera palabra y sala nuevas', () => {
+    const net = createClientFixture('creador');
+    const client = net.client;
+    client.create({ appId: 'app', name: 'Ana' });
+    const firstRoom = net.room();
+    const firstWord = firstRoom.calls[0].roomId;
+
+    // Un peer aparece antes de que el creador haya compartido la palabra:
+    // colisión (otra sala usó la misma palabra), no un invitado.
+    firstRoom.connectPeer('intruso');
+
+    expect(net.allRooms().length).toBe(2); // sala regenerada
+    const secondWord = net.room().calls[0].roomId;
+    expect(secondWord).not.toBe(firstWord);
+    expect(ROOM_WORDS).toContain(secondWord);
+    expect(client.roomWord).toBe(secondWord);
+    expect(firstRoom.left).toBe(true); // la sala colisionada quedó abandonada
+    // El roster es el de la sala nueva: solo el creador.
+    expect(client.getRoster()).toEqual([
+      { peerId: 'creador', name: 'Ana', color: MULTIPLAYER.palette[0] },
+    ]);
+  });
+
+  it('tras MAX_WORD_REGEN_ATTEMPTS colisiones consecutivas se queda (tope anti-bucle)', () => {
+    const net = createClientFixture('creador');
+    const client = net.client;
+    client.create({ appId: 'app', name: 'Ana' });
+
+    // Cada sala nueva colisiona igual (un peer aparece en cada ventana).
+    for (let i = 0; i < MAX_WORD_REGEN_ATTEMPTS; i += 1) {
+      net.room().connectPeer('intruso');
+    }
+    expect(net.allRooms().length).toBe(1 + MAX_WORD_REGEN_ATTEMPTS);
+
+    // Tope agotado: la siguiente sala NO se regenera aunque aparezcan peers.
+    const lastRoom = net.room();
+    const lastWord = lastRoom.calls[0].roomId;
+    lastRoom.connectPeer('otro-intruso');
+    expect(net.allRooms().length).toBe(1 + MAX_WORD_REGEN_ATTEMPTS);
+    expect(client.roomWord).toBe(lastWord);
+    expect(lastRoom.left).toBe(false);
   });
 });
 

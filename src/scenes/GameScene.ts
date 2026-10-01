@@ -47,7 +47,7 @@ import { KeyboardSource } from '../systems/KeyboardSource';
 import { PauseSystem } from '../systems/PauseSystem';
 import { TouchSource } from '../systems/TouchSource';
 import { ScoreSystem } from '../systems/ScoreSystem';
-import { buildRaceSystems } from '../systems/RaceSystems';
+import { buildRaceSystems, shouldPersistProgress } from '../systems/RaceSystems';
 import { SpawnSystem } from '../systems/SpawnSystem';
 import { SpeedSystem, composeEffectiveSpeed } from '../systems/SpeedSystem';
 import { TurboSystem } from '../systems/TurboSystem';
@@ -845,8 +845,17 @@ export class GameScene extends Phaser.Scene {
    * guardadas — hidden/blur puede dispararse varias veces — y los récords
    * toman el máximo (el puntaje de una carrera nunca decrece, así que
    * bancarlos anticipadamente no cambia el resultado final).
+   *
+   * M2 — NUNCA persiste en multijugador (límite v1 §9): monedas y récords
+   * del save son economía del modo solo; una carrera multi no la toca aunque
+   * sus mismos caminos (eliminateSelf, concludeMatch, HIDDEN/BLUR) lleguen
+   * acá. La decisión vive en `shouldPersistProgress` (misma fuente que el
+   * cableado por modo de `buildRaceSystems`).
    */
   private readonly persistProgress = (): void => {
+    if (!shouldPersistProgress(this.multiInit !== null)) {
+      return;
+    }
     const current = this.saveRepository.load();
     const unbankedCoins = Math.max(0, this.coins - this.bankedCoins);
     this.saveRepository.save({
