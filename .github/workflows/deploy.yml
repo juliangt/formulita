@@ -1,0 +1,79 @@
+# Deploy a GitHub Pages (M3) — hosting estático, cero servidores.
+#
+# Encaja con la filosofía P2P del issue #1: el juego viaja completo al
+# navegador y los peers se conectan entre sí (Trystero/WebRTC); GitHub Pages
+# solo sirve los archivos estáticos de dist/.
+#
+# Requisitos (una sola vez, ver README §Publicación):
+#   1. Settings → Pages → Source: "GitHub Actions".
+#   2. Settings → Secrets and variables → Actions → Variables:
+#      VITE_TRYSTERO_APP_ID (p. ej. "formulita").
+#
+# El build usa --base=/formulita/ porque Pages sirve los sitios de proyecto
+# bajo un subpath: sin ese flag, el bundle buscaría /assets/... y recibiría
+# 404 (pantalla en blanco).
+
+name: Deploy a GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Un deploy a la vez; los push nuevos esperan (no cancelan un deploy en curso).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (tests + bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tests (Vitest)
+        run: npm test
+
+      # Base con subpath de Pages + appId de la variable de repo (runtime,
+      # no build-time: si falta, el build igual pasa y el lobby muestra el
+      # error claro al abrir el multijugador).
+      - name: Build de producción
+        run: npm run build -- --base=/formulita/
+        env:
+          VITE_TRYSTERO_APP_ID: ${{ vars.VITE_TRYSTERO_APP_ID }}
+
+      - name: Configurar Pages
+        uses: actions/configure-pages@v5
+
+      - name: Subir artefacto
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar en Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
