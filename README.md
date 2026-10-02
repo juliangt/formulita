@@ -233,10 +233,9 @@ Los workflows corren **solo manualmente** — pestaña **Actions** → elegir wo
 
 Requisitos (una sola vez, quien administra el repo):
 
-1. **Settings → Pages → Source: "GitHub Actions"**.
-2. **Settings → Secrets and variables → Actions → Variables** (no Secrets): `VITE_TRYSTERO_APP_ID` (p. ej. `formulita`).
+1. **Settings → Secrets and variables → Actions → Variables** (no Secrets): `VITE_TRYSTERO_APP_ID` (p. ej. `formulita`).
 
-> Sin la variable el sitio se publica igual (el appId es runtime, no build-time), pero el multijugador mostrará el error de configuración faltante al entrar al lobby.
+> El sitio de Pages no requiere configuración manual: `deploy.yml` usa `actions/configure-pages` con `enablement: true`, así que habilita el sitio (source "GitHub Actions") en el propio run si aún no existe. Sin la variable, en cambio, el sitio se publica igual (el appId es runtime, no build-time), pero el multijugador mostrará el error de configuración faltante al entrar al lobby.
 
 ---
 

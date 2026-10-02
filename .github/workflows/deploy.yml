@@ -5,9 +5,10 @@
 # solo sirve los archivos estáticos de dist/.
 #
 # Requisitos (una sola vez, ver README §Publicación):
-#   1. Settings → Pages → Source: "GitHub Actions".
-#   2. Settings → Secrets and variables → Actions → Variables:
+#   1. Settings → Secrets and variables → Actions → Variables:
 #      VITE_TRYSTERO_APP_ID (p. ej. "formulita").
+# Pages no requiere configuración manual: configure-pages usa enablement:true
+# y habilita el sitio (source "GitHub Actions") si aún no existe (fix #7).
 #
 # El build usa --base=/formulita/ porque Pages sirve los sitios de proyecto
 # bajo un subpath: sin ese flag, el bundle buscaría /assets/... y recibiría
@@ -58,6 +59,9 @@ jobs:
 
       - name: Configurar Pages
         uses: actions/configure-pages@v5
+        with:
+          # Habilita el sitio si no existe, en vez de fallar con 404 (fix #7).
+          enablement: true
 
       - name: Subir artefacto
         uses: actions/upload-pages-artifact@v3
