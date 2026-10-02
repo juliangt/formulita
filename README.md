@@ -12,9 +12,9 @@ Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% p
 | --- | --- | --- | --- | --- |
 | **Infinito** | JUGAR | 1 | No | Carrera infinita esquivable: turbo, DRS, monedas, pickups, rivales, restos y aceite; la dificultad sube con la distancia. |
 | **Gran Premio** | GRAN PREMIO | 1 vs 7 CPU | No (100% offline) | 3 vueltas (~2 min) por 5 pistas de F1 contra rivales con IA de línea de carrera; 3 dificultades y récords por pista × dificultad. |
-| **Batalla** | MULTIJUGADOR | 2–10 | Sí (P2P, sin servidor) | Todos corren la MISMA pista (definida por la palabra de sala); gana el que más monedas juntó. Eliminado = espectador. |
-| **Carrera** | MULTIJUGADOR | 2–10 | Sí (P2P, sin servidor) | Vueltas por circuito cerrado con ranking en vivo y podio final; la pista y la parrilla son idénticas en todos los dispositivos. |
-| **Chat social** | CHAT | — | Sí (P2P) | Chat de sala, presencia pública **opt-in** con mensajes directos e invitaciones a partida; nadie aparece en ninguna lista hasta habilitarlo. |
+| **Batalla** | EN LÍNEA | 2–10 | Sí (P2P, sin servidor) | Todos corren la MISMA pista (definida por la palabra de sala); gana el que más monedas juntó. Eliminado = espectador. |
+| **Carrera** | EN LÍNEA | 2–10 | Sí (P2P, sin servidor) | Vueltas por circuito cerrado con ranking en vivo y podio final; la pista y la parrilla son idénticas en todos los dispositivos. |
+| **Chat social** | EN LÍNEA → CHAT | — | Sí (P2P) | Chat de sala, presencia pública **opt-in** con mensajes directos e invitaciones a partida; nadie aparece en ninguna lista hasta habilitarlo. |
 
 ---
 
@@ -143,7 +143,7 @@ El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde �
 
 Ambos modos multijugador corren sobre **Trystero sobre WebRTC** (señalización BitTorrent — `@trystero-p2p/torrent`): no hay servidor propio. La **palabra de sala** (5–9 letras, pronunciable por teléfono) es la clave que define la pista: todos los clientes de una sala generan exactamente el mismo contenido sin negociar nada por la red.
 
-**Cómo entrar**: Menú → **MULTIJUGADOR** → crear sala (el juego te da la palabra) o unirse con la palabra del anfitrión. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna en función del roster (determinista e idéntico para todos). Con 2 o más en sala, el **anfitrión** elige modo (**BATALLA** o **CARRERA**) y, en carrera, la pista (con miniatura); aprieta **INICIAR** y el countdown arranca sincronizado en todos.
+**Cómo entrar**: Menú → **EN LÍNEA** → poné tu nombre → crear sala (el juego te da la palabra) o unirse con la palabra del anfitrión. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna en función del roster (determinista e idéntico para todos). Con 2 o más en sala, el **anfitrión** elige modo (**BATALLA** o **CARRERA**) y, en carrera, la pista (con miniatura); aprieta **INICIAR** y el countdown arranca sincronizado en todos.
 
 ### Batalla (battle royale por monedas)
 
@@ -178,8 +178,8 @@ Pista **determinista por seed de sala + reloj virtual** de generación (misma di
 ### Probarlo local
 
 1. `npm run dev` y abrí **dos pestañas** de la misma URL (o dos dispositivos de la red por la IP LAN — ver [Empezar](#empezar)).
-2. Pestaña 1: MULTIJUGADOR → crear sala, anotá la palabra.
-3. Pestaña 2 (o el celular): MULTIJUGADOR → unirse con esa palabra.
+2. Pestaña 1: EN LÍNEA → crear sala, anotá la palabra.
+3. Pestaña 2 (o el celular): EN LÍNEA → unirse con esa palabra.
 4. **INICIAR** desde la pestaña del anfitrión.
 
 ---
@@ -192,7 +192,7 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 
 ### Cómo se usa
 
-1. Botón **CHAT**: en el menú (con badge de no leídos `CHAT · N`) y en el lobby. Abre el overlay con dos tabs.
+1. Menú → **EN LÍNEA** → botón **CHAT** (el botón del menú acumula el badge de no leídos: `EN LÍNEA · N`); también está en el lobby. Abre el overlay con dos tabs.
 2. Tab **SALA**: el hilo de la partida actual (solo existe dentro de una partida; desde el menú aparece deshabilitado con aviso).
 3. Tab **PÚBLICO**: toggle **MOSTRARME DISPONIBLE** (SÍ/NO) + lista en vivo de quienes se mostraron. Tocar una fila abre el **hilo de DM** (VOLVER · BLOQUEAR/DESBLOQUEAR · INVITAR).
 4. **INVITAR A PARTIDA** (solo si estás en un lobby): manda tu palabra de sala por DM; el otro ve el banner «N TE INVITÓ A "PALABRA"» con **UNIRSE** (pre-carga la palabra) / **IGNORAR**.
@@ -208,7 +208,7 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 
 **Límites de la v1**: sin historial ni offline ni notificaciones (nada llega con la pestaña cerrada), sin moderación central (la defensa es client-side: sanitize + throttle + bloqueo), malla pública cómoda hasta ~30–50 presentes por sala.
 
-**Probarlo**: igual que el multijugador — 2–3 pestañas/dispositivos, CHAT → tab PÚBLICO → MOSTRARME DISPONIBLE. Requiere `VITE_TRYSTERO_APP_ID` (ver [Configuración](#configuración-y-publicación)).
+**Probarlo**: igual que el multijugador — 2–3 pestañas/dispositivos, EN LÍNEA → CHAT → tab PÚBLICO → MOSTRARME DISPONIBLE. Requiere `VITE_TRYSTERO_APP_ID` (ver [Configuración](#configuración-y-publicación)).
 
 ---
 
