@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { MENU } from '../config/balance';
+import { MENU, TRACK_PICKER } from '../config/balance';
 import { onlineMenuButtonLabel } from '../chat/dmView';
 import { PLAYER_PROFILE_REGISTRY_KEY, type PlayerProfile } from '../data/PlayerProfileRepository';
 import { TRACKS } from '../race/tracks';
@@ -403,7 +403,7 @@ describe('MenuScene — JUGAR sigue arrancando GameScene (layout #22)', () => {
 });
 
 describe('MenuScene — GRAN PREMIO sigue abriendo el selector de pistas', () => {
-  it('abre el overlay GRAN PREMIO con las 5 pistas del registro', () => {
+  it('abre el overlay GRAN PREMIO con las 6 pistas del registro', () => {
     const harness = createMenuHarness();
 
     harness.openTrackPicker();
@@ -445,6 +445,82 @@ describe('MenuScene — GRAN PREMIO sigue abriendo el selector de pistas', () =>
 
     expect(harness.findText('GRAN PREMIO')).toBeUndefined();
     expect(harness.sceneStart).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 3b. Layout del selector de GRAN PREMIO con 6 pistas (issue #26)     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * El registro pasó a 6 pistas y el overlay compactó sus filas para que la
+ * última no pise el bloque de DIFICULTAD (#26). Los invariantes de las
+ * CONSTANTES viven en `balance.test.ts` (aritmética pura sobre
+ * `TRACK_PICKER`); acá se verifica la otra mitad del contrato: que la escena
+ * pinta las filas EN las posiciones de esas constantes (nadie hardcodeó un
+ * `y` paralelo) y que lo dibujado — leído del contenedor real del overlay —
+ * no se solapa.
+ */
+describe('MenuScene — GRAN PREMIO: las 6 filas viven dentro del panel (#26)', () => {
+  /** Type guards sobre los fakes del harness. */
+  const isContainer = (child: unknown): child is FakeContainer =>
+    typeof child === 'object' && child !== null && 'list' in child;
+  const isText = (child: unknown): child is FakeText =>
+    typeof child === 'object' && child !== null && 'text' in child;
+
+  /** Textos hijos directos de un contenedor (la etiqueta de un botón). */
+  const ownTexts = (container: FakeContainer): FakeText[] => container.list.filter(isText);
+
+  /** Borde inferior de una fila completa: el hint cuelga bajo el botón. */
+  const rowBottom = (rowY: number): number =>
+    rowY + TRACK_PICKER.rowHeight / 2 + TRACK_PICKER.hintGap + TRACK_PICKER.hintFontSize;
+
+  it('pinta una fila por pista en las Y de TRACK_PICKER y sin solapamientos', () => {
+    const harness = createMenuHarness();
+    harness.openTrackPicker();
+    const overlay = harness.trackOverlayContainer();
+
+    // Cada fila es un contenedor con exactamente 2 hijos: el botón
+    // (MenuButton) y el hint del circuito inspirador.
+    const rowContainers = overlay.list.filter(isContainer).filter((candidate) => candidate.list.length === 2);
+    expect(rowContainers, 'una fila por pista del registro').toHaveLength(TRACKS.length);
+
+    // El centro Y de cada fila es el que dicta la constante (orden TRACKS).
+    const rowYs = rowContainers.map((row) => {
+      const button = row.list.filter(isContainer).find((candidate) =>
+        ownTexts(candidate).some((label) => TRACKS.some((track) => track.name === label.text)),
+      );
+      expect(button, 'cada fila contiene el botón con el nombre de una pista').toBeDefined();
+      return (button as FakeContainer).y;
+    });
+    rowYs.forEach((y, index) => {
+      expect(y).toBe(TRACK_PICKER.rowStartY + index * TRACK_PICKER.rowStep);
+    });
+
+    // Sin solapamientos entre filas (botón arranca debajo del hint previo).
+    for (let index = 1; index < rowYs.length; index += 1) {
+      expect(rowYs[index] - TRACK_PICKER.rowHeight / 2, `la fila ${index} pisa la fila ${index - 1}`)
+        .toBeGreaterThanOrEqual(rowBottom(rowYs[index - 1]));
+    }
+
+    // Condición dura del issue: hint de la última fila ≥ 16 px arriba del
+    // rótulo DIFICULTAD DEL RIVAL (que la escena dibuja en difficultyLabelY).
+    const label = harness.findText('DIFICULTAD DEL RIVAL');
+    expect(label, 'falta el rótulo DIFICULTAD DEL RIVAL').toBeDefined();
+    expect(label?.y).toBe(TRACK_PICKER.difficultyLabelY);
+    expect(
+      rowBottom(rowYs[rowYs.length - 1]) + 16,
+      'el hint de la última fila pisa el rótulo de dificultad',
+    ).toBeLessThanOrEqual(label!.y - TRACK_PICKER.difficultyLabelFontSize / 2);
+
+    // CERRAR debajo de los botones de dificultad y completo dentro del panel.
+    expect(
+      TRACK_PICKER.closeY - TRACK_PICKER.closeHeight / 2,
+      'CERRAR pisa los botones de dificultad',
+    ).toBeGreaterThanOrEqual(TRACK_PICKER.difficultyRowY + TRACK_PICKER.difficultyButtonHeight / 2);
+    expect(TRACK_PICKER.closeY + TRACK_PICKER.closeHeight / 2).toBeLessThanOrEqual(
+      TRACK_PICKER.panelY + TRACK_PICKER.panelHeight / 2,
+    );
   });
 });
 

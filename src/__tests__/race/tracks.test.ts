@@ -5,7 +5,8 @@ import { TRACKS, buildTrackPath, getTrackById } from '../../race/tracks';
 import type { TrackDefinition } from '../../race/tracks';
 
 /**
- * Validación pura de las 5 pistas (issue #9, V0): el test compila sólo si el
+ * Validación pura de las 6 pistas del registro (issues #9 y #26): el test
+ * compila sólo si el
  * diseño pasa. Para cada pista se verifica que:
  * - la trayectoria CIERRA (sample(0) ≡ sample(L));
  * - NO se autointersecta (barrido de segmentos de la polilínea densa,
@@ -47,10 +48,10 @@ function segmentsIntersect(
 }
 
 describe('tracks — registro', () => {
-  it('hay exactamente 5 pistas con ids únicos', () => {
-    expect(TRACKS).toHaveLength(5);
+  it('hay exactamente 6 pistas con ids únicos', () => {
+    expect(TRACKS).toHaveLength(6);
     const ids = TRACKS.map((t) => t.id);
-    expect(new Set(ids).size).toBe(5);
+    expect(new Set(ids).size).toBe(6);
   });
 
   it('getTrackById resuelve por id y da undefined para desconocidos', () => {
@@ -153,5 +154,9 @@ describe('tracks — invariantes geométricos y físicos', () => {
 
   it('SUZUKA cierra, no se cruza (sin cruce en 8) y dura 36–44 s', () => {
     validate(getTrackById('suzuka')!);
+  });
+
+  it('GÁLVEZ cierra, no se cruza, es sostenible y dura 36–44 s', () => {
+    validate(getTrackById('galvez')!);
   });
 });

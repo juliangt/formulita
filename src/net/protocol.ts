@@ -292,6 +292,12 @@ export interface RaceStartInit {
  * siquiera tiene la forma de un start de #1 (seed/players/startAt); un
  * `gameMode` ajeno o ausente degrada a batalla y un `trackId` desconocido
  * degrada a la pista por default.
+ *
+ * Compatibilidad (#26): el `trackId` viaja como string libre, así que un
+ * cliente VIEJO que recibe el id de una pista que su versión aún no tiene
+ * (p. ej. `galvez`) la degrada en silencio a `TRACKS[0]` (MÓNACO) y la
+ * carrera arranca igual — cada uno en su pista. Detectar el desfasaje en
+ * el lobby es un follow-up no bloqueante.
  */
 export function parseRaceInit(raw: unknown): RaceStartInit | null {
   if (typeof raw !== 'object' || raw === null) {

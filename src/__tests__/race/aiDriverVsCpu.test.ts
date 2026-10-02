@@ -67,8 +67,9 @@ const OFF_TRACK_MAX_RATIO = 0.02;
  * (`speedPct` 0.97, `lineQuality` 0.97, errores y goma incluidos):
  *
  *   monaco: 24583 · monza: 24450 · silverstone: 24350 · spa: 24444 ·
- *   suzuka: 24656   (0.0% del tiempo fuera de asfalto en las 5 pistas;
- *   la primera vuelta cuesta ~1.1 s más: arranca parado en la parrilla).
+ *   suzuka: 24656 · galvez: 24317   (0.0% del tiempo fuera de asfalto en
+ *   las 6 pistas; la primera vuelta cuesta ~1.1 s más: arranca parado en
+ *   la parrilla).
  *
  * La banda del test es ±12% alrededor de lo medido: bastante más rápido que
  * esto sólo sería posible cortando el pasto (invalida), bastante más lento
@@ -80,6 +81,7 @@ const MEASURED_AVG_LAP_MS: Record<TrackDefinition['id'], number> = {
   silverstone: 24350,
   spa: 24444,
   suzuka: 24656,
+  galvez: 24317,
 };
 
 /** Ancho de la banda de vuelta alrededor de lo medido (±12%). */
@@ -395,10 +397,10 @@ describe('Sim determinista — misma seed ⇒ mismo resultado', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* Vueltas completas: no-stuck en 5 pistas × 3 dificultades            */
+/* Vueltas completas: no-stuck en 6 pistas × 3 dificultades            */
 /* ------------------------------------------------------------------ */
 
-describe('El driver completa vueltas en las 5 pistas (no queda stuck)', () => {
+describe('El driver completa vueltas en las 6 pistas (no queda stuck)', () => {
   for (const track of TRACKS) {
     for (const difficulty of ['easy', 'normal', 'hard'] as const) {
       it(`${track.id} · ${difficulty}: completa las 3 vueltas avanzando y en asfalto`, () => {

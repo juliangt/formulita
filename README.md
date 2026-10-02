@@ -11,7 +11,7 @@ Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% p
 | Modo | Botón del menú | Jugadores | ¿Necesita red? | En una línea |
 | --- | --- | --- | --- | --- |
 | **Infinito** | JUGAR | 1 | No | Carrera infinita esquivable: turbo, DRS, monedas, pickups, rivales, restos y aceite; la dificultad sube con la distancia. |
-| **Gran Premio** | GRAN PREMIO | 1 vs 7 CPU | No (100% offline) | 3 vueltas (~2 min) por 5 pistas de F1 contra rivales con IA de línea de carrera; 3 dificultades y récords por pista × dificultad. |
+| **Gran Premio** | GRAN PREMIO | 1 vs 7 CPU | No (100% offline) | 3 vueltas (~2 min) por 6 pistas de F1 contra rivales con IA de línea de carrera; 3 dificultades y récords por pista × dificultad. |
 | **Batalla** | EN LÍNEA | 2–10 | Sí (P2P, sin servidor) | Todos corren la MISMA pista (definida por la palabra de sala); gana el que más monedas juntó. Eliminado = espectador. |
 | **Carrera** | EN LÍNEA | 2–10 | Sí (P2P, sin servidor) | Vueltas por circuito cerrado con ranking en vivo y podio final; la pista y la parrilla son idénticas en todos los dispositivos. |
 | **Chat social** | EN LÍNEA → CHAT | — | Sí (P2P) | Chat de sala, presencia pública **opt-in** con mensajes directos e invitaciones a partida; nadie aparece en ninguna lista hasta habilitarlo. |
@@ -112,7 +112,7 @@ El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde �
 
 ## Gran Premio (contra la CPU)
 
-**Una carrera de F1 de verdad contra 7 rivales con IA, 100% local y offline.** Elegís pista y dificultad, arrancás desde una parrilla de 8 autos y corré **3 vueltas (~2 min)** por cualquiera de las **5 pistas** (MÓNACO, MONZA, SILVERSTONE, SPA, SUZUKA). No necesita red — ni matchmaking ni sincronización: los rivales se simulan en tu dispositivo, con la MISMA física del circuito que el resto de los modos (el auto de cada rival decide su manejo, no hace trampas de velocidad).
+**Una carrera de F1 de verdad contra 7 rivales con IA, 100% local y offline.** Elegís pista y dificultad, arrancás desde una parrilla de 8 autos y corré **3 vueltas (~2 min)** por cualquiera de las **6 pistas** (MÓNACO, MONZA, SILVERSTONE, SPA, SUZUKA, GÁLVEZ). No necesita red — ni matchmaking ni sincronización: los rivales se simulan en tu dispositivo, con la MISMA física del circuito que el resto de los modos (el auto de cada rival decide su manejo, no hace trampas de velocidad).
 
 ### Cómo se juega
 
@@ -164,6 +164,8 @@ Vueltas por un circuito cerrado, como la F1 de verdad: parrilla de salida detrá
 ### Cómo funciona por dentro
 
 Pista **determinista por seed de sala + reloj virtual** de generación (misma distancia ⇒ mismas oleadas en todos), rivales como **autos fantasma interpolados** (estado propio a 10 Hz, render a t−100 ms, semitransparentes y atravesables) y **stats congeladas** al crash/fin, de modo que cada cliente computa el MISMO leaderboard/podio sin negociar nada por la red. En carrera, cada cliente aplica además un **filtro de plausibilidad local** (un avance físicamente imposible se ignora) — no hay servidor árbitro.
+
+**Compatibilidad de pistas entre versiones**: el `start` del anfitrión viaja con el `trackId` como string. Un cliente que recibe el id de una pista que su versión no conoce (p. ej. `galvez` hacia un cliente anterior al issue #26) la degrada **en silencio** a la primera del registro (**MÓNACO**): la carrera arranca igual, pero ese cliente corre otra pista. Detectar el desfasaje en el lobby antes de INICIAR es un follow-up no bloqueante.
 
 ### Límites de la v1
 
@@ -273,7 +275,7 @@ src/
 ├── race/                 # carrera en circuito: núcleo puro — TrackPath,
 │                         #   CircuitPhysics, LapTracker (vueltas/sectores), parrilla,
 │                         #   ranking/clasificación, plausibilidad, staleness,
-│                         #   interpolación de rivales, controles y 5 pistas validadas;
+│                         #   interpolación de rivales, controles y 6 pistas validadas;
 │                         #   GRAN PREMIO: rivales IA (racing line con apex,
 │                         #   errores humanos, goma) y récords por pista × dificultad
 ├── chat/                 # chat social: ChatStore puro (sanitize 200 /

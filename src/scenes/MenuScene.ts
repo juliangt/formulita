@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { getAudioEngine } from '../audio/AudioManager';
-import { MUTE_BUTTON, MENU, TRACK } from '../config/balance';
+import { MUTE_BUTTON, MENU, TRACK, TRACK_PICKER } from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
@@ -52,48 +52,6 @@ const HELP_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
 /** Etiqueta del botón fullscreen según el estado (Fase 7). */
 const FS_LABEL_WINDOWED = 'PANTALLA COMPLETA';
 const FS_LABEL_FULLSCREEN = 'VENTANA';
-
-/**
- * Layout del overlay selector de pistas (V1, issue #9): panel centrado con
- * título, una fila por pista (botón con el nombre + hint del circuito real
- * que lo inspira), selector de DIFICULTAD del rival (#14) y CERRAR. Mismo
- * patrón de la subpantalla EN LÍNEA.
- */
-const TRACK_PICKER = {
-  /** Opacidad del velo oscuro sobre el menú (0–1). */
-  dimAlpha: 0.86,
-  /** Centro Y y tamaño del panel. */
-  panelY: 700,
-  panelWidth: 620,
-  panelHeight: 1050,
-  /** Y del título ENTRENAR y del subtítulo (centros). */
-  titleY: 300,
-  subtitleY: 368,
-  /** Filas de pistas: centro Y de la primera y paso entre filas. */
-  rowStartY: 470,
-  rowStep: 120,
-  /** Tamaño del botón de cada fila. */
-  rowWidth: 540,
-  rowHeight: 84,
-  /** Hint del circuito inspirador: hueco bajo el botón y fuente. */
-  hintGap: 12,
-  hintFontSize: 16,
-  /* #14 — selector de dificultad del rival: rótulo + 3 botones pixel
-   * (FÁCIL / NORMAL / DIFÍCIL) entre las filas de pistas y CERRAR. */
-  /** Y del rótulo DIFICULTAD (centro). */
-  difficultyLabelY: 1044,
-  /** Y del centro de la fila de botones de dificultad. */
-  difficultyRowY: 1088,
-  /** Tamaño de cada botón de dificultad y offsets X desde el centro. */
-  difficultyButtonWidth: 180,
-  difficultyButtonHeight: 60,
-  difficultyButtonOffsetX: 200,
-  difficultyFontSize: 24,
-  /** Botón CERRAR. */
-  closeY: 1170,
-  closeWidth: 300,
-  closeHeight: 88,
-} as const;
 
 /**
  * Issue #22 — layout de la subpantalla EN LÍNEA (evolución del overlay
@@ -603,7 +561,7 @@ export class MenuScene extends Phaser.Scene {
 
   /**
    * Overlay simple de selección de pista (patrón de la subpantalla EN LÍNEA):
-   * las 5 pistas del registro por nombre + hint, el selector de DIFICULTAD
+   * las 6 pistas del registro por nombre + hint, el selector de DIFICULTAD
    * del rival (#14: FÁCIL / NORMAL / DIFÍCIL, default NORMAL) y CERRAR. V1
    * NO usa miniaturas (`TrackThumb` llega con el lobby de V2): para entrenar,
    * el nombre de la pista alcanza. La elección lanza RaceScene en modo
@@ -656,7 +614,7 @@ export class MenuScene extends Phaser.Scene {
       this.add
         .text(centerX, TRACK_PICKER.difficultyLabelY, 'DIFICULTAD DEL RIVAL', {
           fontFamily: 'monospace',
-          fontSize: '24px',
+          fontSize: `${TRACK_PICKER.difficultyLabelFontSize}px`,
           color: '#9aa0a8',
         })
         .setOrigin(0.5),

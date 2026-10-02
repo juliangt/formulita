@@ -8,6 +8,7 @@ import {
   DRS_DURATION_SECONDS,
   DRS_MULTIPLIER,
   DRS_SPEED_THRESHOLD,
+  LOBBY,
   MAX_SPEED,
   MIN_SPEED,
   PLAYER_LATERAL_ACCELERATION,
@@ -17,6 +18,7 @@ import {
   PLAYER_TILT_MAX_DEGREES,
   SCORE_PER_SECOND_AT_BASE_SPEED,
   TRACK,
+  TRACK_PICKER,
   TURBO_DRAIN_PER_SECOND,
   TURBO_MAX,
   TURBO_MULTIPLIER,
@@ -24,6 +26,7 @@ import {
   TURBO_REGEN_PER_SECOND,
 } from '../config/balance';
 import { GAME_HEIGHT, GAME_WIDTH } from '../config/gameConfig';
+import { TRACKS } from '../race/tracks';
 
 /**
  * Tests de sanidad de balance: los valores deben existir y ser coherentes
@@ -133,5 +136,98 @@ describe('balance', () => {
     // El lowpass móvil deja pasar los armónicos de la banda nueva.
     expect(AUDIO.engineFilterHzMobile).toBeGreaterThan(AUDIO.engineFreqMaxMobile);
     expect(AUDIO.engineFilterTurboHzMobile).toBeGreaterThan(AUDIO.engineFilterHzMobile);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Selectores de pista con 6 filas: sin solapamientos (issue #26)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * El registro tiene 6 pistas (GÁLVEZ entró con #26) y ambos pickers dibujan
+ * UNA fila por pista con layouts pensados para 5: la 6ª fila pisaba otros
+ * elementos. Estos tests fijan el criterio del issue — "sin solapamientos y
+ * dentro del panel" — sobre las constantes de layout (aritmética pura, el
+ * mismo modelo que usan MenuScene y LobbyScene al pintar):
+ *
+ * - Fila del menú (TRACK_PICKER): botón de `rowHeight` centrado en la fila,
+ *   hint debajo con `hintGap` de aire y `hintFontSize` de alto (origin 0.5,0:
+ *   el y del hint es su borde superior).
+ * - Fila del lobby (LOBBY.track*): miniatura de `trackThumbSize` (88, lo más
+ *   alto de la fila) y botón de `trackRowButtonHeight` (84) comparten centro.
+ *
+ * El aire mínimo de 16 px contra DIFICULTAD / CERRAR es la condición dura del
+ * issue. Si mañana se suma una 7ª pista sin recompactar, estos tests fallan
+ * antes de que el overlay quede roto en pantalla.
+ */
+describe('TRACK_PICKER — GRAN PREMIO: 6 filas sin solapamientos (issue #26)', () => {
+  /** Borde superior/inferior del panel (el centro va en `panelY`). */
+  const panelTop = TRACK_PICKER.panelY - TRACK_PICKER.panelHeight / 2;
+  const panelBottom = TRACK_PICKER.panelY + TRACK_PICKER.panelHeight / 2;
+  /** Centro Y de cada fila de pista, una por entrada del registro. */
+  const rows = TRACKS.map((_, index) => TRACK_PICKER.rowStartY + index * TRACK_PICKER.rowStep);
+  const buttonTop = (y: number): number => y - TRACK_PICKER.rowHeight / 2;
+  /** Borde inferior de la fila completa: el hint cuelga bajo el botón. */
+  const rowBottom = (y: number): number =>
+    y + TRACK_PICKER.rowHeight / 2 + TRACK_PICKER.hintGap + TRACK_PICKER.hintFontSize;
+  const labelTop = TRACK_PICKER.difficultyLabelY - TRACK_PICKER.difficultyLabelFontSize / 2;
+  const labelBottom = TRACK_PICKER.difficultyLabelY + TRACK_PICKER.difficultyLabelFontSize / 2;
+
+  it('las filas del registro quedan dentro del panel y sin tocarse entre sí', () => {
+    expect(buttonTop(rows[0])).toBeGreaterThanOrEqual(panelTop);
+    for (let i = 1; i < rows.length; i += 1) {
+      expect(buttonTop(rows[i]), `la fila ${i} pisa el hint de la fila ${i - 1}`).toBeGreaterThanOrEqual(
+        rowBottom(rows[i - 1]),
+      );
+    }
+    expect(rowBottom(rows[rows.length - 1])).toBeLessThanOrEqual(panelBottom);
+  });
+
+  it('la última fila queda ≥ 16 px por encima del rótulo DIFICULTAD DEL RIVAL', () => {
+    expect(rowBottom(rows[rows.length - 1]) + 16, 'el hint de la última fila pisa el rótulo').toBeLessThanOrEqual(
+      labelTop,
+    );
+  });
+
+  it('el rótulo de dificultad no pisa sus botones ni CERRAR', () => {
+    const difficultyTop = TRACK_PICKER.difficultyRowY - TRACK_PICKER.difficultyButtonHeight / 2;
+    const difficultyBottom = TRACK_PICKER.difficultyRowY + TRACK_PICKER.difficultyButtonHeight / 2;
+    expect(difficultyTop).toBeGreaterThanOrEqual(labelBottom);
+    expect(TRACK_PICKER.closeY - TRACK_PICKER.closeHeight / 2).toBeGreaterThanOrEqual(difficultyBottom);
+  });
+
+  it('CERRAR queda completo dentro del panel, debajo de todo el contenido', () => {
+    // El subtítulo mide 30 px de fuente; la primera fila arranca debajo.
+    expect(buttonTop(rows[0])).toBeGreaterThanOrEqual(TRACK_PICKER.subtitleY + 15);
+    expect(TRACK_PICKER.closeY + TRACK_PICKER.closeHeight / 2).toBeLessThanOrEqual(panelBottom);
+  });
+});
+
+describe('LOBBY — picker de pistas: 6 filas sin solapamientos (issue #26)', () => {
+  const panelTop = LOBBY.trackPanelY - LOBBY.trackPanelHeight / 2;
+  const panelBottom = LOBBY.trackPanelY + LOBBY.trackPanelHeight / 2;
+  /** Centro Y de cada fila (miniatura + botón comparten centro). */
+  const rows = TRACKS.map((_, index) => LOBBY.trackRowStartY + index * LOBBY.trackRowStep);
+  /** La miniatura (88) es lo más alto de la fila; el botón mide 84. */
+  const rowHalf = LOBBY.trackThumbSize / 2;
+
+  it('las 6 filas quedan dentro del panel y sin tocarse entre sí', () => {
+    expect(rows[0] - rowHalf).toBeGreaterThanOrEqual(panelTop);
+    for (let i = 1; i < rows.length; i += 1) {
+      expect(rows[i] - rowHalf, `la fila ${i} pisa la fila ${i - 1}`).toBeGreaterThanOrEqual(
+        rows[i - 1] + rowHalf,
+      );
+    }
+    expect(rows[rows.length - 1] + rowHalf).toBeLessThanOrEqual(panelBottom);
+  });
+
+  it('la última fila queda ≥ 16 px por encima de CERRAR', () => {
+    const closeTop = LOBBY.trackCloseY - LOBBY.trackCloseHeight / 2;
+    expect(rows[rows.length - 1] + rowHalf + 16, 'la última fila pisa CERRAR').toBeLessThanOrEqual(closeTop);
+  });
+
+  it('CERRAR queda completo dentro del panel, debajo del título y de las filas', () => {
+    expect(LOBBY.trackTitleY).toBeLessThanOrEqual(rows[0] - rowHalf);
+    expect(LOBBY.trackCloseY + LOBBY.trackCloseHeight / 2).toBeLessThanOrEqual(panelBottom);
   });
 });

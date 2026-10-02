@@ -5,11 +5,12 @@ import { TRACKS, buildTrackPath } from '../../race/tracks';
 
 /**
  * Tests de REGRESIÓN del criterio del issue #20 (Fase 2): la LARGADA es
- * hacia ARRIBA de la pantalla en las 5 pistas y la inversión de los
+ * hacia ARRIBA de la pantalla en las 6 pistas y la inversión de los
  * waypoints no cambió la geometría.
  *
- * La Fase 1 invirtió el orden de los waypoints de las 5 pistas (los MISMOS
- * puntos, listados en orden de carrera): la tangente del eje en s=0 — la que
+ * La Fase 1 invirtió el orden de los waypoints de las pistas del registro
+ * (los MISMOS puntos, listados en orden de carrera): la tangente del eje
+ * en s=0 — la que
  * `gridOrder` consume vía `path.sample(s).angle` para orientar la parrilla —
  * pasó a apuntar hacia ARRIBA (Δy < 0 y más vertical que horizontal). Como
  * la curva es CERRADA, recorrerla al revés conserva perímetro, polilínea
@@ -21,7 +22,7 @@ import { TRACKS, buildTrackPath } from '../../race/tracks';
  *
  * Lo que ya cubren otros tests y acá NO se duplica:
  * - `tracks.test.ts`: cierre, auto-intersección, radio de curvatura y banda
- *   de vuelta de las 5 pistas.
+ *   de vuelta de las 6 pistas.
  * - `gridOrder.test.ts`: determinismo, escalonado y laterales de la parrilla.
  * - `trackScale.test.ts`: pins del issue #18 (zoom, escalas, pasos).
  * - `raceControls.test.ts`: gas manual (puente input→física, teclas, táctil).
@@ -96,6 +97,7 @@ describe('issue #20 — la inversión de waypoints no cambia la geometría', () 
     silverstone: 28,
     spa: 30,
     suzuka: 32,
+    galvez: 31,
   } as const;
 
   for (const def of TRACKS) {
