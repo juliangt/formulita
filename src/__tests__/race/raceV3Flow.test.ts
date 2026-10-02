@@ -70,9 +70,9 @@ interface DriveProfile {
 }
 
 /** Beto: a fondo físico — gana. */
-const BETO: DriveProfile = { speed: CIRCUIT.maxSpeed, lateral: -20 };
+const BETO: DriveProfile = { speed: CIRCUIT.maxSpeed, lateral: -50 };
 /** Ana: ritmo alto — segunda (issue #18: 250 × 2.5 con el mundo). */
-const ANA: DriveProfile = { speed: 625, lateral: 20 };
+const ANA: DriveProfile = { speed: 625, lateral: 50 };
 /** Carla: muy lenta — no termina dentro del horizonte del test (×2.5). */
 const CARLA: DriveProfile = { speed: 150, lateral: 0 };
 
