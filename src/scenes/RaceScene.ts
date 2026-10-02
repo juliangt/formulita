@@ -338,7 +338,7 @@ class RaceTouchControls implements IInputSource {
 /**
  * RaceScene — carrera en circuito local, modo ENTRENAR (issue #9, V1).
  *
- * Una persona corre sola una de las 5 pistas, 3 vueltas, con countdown,
+ * Una persona corre sola una de las 6 pistas, 3 vueltas, con countdown,
  * HUD de vuelta/tiempos, minimapa, pausa y pantalla de resultados. Es la
  * base de V2 (multi): la escena SOLO orquesta render/input — la lógica ya
  * existe en `race/` (TrackPath, CircuitPhysics, LapTracker, gridOrder,

@@ -19,7 +19,7 @@ import type { TrackDefinition } from '../../race/tracks';
  * - targetSpeed por punto: velocidad máxima SOSTENIBLE según la curvatura
  *   local (misma resolución analítica de `turnRateAtSpeed` que la validación
  *   de pistas de #9), con factor de seguridad y recortada a maxSpeed. En las
- *   5 pistas queda en (0, maxSpeed], siempre muy por encima de la mitad de
+ *   6 pistas queda en (0, maxSpeed], siempre muy por encima de la mitad de
  *   la referencia (ninguna curva del CPU es un muro): mínimos medidos 465
  *   (Suzuka) a 558 (Monza/Spa) contra referenceSpeed/2 = 225.
  * - Trazada: offset hacia el INTERIOR de cada curva (corte de apex) y al
@@ -56,7 +56,7 @@ function distToCircleCenter(point: RacingLinePoint): number {
   return Math.hypot(point.x - CIRCLE_CENTER.x, point.y - CIRCLE_CENTER.y);
 }
 
-describe('buildRacingLine — muestreo y contrato del anillo (5 pistas)', () => {
+describe('buildRacingLine — muestreo y contrato del anillo (6 pistas)', () => {
   for (const track of TRACKS) {
     it(`${track.id}: anillo equiespaciado que cubre el perímetro del eje`, () => {
       const path = buildTrackPath(track);
@@ -91,7 +91,7 @@ describe('buildRacingLine — muestreo y contrato del anillo (5 pistas)', () => 
   }
 });
 
-describe('buildRacingLine — targetSpeed sostenible por curvatura (5 pistas)', () => {
+describe('buildRacingLine — targetSpeed sostenible por curvatura (6 pistas)', () => {
   for (const track of TRACKS) {
     it(`${track.id}: cada targetSpeed ∈ (0, maxSpeed] y ninguna curva es un muro`, () => {
       const path = buildTrackPath(track);
@@ -121,7 +121,7 @@ describe('buildRacingLine — targetSpeed sostenible por curvatura (5 pistas)', 
   }
 });
 
-describe('buildRacingLine — trazada: apex, asfalto y suavidad (5 pistas)', () => {
+describe('buildRacingLine — trazada: apex, asfalto y suavidad (6 pistas)', () => {
   for (const track of TRACKS) {
     it(`${track.id}: |offset| dentro del asfalto, lineal por paso (sin zigzag)`, () => {
       const path = buildTrackPath(track);

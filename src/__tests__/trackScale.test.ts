@@ -33,7 +33,7 @@ import { computeMiniMapTransform, miniMapContour } from '../race/minimap';
  * Lo que ya cubren otros tests y acá NO se duplica:
  * - `tracks.test.ts`: cierre/auto-intersección/radio de curvatura, banda de
  *   vuelta en px, waypoints dentro del mundo (margen literal 250) y
- *   `worldSize` 7000 para las 5.
+ *   `worldSize` 7000 para las 6.
  * - `gridOrder.test.ts`: consumo de los offsets de parrilla (coherencia
  *   geométrica de las posiciones y `lateral < widthPx/2`).
  * - `balance.test.ts`: coherencia RELACIONAL del modo batalla (max > base >
