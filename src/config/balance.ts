@@ -573,31 +573,60 @@ export const RACE_MULTI = {
 /* ------------------------------------------------------------------ */
 
 /**
- * Rival CPU del GRAN PREMIO (issue #14, V0): un "piloto de pruebas" que
- * sigue el EJE de la pista a velocidad fija (`race/ai/aiDriver.ts`). V0
- * hardcodea la fracción de velocidad por dificultad acá; una fase posterior
- * la reemplaza por presets completos de dificultad.
+ * Rivales CPU del GRAN PREMIO (issue #14). V0 era un "piloto de pruebas" que
+ * seguía el EJE a velocidad fija; V1 es un piloto real: sigue la LÍNEA DE
+ * CARRERA (`race/ai/racingLine.ts`) con frenada por curvatura lookahead y
+ * personalidades propias (`race/ai/rivalRoster.ts`).
+ *
+ * Los presets de velocidad viven acá (ajustables sin tocar lógica); las
+ * constantes puramente geométricas de la línea (paso de muestreo, ventanas
+ * de suavizado, margen al borde) viven en el propio módulo `racingLine`.
  */
 export const RACE_AI = {
   /**
-   * Velocidad objetivo del CPU como fracción de `CIRCUIT.maxSpeed`, por
-   * dificultad. V0 sólo usa 'normal' (el menú aún no distingue), pero las
-   * tres fracciones ya fijan la escala: por encima de la referencia
-   * (`CIRCUIT.referenceSpeed` = 0.6 × maxSpeed) el CPU no sostiene las
-   * curvas más cerradas y se abre al pasto, donde el techo lo frena —
-   * comportamiento deseado, más error por dificultad.
+   * Techo de velocidad en RECTA como fracción de `CIRCUIT.maxSpeed`, por
+   * dificultad. En curva manda el `targetSpeed` de la línea (siempre menor):
+   * el cap sólo recorta las rectas, así que la dificultad marca el ritmo
+   * general sin impedir que el CPU sostenga las curvas.
    */
   targetSpeedFraction: {
     easy: 0.65,
     normal: 0.75,
     hard: 0.85,
   },
-  /** Distancia del punto de mira sobre el eje (px de arco). */
+  /**
+   * Escala sobre el `targetSpeed` de la LÍNEA por dificultad. La línea ya
+   * trae un factor de seguridad (0.9) sobre la velocidad físicamente
+   * sostenible de cada curva; 1.0 sería "al límite de la línea" y los
+   * presets dejan margen para que un exceso lo castigue el pasto.
+   */
+  lineSpeedScale: {
+    easy: 0.82,
+    normal: 0.9,
+    hard: 0.97,
+  },
+  /** Distancia del punto de mira sobre la línea (px de arco). */
   lookAheadPx: 120,
   /** Zona muerta del error angular (rad): debajo, volante recto. */
   steerDeadzoneRad: 0.06,
-  /** Nombre visible del rival en su etiqueta y resultados. */
-  driverName: 'CPU',
+  /**
+   * Margen de frenada (px/s): el driver sólo pisa el freno cuando su
+   * velocidad supera la permitida por la curva venidera en MÁS que esto
+   * (debajo del margen regula soltando el acelerador — evita frenadas
+   * nerviosas de bang-bang longitudinal).
+   */
+  brakeMarginSpeedPx: 10,
+  /** Rivales CPU del GRAN PREMIO (V1): parrilla de 8 con el jugador. */
+  rivalCount: 7,
+  /** Desvío personal ± de velocidad (fracción sobre AMBOS presets). */
+  speedPctSpread: 0.05,
+  /** Desvío personal ± del offset lateral propio sobre la línea (px). */
+  lineOffsetSpreadPx: 10,
+  /**
+   * Cuánto recorta la agresividad el margen de frenada (0 = nada, 1 =
+   * margen × (1 − gain)): los agresivos frenan más tarde.
+   */
+  aggressionBrakeGain: 0.6,
 } as const;
 
 /* ------------------------------------------------------------------ */
