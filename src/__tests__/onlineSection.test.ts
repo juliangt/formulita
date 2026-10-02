@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MENU, TRACK_PICKER } from '../config/balance';
 import { onlineMenuButtonLabel } from '../chat/dmView';
 import { PLAYER_PROFILE_REGISTRY_KEY, type PlayerProfile } from '../data/PlayerProfileRepository';
@@ -37,6 +37,9 @@ import { RaceScene } from '../scenes/RaceScene';
  *    layout nuevo). Incluye la guarda cruzada: con la subpantalla EN LÍNEA
  *    abierta, ni Enter ni GRAN PREMIO navegan por debajo.
  * 4. Sin código muerto del viejo overlay multijugador de M1.
+ * 5. Telemetría #27: los DOS arranques locales del menú reportan
+ *    `partida_iniciada` — JUGAR como 'entrenar' y elegir pista en GRAN
+ *    PREMIO como 'gran_premio' (pista + dificultad seleccionada).
  */
 
 /* ------------------------------------------------------------------ */
@@ -445,6 +448,85 @@ describe('MenuScene — GRAN PREMIO sigue abriendo el selector de pistas', () =>
 
     expect(harness.findText('GRAN PREMIO')).toBeUndefined();
     expect(harness.sceneStart).not.toHaveBeenCalled();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 3c. Telemetría #27 — partida_iniciada en los arranques del menú     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * El menú tiene DOS entradas de partida y cada una reporta UN
+ * `partida_iniciada` con properties agregadas y sin PII (issue #27):
+ * - JUGAR (modo infinito/práctica libre, GameScene) → modo 'entrenar'.
+ * - Elegir pista en GRAN PREMIO (RaceScene vs CPU) → modo 'gran_premio' +
+ *   pista (TrackId) + dificultad (id `CpuDifficulty`: 'easy'|'normal'|'hard').
+ * El espía es `window.posthog.capture` (el mismo contrato que usa el
+ * wrapper), instalado por test y borrado en afterEach para no contaminar
+ * al resto de la suite.
+ */
+describe('MenuScene — telemetría partida_iniciada (issue #27)', () => {
+  afterEach(() => {
+    delete window.posthog;
+  });
+
+  function installCapture(): ReturnType<typeof vi.fn> {
+    const capture = vi.fn();
+    window.posthog = { capture };
+    return capture;
+  }
+
+  it('JUGAR (modo entrenar) reporta exactamente { modo: "entrenar" }', () => {
+    const capture = installCapture();
+    const harness = createMenuHarness();
+
+    harness.startGame();
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    // Igualdad EXACTA: sin properties de más (sin pista/dificultad, que acá
+    // no aplican, y sin nada que huela a PII).
+    expect(capture).toHaveBeenCalledWith('partida_iniciada', { modo: 'entrenar' });
+  });
+
+  it('elegir pista en GRAN PREMIO reporta { modo, pista, dificultad } con la dificultad default', () => {
+    const capture = installCapture();
+    const harness = createMenuHarness();
+
+    harness.openTrackPicker();
+    harness.press(TRACKS[0].name);
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledWith('partida_iniciada', {
+      modo: 'gran_premio',
+      pista: TRACKS[0].id,
+      dificultad: 'normal', // DEFAULT_CPU_DIFFICULTY, la misma que viaja a RaceScene
+    });
+  });
+
+  it('la dificultad elegida en el selector viaja como su id (DIFÍCIL → "hard")', () => {
+    const capture = installCapture();
+    const harness = createMenuHarness();
+
+    harness.openTrackPicker();
+    harness.press('DIFÍCIL');
+    harness.press(TRACKS[TRACKS.length - 1].name);
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(capture).toHaveBeenCalledWith('partida_iniciada', {
+      modo: 'gran_premio',
+      pista: TRACKS[TRACKS.length - 1].id,
+      dificultad: 'hard',
+    });
+  });
+
+  it('con una subpantalla abierta, Enter NO reporta partida (guarda previa al trackEvent)', () => {
+    const capture = installCapture();
+    const harness = createMenuHarness();
+    harness.openOnlineOverlay();
+
+    harness.startGame();
+
+    expect(capture).not.toHaveBeenCalled();
   });
 });
 
