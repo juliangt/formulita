@@ -2,9 +2,9 @@
 
 Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 4 + Vite + TypeScript strict.**
 
-Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor), **carrera en circuito** (5 pistas de F1, en solitario para entrenar o contra otros jugadores) y **chat social opt-in** (chat de sala, mensajes directos e invitaciones a partida — nadie aparece en ninguna lista hasta habilitarlo).
+Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor), **carrera en circuito** (5 pistas de F1, en solitario para entrenar o contra otros jugadores), **GRAN PREMIO contra la CPU** (7 rivales con IA de línea de carrera, 100% local/offline) y **chat social opt-in** (chat de sala, mensajes directos e invitaciones a partida — nadie aparece en ninguna lista hasta habilitarlo).
 
-> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1) + chat social (issue #2) + carrera en circuito (issue #9).**
+> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1) + chat social (issue #2) + carrera en circuito (issue #9) + gran premio vs CPU (issue #14).**
 
 ---
 
@@ -177,6 +177,43 @@ Requisitos (una sola vez, quien administra el repo):
 
 ---
 
+## Gran Premio (contra la CPU)
+
+**Una carrera de F1 de verdad contra 7 rivales con IA, 100% local y offline.** Elegís pista y dificultad, arrancás desde una parrilla de 8 autos y corré **3 vueltas (~2 min)** por cualquiera de las **5 pistas** de F1. No necesita red — ni matchmaking ni sincronización: los rivales se simulan en tu dispositivo, con la MISMA física del circuito que el resto de los modos (el auto de cada rival decide su manejo, no hace trampas de velocidad).
+
+### Cómo se juega
+
+1. Menú → **GRAN PREMIO** → elegí pista (con miniatura) y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
+2. Countdown 3-2-1-GO! y largada: **mismos controles que la carrera en circuito** (auto-acelerado: ◀ ▶ + FRENO táctil, ←→/A·D + ↓/S/Espacio en teclado — ver [Controles](#controles)).
+3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD** y minimapa con **tu punto destacado**. Cambiar de posición suena (igual al ganar que al perder el lugar).
+4. Al cruzar TU meta: **podio con el top 3** (nombres de los rivales, ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista y dificultad con parrilla nueva.
+
+### Rivales con criterio (no autos sobre rieles)
+
+- **Línea de carrera real**: cada rival sigue la trazada ideal de la pista (con apex) y frena por la curvatura venidera con un punto de mira propio — no por triggers de curva.
+- **Personalidad**: los 7 rivales (ALONSITO, MAXVELOZ, SCHUMIKA, LECLERVO, NORRITO, PIASTRINO, SARGUINI) tienen velocidad, trazada y agresividad propias, **deterministas por seed**: la misma carrera es reproducible de punta a punta.
+- **Errores humanos**: de vez en cuando frenan tarde o se desvían de su trazada — más seguido en FÁCIL que en DIFÍCIL — y el fallo dura un instante, no los saca de carrera.
+- **Adelantamientos**: ven a los autos alrededor, cierran el hueco y desvían SU línea para intentar la maniobra; la agresividad de cada uno decide cuánto se arriesga.
+- **Goma declarada y acotada**: si un rival queda muy lejos del jugador, su ritmo se ajusta una fracción MUY chica para que la pelea no se rompa en ningún sentido — tope pequeño por dificultad (el mayor en FÁCIL, casi rígido en DIFÍCIL) y NUNCA por encima del techo físico del auto.
+- **Dificultad**: los presets ajustan ritmo en recta, calidad de trazada, frecuencia de errores, agresividad y goma; el orden fácil < normal < difícil está garantizado por tests.
+
+### Récords
+
+- Por **cada pista × dificultad** el juego recuerda tu **mejor posición** y tu **mejor vuelta** en `localStorage` (clave versionada `formulita.gp.v1`, con fallback en memoria para modo privado — igual que el mute o el progreso del modo solo).
+- Superar cualquiera de las dos dispara **¡NUEVO RÉCORD!** en los resultados; repetir el mejor puesto o girar más lento no toca nada. Las marcas de un modo no se mezclan con las de otro.
+
+### QA del issue #14 (verificación manual, además de la suite)
+
+- [ ] Flujo completo: menú → GRAN PREMIO → pista + dificultad → carrera de 8 autos → podio → récord → REINTENTAR conserva pista y dificultad; MENÚ vuelve limpio.
+- [ ] Las 3 dificultades se notan: FÁCIL perdona (errores rivales visibles), DIFÍCIL exige; el chip del HUD y el subtítulo de resultados muestran siempre la elegida.
+- [ ] HUD vivo: badge Pn/8, gap +/- en segundos con los vecinos, minimapa con tu punto, cartel ¡VUELTA n/3!, SFX de largada y de adelantamiento (suena al ganar Y al perder posiciones, con enfriamiento).
+- [ ] Podio correcto: top 3 con nombres y ganador en oro; terminar 4º o peor muestra tu fila destacada debajo; ¡NUEVO RÉCORD! parpadea solo cuando superaste una marca (posición o vuelta).
+- [ ] Récords por pista × dificultad aislados: una marca en MÓNACO FÁCIL no aparece ni en MONZA ni en DIFÍCIL, y persiste tras recargar la página (F5).
+- [ ] Sin red: en modo avión / offline el GRAN PREMIO arranca y corre completo (el modo nunca toca la red).
+- [ ] Regresión: ENTRENAR, CARRERA multi, la BATALLA y el modo solo funcionan exactamente igual que antes.
+
+---
+
 ## Chat social (sala + directos, opt-in)
 
 **Chat de tres piezas: (1) chat de SALA de partida** — en el lobby y, si te eliminan, en modo espectador; el que sigue corriendo no tiene chat (decisión cerrada del issue: conducir sin distracciones) —; **(2) sala pública de presencia OPT-IN con mensajes directos (DM)**; **(3) invitaciones a partida** por DM. Todo P2P sobre la misma red de Trystero, sin servidor.
@@ -238,7 +275,9 @@ src/
 ├── race/                 # carrera en circuito (issue #9): núcleo puro — TrackPath,
 │                         #   CircuitPhysics, LapTracker (vueltas/sectores), parrilla,
 │                         #   ranking/clasificación, plausibilidad, staleness,
-│                         #   interpolación de rivales, controles y 5 pistas validadas
+│                         #   interpolación de rivales, controles y 5 pistas validadas;
+│                         #   GRAN PREMIO (issue #14): rivales IA (racing line con apex,
+│                         #   errores humanos, goma) y récords por pista × dificultad
 ├── chat/                 # chat social (issue #2): ChatStore puro (sanitize 200 /
 │                         #   throttle 1,5 s por hilo / no leídos / bloqueo sesión),
 │                         #   adaptadores roomChat/dmChat, sesión social
@@ -264,12 +303,13 @@ Decisiones clave:
 
 ## Tests
 
-- 84 archivos / 1132 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- 92 archivos / 1313 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
 - Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), steering del derrape (`slipSteer`), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
 - Tests de integración sin runtime de Phaser: input → steering (fusión consumida por el auto, con derrape), SpawnScheduler × DifficultySystem (ritmo, patrones y cierre conjuntos), colisiones → economía (monedas/pickups → Score/Turbo/DRS/bus) y carrera → guardado → recarga.
 - Multijugador: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`, misma semántica que Trystero) — roster/colores/anfitrión, pista determinista por seed con perfiles de velocidad distintos, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes (lobby → start → carrera con perfiles distintos → 2 choques → match-over) que exige el MISMO ranking en los tres, con el de más monedas de ganador aunque otro haya sobrevivido más.
 - Chat social: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo entrada+salida), TrysteroChatClient contra rooms/hub fake (presencia opt-in, heartbeat, stale, DM/invite dirigidos), sesión social (DM con el overlay cerrado) — y el flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`: chat de sala + presencia opt-in con privacy-by-default verificada + 2 DM simultáneos con throttles independientes + escondite→DESCONECTADO + invitación con UNIRSE + badges por cliente), 100% determinista con reloj/timers inyectados.
 - Carrera en circuito (issue #9): pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación final, plausibilidad y staleness, reconstrucción de rivales, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi (`race/` + `raceMultiFullFlow`). V4: mapeo velocidad del circuito → dron del motor (`race/raceAudio`) y vuelta rápida del podio (`fastestRaceLap` + su viaje en el payload de resultados).
+- Gran Premio vs CPU (issue #14): roster de 7 rivales determinista por seed, presets de dificultad en orden estricto (fácil < normal < difícil, con errores Poisson y goma acotada probados sobre simulación headless a 60 Hz), línea de carrera, payload de resultados (posición/podio) con parseo defensivo y récords por pista × dificultad (`gpRecords`: round-trip, récord estricto menor-es-mejor, JSON corrupto, storage roto → memoria, claves aisladas).
 
 ---
 

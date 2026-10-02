@@ -16,7 +16,8 @@
  *   terminar la carrera de práctica. Devuelve `null` si el payload no es de
  *   esta rama (la pantalla de resultados mantiene su comportamiento previo).
  * - `parseRaceVsCpuResults` (#14): resultados del GRAN PREMIO vs CPU
- *   (posición final, rivales, dificultad), mismo patrón que la práctica.
+ *   (posición final, rivales, dificultad y — V4 — el podio con nombres del
+ *   top 3), mismo patrón que la práctica.
  * - `parseRaceMultiResults` (V2): lo que RaceScene le pasa a GameOverScene
  *   al concluir la carrera MULTI (clasificación de `finalClassification`).
  * - `fastestRaceLap` (V4): elige la vuelta rápida de la carrera multi entre
@@ -26,7 +27,7 @@
  */
 
 import type { PlayerInfo } from '../net/protocol';
-import { parsePlayerInfoList } from '../net/protocol';
+import { parsePlayerInfoList, sanitizePlayerName } from '../net/protocol';
 import type { FinalStanding as RaceFinalStanding } from './raceRanking';
 import { TRACKS, getTrackById, type TrackId } from './tracks';
 
@@ -198,6 +199,112 @@ export function parseRacePracticeResults(raw: unknown): RacePracticeResultsData 
 /* Resultados de la carrera VS CPU (issue #14)                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * V4 — nombre visible del JUGADOR humano en el GRAN PREMIO: el modo es 100%
+ * local (sin peer ni nombre multijugador), así que el podio lo etiqueta
+ * igual que el resto del UI habla al jugador. Los rivales NUNCA pueden
+ * llamarse así (nombres del roster fijo), de modo que el nombre identifica
+ * la fila propia sin ambigüedad.
+ */
+export const VS_CPU_PLAYER_NAME = 'TÚ';
+
+/** Tamaño del podio del GRAN PREMIO (el top 3 clásico). */
+export const VS_CPU_PODIUM_SIZE = 3;
+
+/** Nombre de reserva ante un peer sin rival resolvible (mismo fallback del podio multi). */
+export const VS_CPU_FALLBACK_PILOT_NAME = 'PILOTO';
+
+/** Una fila del podio del GRAN PREMIO (V4): posición 1-based + nombre visible. */
+export interface RaceVsCpuPodiumEntry {
+  /** Posición en la carrera (1 = ganador). */
+  readonly position: number;
+  /** Nombre visible (el jugador es `VS_CPU_PLAYER_NAME`). */
+  readonly name: string;
+  /** true si la fila es la del jugador humano (la pantalla la destaca). */
+  readonly isPlayer: boolean;
+}
+
+/** Podio del GRAN PREMIO: hasta `VS_CPU_PODIUM_SIZE` filas, ordenadas por posición. */
+export type RaceVsCpuPodium = readonly RaceVsCpuPodiumEntry[];
+
+/**
+ * V4 — normalización del podio compartida por el ARMADOR y el PARSEO (mismo
+ * criterio idempotente que el resto del payload): filta filas basuras
+ * (posición no entera ≥ 1, fuera del podio, o nombre que queda vacío tras
+ * sanitizar), deduplica posiciones (la primera gana), ordena por posición ASC
+ * y recorta al tamaño del podio. Entrada no-array → podio vacío.
+ */
+function normalizeRaceVsCpuPodium(raw: unknown): RaceVsCpuPodium {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const byPosition = new Map<number, RaceVsCpuPodiumEntry>();
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    if (
+      typeof record.position !== 'number' ||
+      !Number.isInteger(record.position) ||
+      record.position < 1 ||
+      record.position > VS_CPU_PODIUM_SIZE
+    ) {
+      continue;
+    }
+    if (typeof record.name !== 'string') {
+      continue;
+    }
+    const name = sanitizePlayerName(record.name);
+    if (name.length === 0) {
+      continue;
+    }
+    const clean: RaceVsCpuPodiumEntry = {
+      position: record.position,
+      name,
+      isPlayer: record.isPlayer === true,
+    };
+    if (!byPosition.has(clean.position)) {
+      byPosition.set(clean.position, clean);
+    }
+  }
+  return [...byPosition.values()]
+    .sort((a, b) => a.position - b.position)
+    .slice(0, VS_CPU_PODIUM_SIZE);
+}
+
+/**
+ * V4 — arma el podio del GRAN PREMIO desde la clasificación final (salida de
+ * `finalClassification`, ya ordenada por posición): el top 3 viaja al podio
+ * con su nombre visible — el jugador como `VS_CPU_PLAYER_NAME` (identificado
+ * por `playerPeerId`, '' = ninguno) y los rivales con el nombre que resuelva
+ * `rivalNameOf` — y las posiciones fuera del podio se descartan (el jugador
+ * que no clasificó se dibuja aparte, con SU posición del payload).
+ */
+export function raceVsCpuPodium(
+  standings: readonly { position: number; peerId: string }[],
+  rivalNameOf: (peerId: string) => string,
+  playerPeerId = '',
+): RaceVsCpuPodium {
+  return normalizeRaceVsCpuPodium(
+    standings
+      .filter(
+        (standing) =>
+          Number.isInteger(standing.position) &&
+          standing.position >= 1 &&
+          standing.position <= VS_CPU_PODIUM_SIZE,
+      )
+      .map((standing) => ({
+        position: standing.position,
+        name:
+          standing.peerId === playerPeerId
+            ? VS_CPU_PLAYER_NAME
+            : rivalNameOf(standing.peerId),
+        isPlayer: standing.peerId === playerPeerId,
+      })),
+  );
+}
+
 /** Resultados de la carrera vs CPU (payload RaceScene → GameOverScene). */
 export interface RaceVsCpuResultsData {
   mode: 'vs-cpu';
@@ -216,12 +323,18 @@ export interface RaceVsCpuResultsData {
   bestLapMs: number;
   /** Tiempo total desde el GO! (ms). */
   totalMs: number;
+  /**
+   * V4 — podio de la carrera (top 3 con nombres visibles). El jugador que no
+   * clasificó NO viaja acá: la pantalla lo agrega con `position`.
+   */
+  podium: RaceVsCpuPodium;
 }
 
 /**
  * Arma el payload de resultados vs CPU a partir del id de pista (resuelve el
- * nombre contra el registro), la posición final del jugador y los tiempos
- * propios del LapTracker. Inputs basura se sanean igual que en práctica.
+ * nombre contra el registro), la posición final del jugador, los tiempos
+ * propios del LapTracker y (V4) el podio con nombres. Inputs basura se
+ * sanean igual que en práctica.
  */
 export function raceVsCpuResultsPayload(
   trackId: TrackId,
@@ -231,6 +344,7 @@ export function raceVsCpuResultsPayload(
   laps: number,
   bestLapMs: number,
   totalMs: number,
+  podium: RaceVsCpuPodium = [],
 ): RaceVsCpuResultsData {
   const trackName = getTrackById(trackId)?.name ?? '';
   return {
@@ -245,13 +359,16 @@ export function raceVsCpuResultsPayload(
     laps: Number.isFinite(laps) ? Math.max(0, Math.floor(laps)) : 0,
     bestLapMs: Number.isFinite(bestLapMs) && bestLapMs > 0 ? Math.floor(bestLapMs) : 0,
     totalMs: Number.isFinite(totalMs) && totalMs > 0 ? Math.floor(totalMs) : 0,
+    podium: normalizeRaceVsCpuPodium(podium),
   };
 }
 
 /**
  * Parseo defensivo del payload de resultados vs CPU. Devuelve `null` cuando
  * el payload corresponde a otra rama de GameOverScene (solo clásico, multi,
- * práctica): la pantalla decide su rama con un solo chequeo.
+ * práctica): la pantalla decide su rama con un solo chequeo. El podio (V4)
+ * se parsea con la MISMA normalización del armador — un payload viejo sin
+ * podio degrada a podio vacío (la pantalla no lo dibuja).
  */
 export function parseRaceVsCpuResults(raw: unknown): RaceVsCpuResultsData | null {
   if (typeof raw !== 'object' || raw === null) {
@@ -287,6 +404,7 @@ export function parseRaceVsCpuResults(raw: unknown): RaceVsCpuResultsData | null
     totalMs: typeof record.totalMs === 'number' && Number.isFinite(record.totalMs)
       ? Math.max(0, Math.floor(record.totalMs))
       : 0,
+    podium: normalizeRaceVsCpuPodium(record.podium),
   };
 }
 

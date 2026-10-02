@@ -1,16 +1,24 @@
 import Phaser from 'phaser';
-import { CIRCUIT, GAME_OVER, LEADERBOARD, RACE_FAST_LAP } from '../config/balance';
+import {
+  CIRCUIT,
+  GAME_OVER,
+  LEADERBOARD,
+  RACE_FAST_LAP,
+  RACE_VS_CPU_PODIUM,
+} from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
+import { defaultGpStorage, saveGpResult } from '../race/gpRecords';
 import {
   CPU_DIFFICULTY_LABELS,
   parseRaceMultiResults,
   parseRacePracticeResults,
   parseRaceVsCpuResults,
+  VS_CPU_PLAYER_NAME,
   type RaceMultiResultsData,
   type RacePracticeResultsData,
   type RaceVsCpuResultsData,
@@ -26,6 +34,8 @@ import { MenuButton } from '../ui/MenuButton';
 const TITLE_COLOR = '#d63c3c';
 const GOLD_COLOR = '#f7c531';
 const DIM_COLOR = '#c8ccd4';
+/** Fila propia destacada (mismo acento verde de la fila propia del podio multi). */
+const SELF_COLOR = '#8fce3c';
 
 const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'monospace',
@@ -397,7 +407,7 @@ export class GameOverScene extends Phaser.Scene {
     data.standings.forEach((standing, index) => {
       const y = LEADERBOARD.rowStartY + index * LEADERBOARD.rowHeight;
       const isSelf = standing.peerId === data.myPeerId;
-      const rowColor = standing.position === 1 ? GOLD_COLOR : isSelf ? '#8fce3c' : '#f2f2f2';
+      const rowColor = standing.position === 1 ? GOLD_COLOR : isSelf ? SELF_COLOR : '#f2f2f2';
       const rightText =
         standing.status === 'finished' && standing.totalMs !== null
           ? formatLapMs(standing.totalMs)
@@ -567,9 +577,17 @@ export class GameOverScene extends Phaser.Scene {
   /**
    * #14 — RESULTADOS del GRAN PREMIO VS CPU: mismo layout de la rama
    * práctica (rejilla GAME_OVER), distinto contenido: pista + vueltas +
-   * dificultad del rival como subtítulo, mensaje personal por posición
-   * (1º/2º en V0), tiempo total, mejor vuelta y vueltas completadas.
-   * Botones REINTENTAR (misma pista + dificultad, seed fresca) y MENÚ.
+   * dificultad del rival como subtítulo, mensaje personal por posición,
+   * tiempo total, mejor vuelta y vueltas completadas.
+   *
+   * V4 — cierre del bucle: bajo las estadísticas va el PODIO (top 3 con los
+   * nombres de los rivales, estilo del podio multi; el ganador en oro y la
+   * fila propia en verde) y, si el jugador quedó fuera del top 3, su fila
+   * destacada debajo. Además se guardan los RÉCORDS por pista × dificultad
+   * (`race/gpRecords`) antes de dibujar: si la posición o la vuelta fueron
+   * récord, parpadea el cartel ¡NUEVO RÉCORD! (mismo tween de la rama
+   * clásica). Botones REINTENTAR (misma pista + dificultad, seed fresca) y
+   * MENÚ.
    */
   private createRaceVsCpuResults(centerX: number): void {
     const data = this.vsCpuData;
@@ -577,6 +595,16 @@ export class GameOverScene extends Phaser.Scene {
       return;
     }
     const bus = getSessionEventBus(this.registry);
+
+    // V4 — récords por pista × dificultad: se aplican ANTES de dibujar (el
+    // cartel ¡NUEVO RÉCORD! depende del veredicto). Storage roto → los
+    // récords rigen igualmente para esta sesión (espejo del retorno).
+    const gpOutcome = saveGpResult(defaultGpStorage(), data.trackId, data.difficulty, {
+      position: data.position,
+      bestLapMs: data.bestLapMs,
+      totalMs: data.totalMs,
+    });
+    const isNewRecord = gpOutcome.positionRecord || gpOutcome.lapRecord;
 
     this.add
       .text(centerX, GAME_OVER.titleY, 'RESULTADOS', TITLE_STYLE)
@@ -625,6 +653,53 @@ export class GameOverScene extends Phaser.Scene {
     this.add
       .text(centerX, GAME_OVER.coinsY, `MEJOR VUELTA ${formatLapMs(data.bestLapMs)}`, statStyle)
       .setOrigin(0.5);
+
+    // V4 — cartel parpadeante de récord (mismo tween de la rama clásica).
+    if (isNewRecord) {
+      const banner = this.add
+        .text(centerX, RACE_VS_CPU_PODIUM.newRecordY, '¡NUEVO RÉCORD!', {
+          fontFamily: 'monospace',
+          fontSize: `${RACE_VS_CPU_PODIUM.newRecordFontSize}px`,
+          color: GOLD_COLOR,
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 8);
+      this.tweens.add({
+        targets: banner,
+        alpha: 0.25,
+        duration: 300,
+        yoyo: true,
+        repeat: -1,
+      });
+    }
+
+    // V4 — podio: top 3 con nombres (payload); el jugador fuera del top 3
+    // agrega SU fila destacada debajo (misma rejilla, posición del payload).
+    const playerInPodium = data.podium.some((entry) => entry.isPlayer);
+    const rows = playerInPodium
+      ? [...data.podium]
+      : [
+          ...data.podium,
+          { position: data.position, name: VS_CPU_PLAYER_NAME, isPlayer: true },
+        ];
+    const rowStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${RACE_VS_CPU_PODIUM.rowFontSize}px`,
+      color: '#f2f2f2',
+    };
+    rows.forEach((entry, index) => {
+      const y = RACE_VS_CPU_PODIUM.rowStartY + index * RACE_VS_CPU_PODIUM.rowHeight;
+      const rowColor =
+        entry.position === 1 ? GOLD_COLOR : entry.isPlayer ? SELF_COLOR : '#f2f2f2';
+      this.add
+        .text(LEADERBOARD.placeX, y, `P${entry.position}`, rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+      this.add
+        .text(LEADERBOARD.nameX, y, entry.name, rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+    });
 
     new MenuButton(this, {
       x: centerX,

@@ -600,6 +600,32 @@ export const RACE_VS_CPU = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Gran Premio vs CPU — podio y récords (issue #14, V4)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Podio del GRAN PREMIO en la rama vs CPU de GameOverScene (issue #14, V4).
+ * Vive en el hueco entre la última estadística (`GAME_OVER.coinsY` 620, texto
+ * de 36 px ≈ hasta 641) y el borde superior del botón REINTENTAR (900 −
+ * 52 = 848): cartel parpadeante ¡NUEVO RÉCORD! + hasta CUATRO filas (top 3 y,
+ * si el jugador no clasificó, su fila destacada debajo). Las columnas X se
+ * comparten con el podio multi (`LEADERBOARD.placeX`/`LEADERBOARD.nameX`):
+ * mismo lenguaje visual, cero constantes nuevas.
+ */
+export const RACE_VS_CPU_PODIUM = {
+  /** Y del cartel parpadeante ¡NUEVO RÉCORD! (centro), bajo las estadísticas. */
+  newRecordY: 668,
+  /** Tamaño de fuente del cartel (px). */
+  newRecordFontSize: 36,
+  /** Y de la primera fila del podio (centro). */
+  rowStartY: 710,
+  /** Separación vertical entre filas (px). */
+  rowHeight: 38,
+  /** Tamaño de fuente de las filas (px). */
+  rowFontSize: 22,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Gran Premio vs CPU (issue #14, V0)                                  */
 /* ------------------------------------------------------------------ */
 

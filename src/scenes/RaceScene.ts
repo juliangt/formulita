@@ -45,9 +45,11 @@ import {
   parseRaceSceneInit,
   raceMultiResultsPayload,
   racePracticeResultsPayload,
+  raceVsCpuPodium,
   raceVsCpuResultsPayload,
   CPU_DIFFICULTY_LABELS,
   DEFAULT_CPU_DIFFICULTY,
+  VS_CPU_FALLBACK_PILOT_NAME,
   type CpuDifficulty,
   type RaceSceneInit,
   type RaceVsCpuResultsData,
@@ -1014,6 +1016,10 @@ export class RaceScene extends Phaser.Scene {
    * el jugador (siempre `finished`: el modo corta con SU bandera a cuadros)
    * y cada rival terminado por SU tiempo o en carrera por último progreso —
    * de donde sale la posición final que viaja en el payload (1º..8º).
+   *
+   * V4 (#14): la MISMA clasificación alimenta el PODIO (top 3 con nombres
+   * visibles; el jugador viaja como `VS_CPU_PLAYER_NAME` para que la pantalla
+   * lo destaque o lo dibuje aparte si quedó fuera del top 3).
    */
   private buildVsCpuResults(): RaceVsCpuResultsData {
     const cars: FinalCar[] = [
@@ -1052,6 +1058,13 @@ export class RaceScene extends Phaser.Scene {
       this.lapTracker.lapsCompleted,
       this.lapTracker.bestLapMs,
       this.lapTracker.totalMs,
+      raceVsCpuPodium(
+        standings,
+        (peerId) =>
+          this.rivalRoster.find((rival) => rival.peerId === peerId)?.name ??
+          VS_CPU_FALLBACK_PILOT_NAME,
+        PLAYER_PEER_ID,
+      ),
     );
   }
 
