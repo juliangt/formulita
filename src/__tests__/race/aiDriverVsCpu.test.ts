@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { CIRCUIT, RACE_AI } from '../../config/balance';
-import { AiDriver, type AiDriverConfig } from '../../race/ai/aiDriver';
+import { AiDriver, type AiCarVision, type AiDriverConfig } from '../../race/ai/aiDriver';
 import { buildRacingLine } from '../../race/ai/racingLine';
 import { buildRivalRoster, rivalDriverConfig, type Rival } from '../../race/ai/rivalRoster';
+import { mulberry32 } from '../../net/roomRng';
 import { CircuitPhysics, type CarState } from '../../race/circuitPhysics';
 import { LapTracker } from '../../race/lapTracker';
 import { assignGridOrder } from '../../race/gridOrder';
@@ -59,28 +60,31 @@ const OFF_TRACK_MAX_RATIO = 0.02;
 /**
  * Tabla MEDIDA de vuelta promedio (ms) del rival RÁPIDO de
  * `buildRivalRoster(TEST_SEED, 'hard')` (mayor `speedScale`), promedio de sus
- * 3 vueltas desde parrilla — V1 con la línea de carrera:
+ * 3 vueltas desde parrilla — V2 (issue #14) con presets de dificultad
+ * (`speedPct` 0.97, `lineQuality` 0.97, errores y goma incluidos):
  *
- *   monaco: 26856 · monza: 27094 · silverstone: 26944 · spa: 26917 ·
- *   suzuka: 26689   (0.0% del tiempo fuera de asfalto en las 5 pistas;
- *   la primera vuelta cuesta ~1.2 s más: arranca parado en la parrilla).
+ *   monaco: 24583 · monza: 24450 · silverstone: 24350 · spa: 24444 ·
+ *   suzuka: 24656   (0.0% del tiempo fuera de asfalto en las 5 pistas;
+ *   la primera vuelta cuesta ~1.1 s más: arranca parado en la parrilla).
  *
- * La banda del test es ±15% alrededor de lo medido: bastante más rápido que
+ * La banda del test es ±12% alrededor de lo medido: bastante más rápido que
  * esto sólo sería posible cortando el pasto (invalida), bastante más lento
  * indica un driver trabado.
  */
 const MEASURED_AVG_LAP_MS: Record<TrackDefinition['id'], number> = {
-  monaco: 26856,
-  monza: 27094,
-  silverstone: 26944,
-  spa: 26917,
-  suzuka: 26689,
+  monaco: 24583,
+  monza: 24450,
+  silverstone: 24350,
+  spa: 24444,
+  suzuka: 24656,
 };
 
-/** Ancho de la banda de vuelta alrededor de lo medido (±15%). */
-const LAP_BAND_RATIO = 0.15;
+/** Ancho de la banda de vuelta alrededor de lo medido (±12%). */
+const LAP_BAND_RATIO = 0.12;
 
-/** Preset de driver equivalente al que arma `rivalDriverConfig` SIN personalidad. */
+/** Preset de driver equivalente al que arma `rivalDriverConfig` SIN personalidad
+ * y SIN carácter V2 (sin errores, sin goma: los tests unitarios de conducción
+ * quedan puros). */
 function baseDriverConfig(difficulty: CpuDifficulty): AiDriverConfig {
   return {
     targetSpeedFraction: RACE_AI.targetSpeedFraction[difficulty],
@@ -89,6 +93,10 @@ function baseDriverConfig(difficulty: CpuDifficulty): AiDriverConfig {
     lookAheadPx: RACE_AI.lookAheadPx,
     steerDeadzoneRad: RACE_AI.steerDeadzoneRad,
     brakeMarginSpeedPx: RACE_AI.brakeMarginSpeedPx,
+    mistakeEverySec: 0,
+    mistakeMagPx: 0,
+    aggression: 0.5,
+    rubberBandPct: 0,
   };
 }
 
@@ -141,7 +149,9 @@ function simulateRival(
     speed: 0,
   };
   const physics = new CircuitPhysics(path, trackDef.widthPx);
-  const driver = new AiDriver(path, line, rivalDriverConfig(rival, difficulty));
+  // V2: el harness espeja el cableado de RaceScene — driver con el RNG PROPIO
+  // del rival (errores humanos deterministas por seed).
+  const driver = new AiDriver(path, line, rivalDriverConfig(rival, difficulty), mulberry32(rival.seed));
   const laps = new LapTracker(path, { totalLaps });
 
   const lapTimes: number[] = [];
@@ -352,6 +362,16 @@ describe('Sim determinista — misma seed ⇒ mismo resultado', () => {
     expect(a).toEqual(b);
   });
 
+  it('V2: la carrera COMPLETA de 8 (con visión, errores y goma) es reproducible', () => {
+    const track = getTrackById('monza')!;
+    const a = simulateRace(track, TEST_SEED, 'normal', CIRCUIT.maxSpeed * 0.9);
+    const b = simulateRace(track, TEST_SEED, 'normal', CIRCUIT.maxSpeed * 0.9);
+    expect(a.playerPosition).toBe(b.playerPosition);
+    expect(a.classification).toEqual(b.classification);
+    expect(a.rivalLaps).toEqual(b.rivalLaps);
+    expect(a.standings).toEqual(b.standings);
+  });
+
   it('la seed cambia la parrilla de 8 (misma función de #9 que usa la escena)', () => {
     const track = getTrackById('monza')!;
     const path = buildTrackPath(track);
@@ -469,7 +489,8 @@ function simulateRace(
   const line = buildRacingLine(path, trackDef.widthPx);
   const slotsByPeer = new Map(slots.map((slot) => [slot.peerId, slot]));
 
-  // Runtime de rivales: driver + física + vueltas (setupVsCpu exacto).
+  // Runtime de rivales: driver V2 (rng propio) + física + vueltas
+  // (setupVsCpu exacto) y su ÚLTIMA proyección para la visión.
   const rivals = roster.map((rival) => {
     const slot = slotsByPeer.get(rival.peerId)!;
     const state: CarState = {
@@ -483,8 +504,14 @@ function simulateRace(
       state,
       physics: new CircuitPhysics(path, trackDef.widthPx),
       laps: new LapTracker(path),
-      driver: new AiDriver(path, line, rivalDriverConfig(rival, difficulty)),
+      driver: new AiDriver(
+        path,
+        line,
+        rivalDriverConfig(rival, difficulty),
+        mulberry32(rival.seed),
+      ),
       lastS: slot.s,
+      lastLateral: 0,
       finished: false,
     };
   });
@@ -501,15 +528,37 @@ function simulateRace(
   );
 
   for (let step = 0; step < cap && !playerLaps.finished; step += 1) {
+    // Visión V2 (stepVsCpu exacto): estado al INICIO del frame de todos los
+    // autos + gap de progreso de cada rival al jugador.
+    const playerProgress = playerLaps.lapsCompleted * length + playerS;
+    const playerVision: AiCarVision = { s: playerS, lateral: 0, speed: playerSpeed };
+    const rivalVisions: AiCarVision[] = rivals.map((rival) => ({
+      s: rival.lastS,
+      lateral: rival.lastLateral,
+      speed: rival.state.speed,
+    }));
+
     // Rivales en el MISMO paso fijo que el jugador; el que terminó SUS
     // vueltas se congela (stepVsCpu exacto).
-    for (const rival of rivals) {
+    for (let i = 0; i < rivals.length; i += 1) {
+      const rival = rivals[i];
       if (rival.finished) {
         continue;
       }
-      rival.physics.step(rival.state, DT, rival.driver.drive(rival.state));
+      const others = rivalVisions.filter((_, j) => j !== i);
+      others.push(playerVision);
+      const rivalProgress = rival.laps.lapsCompleted * length + rival.lastS;
+      rival.physics.step(
+        rival.state,
+        DT,
+        rival.driver.drive(rival.state, DT, {
+          cars: others,
+          playerGapPx: playerProgress - rivalProgress,
+        }),
+      );
       const projection = path.project(rival.state.x, rival.state.y);
       rival.lastS = projection.s;
+      rival.lastLateral = projection.lateral;
       rival.laps.update(projection.s, DT * 1000);
       if (rival.laps.finished) {
         rival.finished = true;
@@ -588,7 +637,12 @@ describe('Carrera vs CPU con parrilla de 8 — ranking y clasificación (issue #
   });
 
   it('jugador rápido: gana él y los rivales clasifican detrás (2º..8º)', () => {
-    const result = simulateRace(track, TEST_SEED, 'hard', CIRCUIT.maxSpeed);
+    // V2: los presets 'hard' son RÁPIDOS (speedPct 0.97 + personalidad por
+    // encima de la línea + goma), tanto que un jugador plano AL TECHO físico
+    // (300 px/s) puede perder contra el rival de pole. El caso que el test
+    // fija es "un jugador claramente más veloz que CUALQUIER CPU gana": el
+    // auto scripteado corre por encima del techo de los rivales.
+    const result = simulateRace(track, TEST_SEED, 'hard', CIRCUIT.maxSpeed * 1.15);
     expect(result.standings).toHaveLength(1 + RACE_AI.rivalCount);
     expect(result.playerPosition).toBe(1);
     // Ningún rival puede terminar ADELANTE del jugador en la clasificación.

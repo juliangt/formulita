@@ -172,21 +172,71 @@ describe('rivalDriverConfig — preset de dificultad × personalidad', () => {
     }
   });
 
-  it('la agresividad recorta el margen de frenada (los agresivos frenan tarde)', () => {
-    // El más agresivo del roster frena con MENOS margen que el más timido.
-    const byAggression = [...roster].sort((a, b) => a.aggression - b.aggression);
-    const shy = rivalDriverConfig(byAggression[0], 'normal');
-    const wild = rivalDriverConfig(byAggression[byAggression.length - 1], 'normal');
+  it('la agresividad efectiva recorta el margen de frenada (los agresivos frenan tarde)', () => {
+    // El más agresivo del roster frena con MENOS margen que el más timido
+    // (orden por la agresividad EFECTIVA del config, no la cruda).
+    const byAggression = [...roster]
+      .map((entry) => ({ entry, config: rivalDriverConfig(entry, 'normal') }))
+      .sort((a, b) => a.config.aggression - b.config.aggression);
+    const shy = byAggression[0].config;
+    const wild = byAggression[byAggression.length - 1].config;
     expect(wild.brakeMarginSpeedPx).toBeLessThan(shy.brakeMarginSpeedPx);
 
-    // Y el valor es exactamente la fórmula documentada en RACE_AI.
+    // Y el valor es exactamente la fórmula documentada en RACE_AI, ahora con
+    // la agresividad EFECTIVA (preset desviado por la personalidad).
     for (const entry of roster) {
       const config = rivalDriverConfig(entry, 'hard');
       expect(config.brakeMarginSpeedPx).toBeCloseTo(
-        RACE_AI.brakeMarginSpeedPx * (1 - entry.aggression * RACE_AI.aggressionBrakeGain),
+        RACE_AI.brakeMarginSpeedPx * (1 - config.aggression * RACE_AI.aggressionBrakeGain),
         12,
       );
     }
+  });
+
+  it('la agresividad EFECTIVA = base del preset ± spread, clampeada a [0, 1]', () => {
+    for (const difficulty of DIFFICULTIES) {
+      const base = RACE_AI.aggression[difficulty];
+      for (const entry of roster) {
+        const config = rivalDriverConfig(entry, difficulty);
+        const expected = Math.min(
+          Math.max(base + (entry.aggression - 0.5) * 2 * RACE_AI.aggressionSpread, 0),
+          1,
+        );
+        expect(config.aggression).toBeCloseTo(expected, 12);
+        expect(config.aggression).toBeGreaterThanOrEqual(0);
+        expect(config.aggression).toBeLessThanOrEqual(1);
+      }
+      // La media del roster ronda la base del preset (desvía DENTRO).
+      const mean =
+        roster.reduce((sum, entry) => sum + rivalDriverConfig(entry, difficulty).aggression, 0) /
+        roster.length;
+      expect(Math.abs(mean - base)).toBeLessThanOrEqual(RACE_AI.aggressionSpread);
+    }
+  });
+
+  it('los presets V2 ordenan por dificultad: velocidad, errores, agresión y goma', () => {
+    // Tabla del issue #14: fácil lento y humano, difícil rápido y quirúrgico.
+    for (const rival of buildRivalRoster(TEST_SEED, 'normal')) {
+      const configs = DIFFICULTIES.map((difficulty) => rivalDriverConfig(rival, difficulty));
+      for (const key of [
+        'targetSpeedFraction',
+        'lineSpeedScale',
+        'mistakeEverySec',
+        'aggression',
+      ] as const) {
+        expect(configs[0][key]).toBeLessThan(configs[1][key]);
+        expect(configs[1][key]).toBeLessThan(configs[2][key]);
+      }
+      for (const key of ['mistakeMagPx', 'rubberBandPct'] as const) {
+        expect(configs[0][key]).toBeGreaterThan(configs[1][key]);
+        expect(configs[1][key]).toBeGreaterThan(configs[2][key]);
+      }
+    }
+    // Y los presets de balance respetan la tabla del issue.
+    expect(RACE_AI.targetSpeedFraction.easy).toBeGreaterThan(0.7);
+    expect(RACE_AI.targetSpeedFraction.hard).toBeLessThanOrEqual(1);
+    expect(RACE_AI.rubberBandPct.easy).toBeGreaterThan(RACE_AI.rubberBandPct.hard);
+    expect(RACE_AI.mistakeEverySec.easy).toBeLessThan(RACE_AI.mistakeEverySec.hard);
   });
 
   it('la trazada propia viaja intacta y los parámetros comunes salen de RACE_AI', () => {
@@ -195,6 +245,9 @@ describe('rivalDriverConfig — preset de dificultad × personalidad', () => {
       expect(config.lineOffsetPx).toBe(entry.lineOffsetPx);
       expect(config.lookAheadPx).toBe(RACE_AI.lookAheadPx);
       expect(config.steerDeadzoneRad).toBe(RACE_AI.steerDeadzoneRad);
+      expect(config.rubberBandPct).toBe(RACE_AI.rubberBandPct.easy);
+      expect(config.mistakeEverySec).toBe(RACE_AI.mistakeEverySec.easy);
+      expect(config.mistakeMagPx).toBe(RACE_AI.mistakeMagPx.easy);
     }
   });
 });

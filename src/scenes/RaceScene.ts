@@ -76,9 +76,10 @@ import { TouchButton } from '../systems/TouchButton';
 import type { PointerEventEmitter } from '../systems/TouchSource';
 import { InputSystem, type IInputSource, type IInputState } from '../systems/InputSystem';
 import { RemoteCar } from '../entities/RemoteCar';
-import { AiDriver } from '../race/ai/aiDriver';
+import { AiDriver, type AiCarVision } from '../race/ai/aiDriver';
 import { buildRacingLine, type RacingLine } from '../race/ai/racingLine';
 import { buildRivalRoster, rivalDriverConfig, type Rival } from '../race/ai/rivalRoster';
+import { mulberry32 } from '../net/roomRng';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { formatLapBadge } from '../ui/format';
 import { MiniMap } from '../ui/MiniMap';
@@ -204,6 +205,8 @@ interface RivalRuntime {
   car: RemoteCar;
   /** Última coordenada de arco (ranking vivo y clasificación). */
   lastS: number;
+  /** Último lateral con signo (visión V2 del driver: adelantamiento). */
+  lastLateral: number;
   /** true cuando completó SUS 3 vueltas (deja de simularse). */
   finished: boolean;
   /** Tiempos exactos al terminar (para la clasificación final). */
@@ -388,10 +391,16 @@ class RaceTouchControls implements IInputSource {
  * V1 (issue #14) — PILOTOS REALES: SIETE rivales con personalidad
  * (`race/ai/rivalRoster.ts`: nombre, paleta, ±velocidad, trazada y
  * agresividad propias, deterministas por seed de carrera) que siguen la
- * LÍNEA DE CARRERA (`race/ai/racingLine.ts`, precomputada UNA vez por pista
- * y compartida) con frenada por curvatura lookahead. Parrilla de 8,
- * ranking/minimapa/resultados sobre los 8.
- */
+   * LÍNEA DE CARRERA (`race/ai/racingLine.ts`, precomputada UNA vez por pista
+   * y compartida) con frenada por curvatura lookahead. Parrilla de 8,
+   * ranking/minimapa/resultados sobre los 8.
+   *
+   * V2 (issue #14) — TRES DIFICULTADES CON CARÁCTER: los presets de 6
+   * parámetros viven en `RACE_AI` (resueltos por `rivalDriverConfig`) y cada
+   * driver corre con errores humanos (Poisson), búsqueda de hueco (visión de
+   * los demás autos, ver `stepVsCpu`) y goma acotada según el gap al
+   * jugador — todo con el RNG propio del rival, determinista por seed.
+   */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';
 
@@ -851,7 +860,14 @@ export class RaceScene extends Phaser.Scene {
           };
         }
       };
-      const driver = new AiDriver(this.path, this.racingLine, rivalDriverConfig(rival, this.cpuDifficulty));
+      // V2 (#14) — el driver recibe el RNG PROPIO del rival (su seed
+      // derivada): errores humanos y maniobras deterministas por carrera.
+      const driver = new AiDriver(
+        this.path,
+        this.racingLine,
+        rivalDriverConfig(rival, this.cpuDifficulty),
+        mulberry32(rival.seed),
+      );
       const car = new RemoteCar(this, {
         peerId: rival.peerId,
         name: rival.name,
@@ -868,6 +884,7 @@ export class RaceScene extends Phaser.Scene {
         driver,
         car,
         lastS: slot.s ?? 0,
+        lastLateral: 0,
         finished: false,
         finish: null,
       });
@@ -879,14 +896,40 @@ export class RaceScene extends Phaser.Scene {
    * jugador (mismo `dt`, misma `CircuitPhysics`) y el ranking vivo de 8
    * autos repinta el badge Pn/N al ritmo de `RACE_MULTI.rankIntervalMs`
    * (igual que multi).
+   *
+   * V2 (#14) — el driver recibe VISIÓN de los demás autos (rivales + jugador,
+   * con el estado al inicio del frame: un frame de lag a 60 Hz es invisible y
+   * evita re-proyectar cada auto por cada driver), su gap de progreso al
+   * JUGADOR (goma) y el `dt` del paso (reloj de errores humanos).
    */
   private stepVsCpu(dt: number, deltaMs: number): void {
-    for (const runtime of this.rivals) {
+    const length = this.path.totalLength;
+    const playerProgress = this.lapTracker.lapsCompleted * length + this.lastProjection.s;
+    const playerVision: AiCarVision = {
+      s: this.lastProjection.s,
+      lateral: this.lastProjection.lateral,
+      speed: this.carState.speed,
+    };
+    const rivalVisions: AiCarVision[] = this.rivals.map((runtime) => ({
+      s: runtime.lastS,
+      lateral: runtime.lastLateral,
+      speed: runtime.state.speed,
+    }));
+
+    for (let i = 0; i < this.rivals.length; i += 1) {
+      const runtime = this.rivals[i];
       if (!runtime.finished) {
-        const input = runtime.driver.drive(runtime.state);
+        const others = rivalVisions.filter((_, j) => j !== i);
+        others.push(playerVision);
+        const rivalProgress = runtime.lapTracker.lapsCompleted * length + runtime.lastS;
+        const input = runtime.driver.drive(runtime.state, dt, {
+          cars: others,
+          playerGapPx: playerProgress - rivalProgress,
+        });
         runtime.physics.step(runtime.state, dt, input);
         const projection = this.path.project(runtime.state.x, runtime.state.y);
         runtime.lastS = projection.s;
+        runtime.lastLateral = projection.lateral;
         runtime.lapTracker.update(projection.s, deltaMs);
       }
       runtime.car.sync(runtime.state.x, runtime.state.y, runtime.state.heading);

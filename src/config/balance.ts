@@ -576,35 +576,86 @@ export const RACE_MULTI = {
  * Rivales CPU del GRAN PREMIO (issue #14). V0 era un "piloto de pruebas" que
  * seguía el EJE a velocidad fija; V1 es un piloto real: sigue la LÍNEA DE
  * CARRERA (`race/ai/racingLine.ts`) con frenada por curvatura lookahead y
- * personalidades propias (`race/ai/rivalRoster.ts`).
+ * personalidades propias (`race/ai/rivalRoster.ts`). V2 son TRES
+ * DIFICULTADES CON CARÁCTER: cada dificultad es un preset data-driven de 6
+ * parámetros (tabla del issue) que la personalidad del rival desvía hacia
+ * adentro — mismo orden de ritmo y de "humanness" garantizado por preset.
  *
- * Los presets de velocidad viven acá (ajustables sin tocar lógica); las
- * constantes puramente geométricas de la línea (paso de muestreo, ventanas
- * de suavizado, margen al borde) viven en el propio módulo `racingLine`.
+ * Los presets viven acá (ajustables sin tocar lógica); las constantes
+ * puramente geométricas de la línea (paso de muestreo, ventanas de
+ * suavizado, margen al borde) viven en el propio módulo `racingLine`.
  */
 export const RACE_AI = {
+  /* --- Presets por dificultad (V2, tabla del issue #14) ---------------- */
+
   /**
-   * Techo de velocidad en RECTA como fracción de `CIRCUIT.maxSpeed`, por
-   * dificultad. En curva manda el `targetSpeed` de la línea (siempre menor):
-   * el cap sólo recorta las rectas, así que la dificultad marca el ritmo
-   * general sin impedir que el CPU sostenga las curvas.
+   * speedPct — techo de velocidad en RECTA como fracción de
+   * `CIRCUIT.maxSpeed`. En curva manda el `targetSpeed` de la línea (siempre
+   * menor): el cap sólo recorta las rectas, así que la dificultad marca el
+   * ritmo general sin impedir que el CPU sostenga las curvas.
    */
   targetSpeedFraction: {
-    easy: 0.65,
-    normal: 0.75,
-    hard: 0.85,
+    easy: 0.78,
+    normal: 0.88,
+    hard: 0.97,
   },
   /**
-   * Escala sobre el `targetSpeed` de la LÍNEA por dificultad. La línea ya
-   * trae un factor de seguridad (0.9) sobre la velocidad físicamente
-   * sostenible de cada curva; 1.0 sería "al límite de la línea" y los
-   * presets dejan margen para que un exceso lo castigue el pasto.
+   * lineQuality — cuán pegado va al ritmo de la LÍNEA: escala sobre su
+   * `targetSpeed` por punto. La línea ya trae un factor de seguridad (0.9)
+   * sobre la velocidad físicamente sostenible de cada curva; 1.0 sería "al
+   * límite de la línea" (el preset de DIFÍCIL) y los presets más lentos
+   * dejan margen para que un exceso lo castigue el pasto.
    */
   lineSpeedScale: {
-    easy: 0.82,
+    easy: 0.84,
     normal: 0.9,
     hard: 0.97,
   },
+  /**
+   * Media (segundos) entre ERRORES HUMANOS del rival (proceso de Poisson
+   * con el RNG propio de cada rival): en FÁCIL el error es notorio, en
+   * DIFÍCIL es raro. ≤ 0 desactiva los errores.
+   */
+  mistakeEverySec: {
+    easy: 9,
+    normal: 16,
+    hard: 30,
+  },
+  /**
+   * Desvío lateral (px) del error humano: cuánto se va el auto de SU
+   * trazada durante el fallo (el aim queda siempre clampeado al asfalto:
+   * el error cuesta tiempo, no tira al rival al pasto).
+   */
+  mistakeMagPx: {
+    easy: 45,
+    normal: 26,
+    hard: 12,
+  },
+  /**
+   * aggression — base de agresividad (0–1) por dificultad: cuánto BUSCA el
+   * hueco para adelantar (y cuánto recorta su margen de frenada). La
+   * personalidad del rival desvía esta base ±`aggressionSpread`.
+   */
+  aggression: {
+    easy: 0.25,
+    normal: 0.5,
+    hard: 0.75,
+  },
+  /**
+   * rubberBandPct — goma: ± fracción sobre el ritmo GLOBAL del rival según
+   * su distancia de progreso al JUGADOR (lejos detrás del jugador acelera
+   * hasta esto, lejos adelante frena hasta esto), dentro del preset y
+   * NUNCA por encima del techo físico. FÁCIL más elástico, DIFÍCIL casi
+   * rígido.
+   */
+  rubberBandPct: {
+    easy: 0.06,
+    normal: 0.03,
+    hard: 0.01,
+  },
+
+  /* --- Parámetros comunes (todas las dificultades) --------------------- */
+
   /** Distancia del punto de mira sobre la línea (px de arco). */
   lookAheadPx: 120,
   /** Zona muerta del error angular (rad): debajo, volante recto. */
@@ -627,6 +678,54 @@ export const RACE_AI = {
    * margen × (1 − gain)): los agresivos frenan más tarde.
    */
   aggressionBrakeGain: 0.6,
+  /**
+   * Desvío ± de la personalidad sobre la base de `aggression` del preset:
+   * agresividad efectiva = base + (roll − ½) × 2 × esto, clampeada a 0–1.
+   */
+  aggressionSpread: 0.3,
+
+  /* --- Errores humanos (V2) -------------------------------------------- */
+
+  /** Duración del fallo (ms): pasa y el driver vuelve solo a su ritmo. */
+  mistakeMs: 500,
+  /**
+   * Sobre-velocidad del error de frenada tardía: durante el fallo el
+   * objetivo longitudinal se multiplica por esto (frena MÁS TARDE), con
+   * techo físico `CIRCUIT.maxSpeed`.
+   */
+  mistakeSpeedOvershoot: 1.3,
+  /** Probabilidad de que un error sea de DESVÍO lateral (vs frenada). */
+  mistakeLateralChance: 0.5,
+
+  /* --- Adelantamiento (V2) ---------------------------------------------- */
+
+  /** Ventana de detección del auto de adelante (px de progreso). */
+  overtakeGapPx: 240,
+  /**
+   * Diferencia de velocidad mínima (px/s) para INICIAR la maniobra: no
+   * desvía su trazada por un auto que no está cerrando.
+   */
+  overtakeClosingPx: 10,
+  /** Desvío lateral hacia el hueco elegido (px sobre SU trazada). */
+  overtakeSidePx: 34,
+  /** Velocidad del desvío lateral (px/s): ida y retorno suaves. */
+  overtakeLateralSpeedPx: 170,
+  /**
+   * Probabilidad MÍNIMA de intentar una maniobra (con agresividad 0):
+   * intenta con `base + (1 − base) × agresividad`; con RNG fallado entra a
+   * un enfriamiento de `overtakeRetrySec` antes de reintentar.
+   */
+  overtakeAttemptBase: 0.25,
+  /** Enfriamiento (s) tras una maniobra rechazada por el RNG. */
+  overtakeRetrySec: 1.5,
+
+  /* --- Rubber-banding (V2) ---------------------------------------------- */
+
+  /**
+   * Gap de progreso al jugador (px) al que el ajuste de goma llega a SU
+   * tope ±`rubberBandPct` (interpolación lineal entre 0 y este gap).
+   */
+  rubberBandFullGapPx: 600,
 } as const;
 
 /* ------------------------------------------------------------------ */

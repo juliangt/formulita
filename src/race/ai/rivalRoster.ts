@@ -104,18 +104,34 @@ export function buildRivalRoster(seed: number, difficulty: CpuDifficulty): Rival
  * Config del `AiDriver` de un rival: preset de dificultad × personalidad.
  * ÚNICO lugar donde se resuelven los presets (RaceScene sólo consume) — así
  * el orden de ritmo por dificultad es testeable sin escena.
+ *
+ * V2 — los 6 presets del issue (`targetSpeedFraction` = speedPct,
+ * `lineSpeedScale` = lineQuality, `mistakeEverySec`, `mistakeMagPx`,
+ * `aggression`, `rubberBandPct`) salen de `RACE_AI` por dificultad; la
+ * personalidad desvía DENTRO del preset (velocidad, trazada y agresividad).
  */
 export function rivalDriverConfig(rival: Rival, difficulty: CpuDifficulty): AiDriverConfig {
   const fraction = RACE_AI.targetSpeedFraction[difficulty] ?? RACE_AI.targetSpeedFraction.normal;
   const lineScale = RACE_AI.lineSpeedScale[difficulty] ?? RACE_AI.lineSpeedScale.normal;
+  // Agresividad efectiva: base del preset desviada por la personalidad
+  // (roll 0–1 → ±spread), clampeada — ordena por dificultad SIN clonar.
+  const aggressionBase = RACE_AI.aggression[difficulty] ?? RACE_AI.aggression.normal;
+  const aggression = Math.min(
+    Math.max(aggressionBase + (rival.aggression - 0.5) * 2 * RACE_AI.aggressionSpread, 0),
+    1,
+  );
   return {
     targetSpeedFraction: Math.min(Math.max(fraction * rival.speedScale, 0), 1),
     lineSpeedScale: Math.max(lineScale * rival.speedScale, 0),
     lineOffsetPx: rival.lineOffsetPx,
     lookAheadPx: RACE_AI.lookAheadPx,
     steerDeadzoneRad: RACE_AI.steerDeadzoneRad,
-    // Agresividad: recorta el margen de frenada (frena más tarde).
+    // La agresividad EFECTIVA recorta el margen de frenada (frena más tarde).
     brakeMarginSpeedPx:
-      RACE_AI.brakeMarginSpeedPx * (1 - rival.aggression * RACE_AI.aggressionBrakeGain),
+      RACE_AI.brakeMarginSpeedPx * (1 - aggression * RACE_AI.aggressionBrakeGain),
+    mistakeEverySec: RACE_AI.mistakeEverySec[difficulty] ?? RACE_AI.mistakeEverySec.normal,
+    mistakeMagPx: RACE_AI.mistakeMagPx[difficulty] ?? RACE_AI.mistakeMagPx.normal,
+    aggression,
+    rubberBandPct: RACE_AI.rubberBandPct[difficulty] ?? RACE_AI.rubberBandPct.normal,
   };
 }

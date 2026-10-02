@@ -103,12 +103,26 @@ export class RacingLine {
   /** Perímetro de la pista (px): la línea cubre el MISMO anillo. */
   readonly totalLength: number;
 
+  /**
+   * Tope del offset lateral al ASFTALTO (px; = ancho/2 − margen al borde):
+   * V2 lo consume el driver para clampear la mira (personalidad + desvío
+   * de error/adelantamiento) dentro del ruedo — el error humano cuesta
+   * tiempo, no tira al auto al pasto.
+   */
+  readonly maxOffsetPx: number;
+
   private readonly points: RacingLinePoint[];
 
-  constructor(points: RacingLinePoint[], stepPx: number, totalLength: number) {
+  constructor(
+    points: RacingLinePoint[],
+    stepPx: number,
+    totalLength: number,
+    maxOffsetPx: number,
+  ) {
     this.points = points;
     this.stepPx = stepPx;
     this.totalLength = totalLength;
+    this.maxOffsetPx = maxOffsetPx;
   }
 
   /** Cantidad de puntos de la línea (el anillo NO repite el primero). */
@@ -147,6 +161,7 @@ export function buildRacingLine(path: TrackPath, widthPx: number): RacingLine {
   const totalLength = path.totalLength;
   const count = Math.max(8, Math.round(totalLength / STEP_PX));
   const step = totalLength / count;
+  const maxOffset = Math.max(0, widthPx / 2 - RACING_LINE_EDGE_MARGIN_PX);
 
   // 1) Curvatura con signo por diferencia central de tangentes del eje.
   const curvature = new Float64Array(count);
@@ -159,7 +174,6 @@ export function buildRacingLine(path: TrackPath, widthPx: number): RacingLine {
 
   // 2) Offset crudo: hacia el interior de la curva (κ > 0 = giro a derecha
   //    = interior al lado lateral positivo), saturado y acotado al asfalto.
-  const maxOffset = Math.max(0, widthPx / 2 - RACING_LINE_EDGE_MARGIN_PX);
   let offsets = new Array<number>(count);
   for (let i = 0; i < count; i += 1) {
     const magnitude = Math.min(Math.abs(curvature[i]) * OFFSET_SATURATION_RADIUS_PX, 1);
@@ -199,5 +213,5 @@ export function buildRacingLine(path: TrackPath, widthPx: number): RacingLine {
     });
   }
 
-  return new RacingLine(points, step, totalLength);
+  return new RacingLine(points, step, totalLength, maxOffset);
 }
