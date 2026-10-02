@@ -226,9 +226,10 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 
 ### Publicación (GitHub Pages)
 
-Al pushear a `main`, el workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) corre la suite completa, buildea con `--base=/formulita/` (Pages sirve los sitios de proyecto bajo subpath) y publica en **<https://juliangt.github.io/formulita/>**.
+Los workflows corren **solo manualmente** — pestaña **Actions** → elegir workflow → **Run workflow** — sin disparadores automáticos por push ni PR:
 
-Los PRs a `main` corren CI (tests + build, sin deploy) en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+- **Deploy a GitHub Pages** ([`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml)): corre la suite completa, buildea con `--base=/formulita/` (Pages sirve los sitios de proyecto bajo subpath) y publica en **<https://juliangt.github.io/formulita/>**.
+- **CI** ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)): tests + build, sin deploy.
 
 Requisitos (una sola vez, quien administra el repo):
 
