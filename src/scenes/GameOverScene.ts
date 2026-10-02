@@ -7,7 +7,9 @@ import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
 import {
+  parseRaceMultiResults,
   parseRacePracticeResults,
+  type RaceMultiResultsData,
   type RacePracticeResultsData,
 } from '../race/results';
 import { GameScene } from './GameScene';
@@ -77,6 +79,8 @@ export class GameOverScene extends Phaser.Scene {
   private multiData: MultiGameOverData | null = null;
   /** V1 (issue #9) — resultados de la carrera de práctica (null = otra rama). */
   private practiceData: RacePracticeResultsData | null = null;
+  /** V2 (issue #9) — clasificación final de la carrera multi (null = otra). */
+  private raceMultiData: RaceMultiResultsData | null = null;
 
   constructor() {
     super(GameOverScene.KEY);
@@ -86,6 +90,7 @@ export class GameOverScene extends Phaser.Scene {
     this.raceData = parseGameOverData(data);
     this.multiData = parseMultiGameOverData(data);
     this.practiceData = parseRacePracticeResults(data);
+    this.raceMultiData = parseRaceMultiResults(data);
   }
 
   create(): void {
@@ -98,6 +103,15 @@ export class GameOverScene extends Phaser.Scene {
     // lobby: el transporte de la anterior ya se destruyó al salir de Game).
     if (this.multiData) {
       this.createMultiResults(centerX);
+      return;
+    }
+
+    // V2 (issue #9) — la carrera en circuito MULTIJUGADOR tiene su propia
+    // rama: clasificación final (podio con nombres y tiempos de los
+    // terminados). Va ANTES de la práctica: son modos distintos de la misma
+    // escena y el payload nunca es ambiguo (mode 'race-multi' vs 'practice').
+    if (this.raceMultiData) {
+      this.createRaceMultiResults(centerX);
       return;
     }
 
@@ -287,6 +301,130 @@ export class GameOverScene extends Phaser.Scene {
     const name = getPlayerProfileRepository(this.registry).load().name;
     this.scene.start(LobbyScene.KEY, { mode: 'create', name });
   };
+
+  /**
+   * V2 (issue #9) — RESULTADOS de la carrera en circuito multijugador:
+   * podio P1..Pn con nombre+color (del roster congelado) y, para los que
+   * terminaron, su tiempo total (`rfin`); los que no llegaron muestran la
+   * vuelta en la que estaban y los caídos, ABANDONÓ. El ganador va en oro y
+   * la propia fila queda resaltada. Los botones son los de la BATALLA
+   * (MENÚ / CREAR PARTIDA: una carrera nueva empieza por el lobby).
+   */
+  private createRaceMultiResults(centerX: number): void {
+    const data = this.raceMultiData;
+    if (!data) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+    const nameOf = (peerId: string): string =>
+      data.players.find((player) => player.peerId === peerId)?.name ?? 'PILOTO';
+    const colorOf = (peerId: string): number =>
+      data.players.find((player) => player.peerId === peerId)?.color ?? 0xffffff;
+
+    this.add
+      .text(centerX, LEADERBOARD.titleY, 'RESULTADOS', MULTI_TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    const mine = data.standings.find((standing) => standing.peerId === data.myPeerId);
+    const place = mine?.position ?? data.standings.length;
+    this.add
+      .text(centerX, LEADERBOARD.messageY, personalResultMessage(place), {
+        fontFamily: 'monospace',
+        fontSize: `${LEADERBOARD.messageFontSize}px`,
+        color: place === 1 ? GOLD_COLOR : '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 8);
+
+    // Subtítulo: la pista corrida y el formato de la carrera.
+    this.add
+      .text(centerX, LEADERBOARD.headerY, `${data.trackName} · ${CIRCUIT.totalLaps} VUELTAS`, {
+        fontFamily: 'monospace',
+        fontSize: `${LEADERBOARD.headerFontSize + 8}px`,
+        color: DIM_COLOR,
+      })
+      .setOrigin(0.5);
+
+    const rowStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${LEADERBOARD.rowFontSize + 6}px`,
+      color: '#f2f2f2',
+    };
+    data.standings.forEach((standing, index) => {
+      const y = LEADERBOARD.rowStartY + index * LEADERBOARD.rowHeight;
+      const isSelf = standing.peerId === data.myPeerId;
+      const rowColor = standing.position === 1 ? GOLD_COLOR : isSelf ? '#8fce3c' : '#f2f2f2';
+      const rightText =
+        standing.status === 'finished' && standing.totalMs !== null
+          ? formatLapMs(standing.totalMs)
+          : standing.status === 'running'
+            ? `VUELTA ${Math.min(standing.lap + 1, CIRCUIT.totalLaps)}`
+            : 'ABANDONÓ';
+      this.add
+        .rectangle(
+          LEADERBOARD.nameX - LEADERBOARD.swatchSize,
+          y,
+          LEADERBOARD.swatchSize,
+          LEADERBOARD.swatchSize,
+          colorOf(standing.peerId),
+        )
+        .setStrokeStyle(2, 0x0c0c14);
+      this.add
+        .text(LEADERBOARD.placeX, y, `P${standing.position}`, rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+      this.add
+        .text(LEADERBOARD.nameX, y, nameOf(standing.peerId), rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+      this.add
+        .text(LEADERBOARD.kmX, y, rightText, rowStyle)
+        .setOrigin(1, 0.5)
+        .setColor(rowColor);
+    });
+
+    new MenuButton(this, {
+      x: centerX,
+      y: LEADERBOARD.menuY,
+      width: LEADERBOARD.buttonWidth,
+      height: LEADERBOARD.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: LEADERBOARD.buttonFontSize,
+      bus,
+      onPress: this.goToMenu,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: LEADERBOARD.playY,
+      width: LEADERBOARD.buttonWidth,
+      height: LEADERBOARD.buttonHeight,
+      label: 'CREAR PARTIDA',
+      tint: 0x1d8f43,
+      fontSize: LEADERBOARD.buttonFontSize - 6,
+      bus,
+      onPress: this.createMultiRace,
+    });
+
+    this.input.keyboard?.on('keydown-ENTER', this.createMultiRace);
+    this.input.keyboard?.on('keydown-SPACE', this.createMultiRace);
+    this.input.keyboard?.on('keydown-C', this.createMultiRace);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    if (!prefersTouchControls(this.game.device)) {
+      this.add
+        .text(centerX, LEADERBOARD.hintY, 'ENTER / C  CREAR PARTIDA   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.createMultiRace);
+      this.input.keyboard?.off('keydown-SPACE', this.createMultiRace);
+      this.input.keyboard?.off('keydown-C', this.createMultiRace);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
 
   /**
    * V1 (issue #9) — RESULTADOS de la carrera de práctica (ENTRENAR): misma

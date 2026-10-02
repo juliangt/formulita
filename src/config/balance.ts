@@ -533,6 +533,38 @@ export const RACE = {
   pauseX: 610,
   /** Y del centro del botón de pausa. */
   pauseY: 268,
+  /* V2 (issue #9) — badge de posición en vivo "P3/8": bajo el tiempo total
+   * de la columna izquierda del HUD (totalTimeY 142). Sólo visible en modo
+   * multi (la práctica nunca lo llama). */
+  /** Y del badge de posición (centro). */
+  positionBadgeY: 184,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito multijugador (issue #9, V2)                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Gracia de cierre de la carrera multi (ms): el primer auto en completar las
+ * `CIRCUIT.totalLaps` vueltas dispara la condición de ganador (su `rfin` es
+ * el primero); la partida termina para TODOS cuando terminaron todos O pasa
+ * esta ventana desde ese primer `rfin` — los que no llegaron se clasifican
+ * por su último progreso conocido (ver `race/raceRanking.finalClassification`).
+ */
+export const RACE_FINISH_GRACE_MS = 30000;
+
+/**
+ * Presentación y ritmo del modo multi de RaceScene (V2). El netcode comparte
+ * STATE_HZ / GHOST_INTERPOLATION_MS / SNAPSHOT_BUFFER_SIZE con la BATALLA.
+ */
+export const RACE_MULTI = {
+  /**
+   * Intervalo del ranking vivo (ms): `rankCars` corre cada este tiempo (no
+   * por frame — el orden no cambia tan rápido y el badge repinta sólo si
+   * cambió el texto). También gobierna el seguimiento de cámara del
+   * espectador (quien terminó sigue al líder).
+   */
+  rankIntervalMs: 250,
 } as const;
 
 /** X del centro de un carril del asfalto (índice 0 = izquierda). */
@@ -739,6 +771,46 @@ export const LOBBY = {
   chatButtonHeight: 64,
   /** Tamaño de fuente de la etiqueta CHAT (px). */
   chatButtonFontSize: 30,
+  /* V2 (issue #9) — fila de MODO del anfitrión (BATALLA / CARRERA + pista),
+   * entre la palabra de sala (wordY 380) y el rótulo del roster (495). La
+   * fila completa es visible SOLO para el anfitrión; los invitados conocen
+   * el modo al recibir el `start` (el lobby no difunde estado, igual que #1). */
+  /** Y del centro de la fila de modo (centros de los botones). */
+  modeRowY: 444,
+  /** Ancho/alto de los chips BATALLA / CARRERA y su fuente. */
+  modeChipWidth: 170,
+  modeChipHeight: 56,
+  modeChipFontSize: 24,
+  /** Centros X de los chips (BATALLA a la izquierda, CARRERA al medio). */
+  battleChipX: 105,
+  raceChipX: 300,
+  /** Botón de pista (sólo con CARRERA): centro X, ancho/alto y fuente. */
+  trackButtonX: 550,
+  trackButtonWidth: 280,
+  trackButtonHeight: 56,
+  trackButtonFontSize: 22,
+  /* Overlay del picker de pistas del lobby (miniaturas TrackThumb), mismo
+   * patrón del selector de ENTRENAR del menú. */
+  /** Centro Y y tamaño del panel. */
+  trackPanelY: 660,
+  trackPanelWidth: 620,
+  trackPanelHeight: 820,
+  /** Y del título y del botón CERRAR. */
+  trackTitleY: 320,
+  trackCloseY: 1010,
+  trackCloseWidth: 300,
+  trackCloseHeight: 88,
+  /** Filas: centro Y de la primera y paso entre filas. */
+  trackRowStartY: 430,
+  trackRowStep: 118,
+  /** Lado de la miniatura de cada fila (TrackThumb) y su centro X. */
+  trackThumbSize: 88,
+  trackThumbX: 155,
+  /** Botón con el nombre de la pista: centro X, ancho/alto y fuente. */
+  trackRowButtonX: 435,
+  trackRowButtonWidth: 340,
+  trackRowButtonHeight: 84,
+  trackRowButtonFontSize: 34,
 } as const;
 
 /* ------------------------------------------------------------------ */

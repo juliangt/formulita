@@ -11,7 +11,8 @@
  * Contenido (posiciones en `RACE`, balance.ts):
  * - badge "VUELTA 2/3" (oro),
  * - tiempo de la vuelta en curso,
- * - tiempo total desde el GO!.
+ * - tiempo total desde el GO!,
+ * - V2 — badge de posición en vivo "P3/8" (sólo multi; `setPosition`).
  */
 
 import Phaser from 'phaser';
@@ -31,6 +32,8 @@ export interface RaceHudConfig {
   readonly lapTimeY?: number;
   /** Y del tiempo total (centro). */
   readonly totalTimeY?: number;
+  /** Y del badge de posición (centro; V2 multi). */
+  readonly positionY?: number;
   /** Profundidad en la escena. */
   readonly depth?: number;
 }
@@ -41,10 +44,12 @@ export class RaceHud {
   private readonly lapBadgeText: Phaser.GameObjects.Text;
   private readonly lapTimeText: Phaser.GameObjects.Text;
   private readonly totalTimeText: Phaser.GameObjects.Text;
+  private readonly positionText: Phaser.GameObjects.Text;
 
   private lastBadge = '';
   private lastLapTime = '';
   private lastTotalTime = '';
+  private lastPosition = '';
 
   constructor(scene: Phaser.Scene, config: RaceHudConfig = {}) {
     const {
@@ -52,6 +57,7 @@ export class RaceHud {
       lapBadgeY = RACE.lapBadgeY,
       lapTimeY = RACE.lapTimeY,
       totalTimeY = RACE.totalTimeY,
+      positionY = RACE.positionBadgeY,
       depth = 0,
     } = config;
 
@@ -84,7 +90,23 @@ export class RaceHud {
       .setOrigin(0, 0.5)
       .setStroke(STROKE_COLOR, 4);
 
-    this.container.add([this.lapBadgeText, this.lapTimeText, this.totalTimeText]);
+    // V2 — posición en vivo: oculta en práctica (nunca se llama setPosition).
+    this.positionText = scene.add
+      .text(x, positionY, '', {
+        fontFamily: 'monospace',
+        fontSize: `${RACE.lapBadgeFontSize}px`,
+        color: '#f2f2f2',
+      })
+      .setOrigin(0, 0.5)
+      .setStroke(STROKE_COLOR, 6)
+      .setVisible(false);
+
+    this.container.add([
+      this.lapBadgeText,
+      this.lapTimeText,
+      this.totalTimeText,
+      this.positionText,
+    ]);
   }
 
   /**
@@ -110,6 +132,19 @@ export class RaceHud {
     if (totalTime !== this.lastTotalTime) {
       this.lastTotalTime = totalTime;
       this.totalTimeText.setText(totalTime);
+    }
+  }
+
+  /**
+   * V2 (multi) — badge de posición en vivo "P3/8" (ranking de `rankCars`).
+   * Repinta sólo si cambió; la primera llamada muestra el badge (en práctica
+   * no se llama y queda oculto).
+   */
+  setPosition(position: number, total: number): void {
+    const label = `P${Math.max(1, Math.floor(position))}/${Math.max(1, Math.floor(total))}`;
+    if (label !== this.lastPosition) {
+      this.lastPosition = label;
+      this.positionText.setText(label).setVisible(true);
     }
   }
 

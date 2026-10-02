@@ -49,6 +49,9 @@ import {
   type MatchOverPayload,
   type PeerMeta,
   type PlayerInfo,
+  type RaceFinishPayload,
+  type RaceOverPayload,
+  type RaceStatePayload,
   type RosterEntry,
   type StartPayload,
   type StatePayload,
@@ -140,6 +143,9 @@ type HandlerMap = {
   eliminated: Set<(peerId: string, payload: EliminatedPayload) => void>;
   matchOver: Set<(peerId: string, payload: MatchOverPayload) => void>;
   chat: Set<(peerId: string, payload: ChatPayload) => void>;
+  raceState: Set<(peerId: string, payload: RaceStatePayload) => void>;
+  raceFinish: Set<(peerId: string, payload: RaceFinishPayload) => void>;
+  raceOver: Set<(peerId: string, payload: RaceOverPayload) => void>;
   roomFull: Set<() => void>;
   error: Set<(message: string) => void>;
 };
@@ -173,6 +179,9 @@ export class TrysteroNetClient implements NetClient {
     eliminated: new Set(),
     matchOver: new Set(),
     chat: new Set(),
+    raceState: new Set(),
+    raceFinish: new Set(),
+    raceOver: new Set(),
     roomFull: new Set(),
     error: new Set(),
   };
@@ -297,6 +306,30 @@ export class TrysteroNetClient implements NetClient {
       }
     };
     this.chatAction = chatAction;
+
+    // Carrera en circuito (V2, issue #9): rstate a STATE_HZ, rfin (una vez
+    // al terminar) y race-over (una vez, el ganador). Patrón aditivo de las
+    // acciones de M2: mismas tres líneas por acción, namespaces nuevos.
+    const raceStateAction = room.makeAction<RaceStatePayload>('rstate');
+    raceStateAction.onMessage = (payload, context) => {
+      for (const handler of this.handlers.raceState) {
+        handler(context.peerId, payload);
+      }
+    };
+
+    const raceFinishAction = room.makeAction<RaceFinishPayload>('rfin');
+    raceFinishAction.onMessage = (payload, context) => {
+      for (const handler of this.handlers.raceFinish) {
+        handler(context.peerId, payload);
+      }
+    };
+
+    const raceOverAction = room.makeAction<RaceOverPayload>('race-over');
+    raceOverAction.onMessage = (payload, context) => {
+      for (const handler of this.handlers.raceOver) {
+        handler(context.peerId, payload);
+      }
+    };
 
     room.onPeerJoin = (peerId) => this.handlePeerJoin(peerId);
     room.onPeerLeave = (peerId) => this.handlePeerLeave(peerId);
@@ -483,6 +516,20 @@ export class TrysteroNetClient implements NetClient {
     void this.chatAction.send(makeChatPayload(text));
   }
 
+  /* ---------------- carrera en circuito (V2, issue #9) ---------------- */
+
+  sendRaceState(payload: RaceStatePayload): void {
+    this.withRoom((room) => void room.makeAction<RaceStatePayload>('rstate').send(payload));
+  }
+
+  sendRaceFinish(payload: RaceFinishPayload): void {
+    this.withRoom((room) => void room.makeAction<RaceFinishPayload>('rfin').send(payload));
+  }
+
+  sendRaceOver(payload: RaceOverPayload): void {
+    this.withRoom((room) => void room.makeAction<RaceOverPayload>('race-over').send(payload));
+  }
+
   private withRoom(fn: (room: TrysteroRoom) => void): void {
     if (!this.room) {
       this.emitError('No hay sala activa');
@@ -564,6 +611,21 @@ export class TrysteroNetClient implements NetClient {
   onChat(handler: (peerId: string, payload: ChatPayload) => void): () => void {
     this.handlers.chat.add(handler);
     return () => this.handlers.chat.delete(handler);
+  }
+
+  onRaceState(handler: (peerId: string, payload: RaceStatePayload) => void): () => void {
+    this.handlers.raceState.add(handler);
+    return () => this.handlers.raceState.delete(handler);
+  }
+
+  onRaceFinish(handler: (peerId: string, payload: RaceFinishPayload) => void): () => void {
+    this.handlers.raceFinish.add(handler);
+    return () => this.handlers.raceFinish.delete(handler);
+  }
+
+  onRaceOver(handler: (peerId: string, payload: RaceOverPayload) => void): () => void {
+    this.handlers.raceOver.add(handler);
+    return () => this.handlers.raceOver.delete(handler);
   }
 
   onRoomFull(handler: () => void): () => void {

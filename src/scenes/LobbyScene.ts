@@ -39,8 +39,10 @@ import { getSessionEventBus } from '../core/EventBus';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import {
   isValidRoomWord,
+  parseRaceInit,
   sanitizePlayerName,
   sanitizeRoomWord,
+  type GameMode,
   type PlayerInfo,
   type StartPayload,
 } from '../net/protocol';
@@ -48,11 +50,14 @@ import type { NetClient } from '../net/NetClient';
 import { handoffNetClient } from '../net/netClientSession';
 import { randomRoomSeed } from '../net/roomRng';
 import { resolveAppId, TrysteroNetClient } from '../net/TrysteroNetClient';
+import { buildTrackPath, getTrackById, TRACKS, type TrackId } from '../race/tracks';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { applyMobileInputAttributes } from '../ui/ChatPanel';
+import { TrackThumb } from '../ui/TrackThumb';
 import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
 import { MenuScene } from './MenuScene';
+import { RaceScene } from './RaceScene';
 import { MenuButton } from '../ui/MenuButton';
 
 /** Estilos monospace del repo. */
@@ -161,6 +166,20 @@ export class LobbyScene extends Phaser.Scene {
   /** Desuscripción de `onChat` del NetClient (limpia en SHUTDOWN). */
   private unsubscribeChat: (() => void) | null = null;
 
+  /* V2 (issue #9) — MODO y PISTA del anfitrión. El `start` viaja extendido
+   * (gameMode + trackId); los invitados conocen la elección al arrancar (el
+   * lobby no difunde estado, igual que #1). La fila de controles es visible
+   * SOLO para el anfitrión (incluido el migrado). */
+  /** Modo elegido por el anfitrión (default: BATALLA, compatibilidad #1). */
+  private gameMode: GameMode = 'battle';
+  /** Pista elegida (sólo con sentido en CARRERA; default MÓNACO). */
+  private selectedTrackId: TrackId = TRACKS[0].id;
+  private battleChip: MenuButton | null = null;
+  private raceChip: MenuButton | null = null;
+  private trackButton: MenuButton | null = null;
+  /** Overlay del picker de pistas (miniaturas TrackThumb). */
+  private trackOverlay: Phaser.GameObjects.Container | null = null;
+
   constructor() {
     super(LobbyScene.KEY);
   }
@@ -169,10 +188,18 @@ export class LobbyScene extends Phaser.Scene {
     this.lobbyData = parseLobbyData(data);
     this.playerName = sanitizePlayerName(this.lobbyData.name ?? '');
     // C3 — invitación aceptada: la palabra viaja sanitizada (el input la
-    // muestra y ENTRAR la valida de nuevo — flujo de #1 intacto).
+    // muestra y ENTRAR la valida de nuevo — flujo de unirse de #1 intacto).
     this.joinKeyword = sanitizeRoomWord(this.lobbyData.keyword ?? '');
     this.joined = false;
     this.handedOff = false;
+    // V2 — el modo/pista del anfitrión arranca en el default (BATALLA) en
+    // cada lobby nuevo; los widgets se (re)crean al entrar a la sala.
+    this.gameMode = 'battle';
+    this.selectedTrackId = TRACKS[0].id;
+    this.battleChip = null;
+    this.raceChip = null;
+    this.trackButton = null;
+    this.trackOverlay = null;
   }
 
   create(): void {
@@ -499,6 +526,178 @@ export class LobbyScene extends Phaser.Scene {
     const ready = isHost && rosterSize >= MULTIPLAYER.minPlayersToStart;
     this.startButton.container.setVisible(isHost);
     this.startButton.container.setAlpha(ready ? 1 : 0.45);
+    // V2 — la fila de modo comparte la visibilidad del INICIAR (host only).
+    this.syncModeControls();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* V2 — MODO (BATALLA/CARRERA) y PISTA del anfitrión                  */
+  /* ---------------------------------------------------------------- */
+
+  /** Crea (una vez) la fila de controles de modo: chips + botón de pista. */
+  private createModeControls(): void {
+    if (this.battleChip) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+    this.battleChip = new MenuButton(this, {
+      x: LOBBY.battleChipX,
+      y: LOBBY.modeRowY,
+      width: LOBBY.modeChipWidth,
+      height: LOBBY.modeChipHeight,
+      label: 'BATALLA',
+      tint: 0x3c6cd6,
+      fontSize: LOBBY.modeChipFontSize,
+      bus,
+      onPress: () => this.setGameMode('battle'),
+    });
+    this.raceChip = new MenuButton(this, {
+      x: LOBBY.raceChipX,
+      y: LOBBY.modeRowY,
+      width: LOBBY.modeChipWidth,
+      height: LOBBY.modeChipHeight,
+      label: 'CARRERA',
+      tint: 0xb04ee0,
+      fontSize: LOBBY.modeChipFontSize,
+      bus,
+      onPress: () => this.setGameMode('race'),
+    });
+    this.trackButton = new MenuButton(this, {
+      x: LOBBY.trackButtonX,
+      y: LOBBY.modeRowY,
+      width: LOBBY.trackButtonWidth,
+      height: LOBBY.trackButtonHeight,
+      label: this.trackButtonLabel(),
+      tint: 0x1d8f43,
+      fontSize: LOBBY.trackButtonFontSize,
+      bus,
+      onPress: () => this.openTrackPicker(),
+    });
+    this.syncModeControls();
+  }
+
+  /** Etiqueta del botón de pista con la elegida (o default). */
+  private trackButtonLabel(): string {
+    return `PISTA: ${getTrackById(this.selectedTrackId)?.name ?? ''}`;
+  }
+
+  /** Elección de modo: realza el chip activo y muestra/oculta la pista. */
+  private setGameMode(mode: GameMode): void {
+    this.gameMode = mode;
+    this.battleChip?.container.setAlpha(mode === 'battle' ? 1 : 0.45);
+    this.raceChip?.container.setAlpha(mode === 'race' ? 1 : 0.45);
+    this.trackButton?.container.setVisible(mode === 'race');
+    this.setStatus(
+      mode === 'race'
+        ? `CARRERA — ${getTrackById(this.selectedTrackId)?.name ?? ''}`
+        : 'BATALLA — ÚLTIMO EN PIE',
+    );
+  }
+
+  /** Visibilidad de la fila de modo: SOLO el anfitrión la ve/gobierna. */
+  private syncModeControls(): void {
+    this.createModeControls();
+    const visible = this.joined && (this.client?.isHost() ?? false);
+    this.battleChip?.container.setVisible(visible);
+    this.raceChip?.container.setVisible(visible);
+    this.trackButton?.container.setVisible(visible && this.gameMode === 'race');
+  }
+
+  /** Picker de pistas: overlay con UNA miniatura TrackThumb por pista. */
+  private openTrackPicker(): void {
+    if (this.trackOverlay) {
+      return;
+    }
+    const centerX = this.scale.width / 2;
+    const bus = getSessionEventBus(this.registry);
+
+    const overlay = this.add.container(0, 0).setDepth(100);
+    const dim = this.add
+      .rectangle(centerX, this.scale.height / 2, this.scale.width, this.scale.height, 0x000000, 0.86)
+      .setInteractive();
+    dim.on(
+      'pointerdown',
+      (
+        _pointer: Phaser.Input.Pointer,
+        _x: number,
+        _y: number,
+        event: Phaser.Types.Input.EventData,
+      ) => {
+        event.stopPropagation();
+      },
+    );
+    const panel = this.add
+      .rectangle(centerX, LOBBY.trackPanelY, LOBBY.trackPanelWidth, LOBBY.trackPanelHeight, 0x14141c)
+      .setStrokeStyle(6, 0x3a3a44);
+    overlay.add([dim, panel]);
+    overlay.add(
+      this.add
+        .text(centerX, LOBBY.trackTitleY, 'ELEGÍ PISTA', {
+          fontFamily: 'monospace',
+          fontSize: '56px',
+          color: '#f2f2f2',
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 8),
+    );
+
+    // Una fila por pista: miniatura del trazado (TrackPath a escala, la
+    // misma matemática del minimapa) + botón con el nombre.
+    TRACKS.forEach((track, index) => {
+      const y = LOBBY.trackRowStartY + index * LOBBY.trackRowStep;
+      const row = this.add.container(0, 0);
+      row.add(
+        new TrackThumb(this, buildTrackPath(track), {
+          x: LOBBY.trackThumbX,
+          y,
+          size: LOBBY.trackThumbSize,
+          depth: 1,
+        }).container,
+      );
+      row.add(
+        new MenuButton(this, {
+          x: LOBBY.trackRowButtonX,
+          y,
+          width: LOBBY.trackRowButtonWidth,
+          height: LOBBY.trackRowButtonHeight,
+          label: track.name,
+          tint: 0x3c6cd6,
+          fontSize: LOBBY.trackRowButtonFontSize,
+          bus,
+          onPress: () => this.selectTrack(track.id),
+        }).container,
+      );
+      overlay.add(row);
+    });
+
+    overlay.add(
+      new MenuButton(this, {
+        x: centerX,
+        y: LOBBY.trackCloseY,
+        width: LOBBY.trackCloseWidth,
+        height: LOBBY.trackCloseHeight,
+        label: 'CERRAR',
+        tint: 0x525868,
+        fontSize: 34,
+        bus,
+        onPress: () => this.closeTrackPicker(),
+      }).container,
+    );
+
+    this.trackOverlay = overlay;
+  }
+
+  /** Elige pista, cierra el picker y repinta el botón de pista. */
+  private selectTrack(trackId: TrackId): void {
+    this.selectedTrackId = trackId;
+    this.closeTrackPicker();
+    this.trackButton?.setLabel(this.trackButtonLabel());
+    this.setGameMode(this.gameMode);
+  }
+
+  private closeTrackPicker(): void {
+    this.trackOverlay?.destroy();
+    this.trackOverlay = null;
   }
 
   /** INICIAR: el anfitrión difunde start y arranca SU carrera local. */
@@ -509,22 +708,44 @@ export class LobbyScene extends Phaser.Scene {
       this.setStatus(`SE NECESITAN ${MULTIPLAYER.minPlayersToStart}+ JUGADORES`, '#d63c3c');
       return;
     }
+    // V2 — el start viaja extendido con el modo (y la pista en CARRERA).
+    // Campos AUSENTES en batalla: un receptor viejo degrada a batalla igual.
     const payload: StartPayload = {
       seed: randomRoomSeed(),
       players: roster,
       startAt: Date.now(),
+      gameMode: this.gameMode,
+      ...(this.gameMode === 'race' ? { trackId: this.selectedTrackId } : {}),
     };
     client.start(payload);
     this.startRace(payload);
   }
 
-  /** `start` recibido (o propio): arranca la carrera multi determinista. */
+  /**
+   * `start` recibido (o propio): decide la escena según el MODO extendido.
+   * CARRERA → RaceScene (`mode:'race'` con seed/roster/pista); BATALLA o
+   * start viejo sin `gameMode` → GameScene (flujo de #1 intacto). El
+   * parseo defensivo (`parseRaceInit`) garantiza la degradación.
+   */
   private startRace(payload: StartPayload): void {
     // M2 — handoff del NetClient: la carrera es la nueva dueña del transporte
-    // (difunde state/eliminated/match-over). Este SHUTDOWN ya no lo destruye.
+    // (difunde state/eliminated/match-over o rstate/rfin/race-over). Este
+    // SHUTDOWN ya no lo destruye.
     if (this.client) {
       handoffNetClient(this.registry, this.client);
       this.handedOff = true;
+    }
+    const raceInit = parseRaceInit(payload);
+    if (raceInit?.gameMode === 'race' && raceInit.trackId) {
+      this.scene.start(RaceScene.KEY, {
+        mode: 'race',
+        trackId: raceInit.trackId,
+        seed: raceInit.seed,
+        players: raceInit.players,
+        myPeerId: this.client?.selfPeerId ?? '',
+        roomWord: this.client?.roomWord ?? '',
+      });
+      return;
     }
     this.scene.start(GameScene.KEY, {
       mode: 'multi',
