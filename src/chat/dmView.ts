@@ -135,10 +135,13 @@ export function inviteJoinTarget(keyword: string, profileName: string): InviteJo
 /**
  * Label de un botón de menú con badge de no leídos (`ChatStore.totalUnread`:
  * sala + DMs). 0 mantiene el label pelado; N>0 agrega el conteo visible para
- * que el badge se note sin entrar.
+ * que el badge se note sin entrar. El `!(x > 0)` (en vez de `x <= 0`) es
+ * deliberado: undefined/NaN no cumplen ninguna de las dos comparaciones y
+ * caen al label base — un store a medio inicializar nunca debe pintar
+ * "CHAT · undefined" en el menú.
  */
 export function badgeButtonLabel(base: string, totalUnread: number): string {
-  if (totalUnread <= 0) {
+  if (!(totalUnread > 0)) {
     return base;
   }
   return `${base} · ${totalUnread}`;
