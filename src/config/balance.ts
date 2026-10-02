@@ -567,6 +567,75 @@ export const RACE_MULTI = {
   rankIntervalMs: 250,
 } as const;
 
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito — pulido V4 (issue #9)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cartel pop "¡VUELTA 2/3!" al completar una vuelta válida (la última no:
+ * esa ya muestra el cartel de BANDERA A CUADROS). Mismo lenguaje del
+ * countdown: texto gigante centrado en pantalla fija con pop de escala y
+ * fade de salida.
+ */
+export const RACE_LAP_BANNER = {
+  /** Tamaño de fuente del cartel (px). */
+  fontSize: 72,
+  /** Escala inicial del pop (idem countdown). */
+  popScale: 1.45,
+  /** Duración del pop de escala (ms). */
+  popMs: 240,
+  /** Tiempo visible a escala 1 antes del fade (ms). */
+  holdMs: 700,
+  /** Duración del fade de salida (ms). */
+  fadeMs: 260,
+} as const;
+
+/**
+ * Confeti del cruce de la meta FINAL (practice y multi): burst one-shot
+ * multicolor sobre el auto (posición del mundo, la cámara lo está siguiendo).
+ * Los tintos salen de la paleta de la sala (`MULTIPLAYER.palette`): cero
+ * colores mágicos nuevos.
+ */
+export const RACE_CONFETTI = {
+  /** Partículas por burst. */
+  burstCount: 90,
+  /** Vida de cada partícula (ms). */
+  lifespanMs: 950,
+  /** Velocidad de eyección (px/s). */
+  speedMin: 120,
+  speedMax: 430,
+  /** Abanico de eyección hacia arriba (grados Phaser: 270 = −Y). */
+  angleMin: 190,
+  angleMax: 350,
+  /** Escala inicial de partícula (la textura `particle` mide 4 px). */
+  scaleStart: 2.2,
+  /** Profundidad: sobre el mundo y el auto, bajo el HUD. */
+  depth: 30,
+} as const;
+
+/**
+ * Línea "VUELTA RÁPIDA: NOMBRE (M:SS.mmm)" del podio de la carrera multi
+ * (GameOverScene, rama race-multi). Va entre el subtítulo de pista
+ * (`LEADERBOARD.headerY` 384) y la primera fila del podio (448): el hueco de
+ * 64 px las separa sin tocarse (fuente 24 px centrada).
+ */
+export const RACE_FAST_LAP = {
+  /** Y del centro de la línea. */
+  y: 414,
+  /** Tamaño de fuente (px). */
+  fontSize: 24,
+} as const;
+
+/**
+ * Sonido de motor de la carrera en circuito (V4): el dron del AudioManager
+ * mapea velocidad → frecuencia sobre el dominio de la BATALLA
+ * ([MIN_SPEED, MAX_SPEED] px/s). La velocidad del circuito vive en
+ * [0, CIRCUIT.maxSpeed] px/s — un rango distinto — y se NORMALIZA a ese
+ * dominio para que el dron barra toda su banda: la fracción
+ * speed/maxSpeed del circuito entra como la misma fracción del dominio
+ * (`race/raceAudio.raceEngineSpeed`, pura y testeada).
+ */
+
 /** X del centro de un carril del asfalto (índice 0 = izquierda). */
 export function laneCenterX(index: number, laneCount: number = SPAWN.laneCount): number {
   const roadWidth = TRACK.roadRight - TRACK.roadLeft;

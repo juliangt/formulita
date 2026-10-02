@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { CIRCUIT, GAME_OVER, LEADERBOARD } from '../config/balance';
+import { CIRCUIT, GAME_OVER, LEADERBOARD, RACE_FAST_LAP } from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
@@ -307,8 +307,10 @@ export class GameOverScene extends Phaser.Scene {
    * podio P1..Pn con nombre+color (del roster congelado) y, para los que
    * terminaron, su tiempo total (`rfin`); los que no llegaron muestran la
    * vuelta en la que estaban y los caídos, ABANDONÓ. El ganador va en oro y
-   * la propia fila queda resaltada. Los botones son los de la BATALLA
-   * (MENÚ / CREAR PARTIDA: una carrera nueva empieza por el lobby).
+   * la propia fila queda resaltada. V4: bajo el subtítulo va la línea
+   * "VUELTA RÁPIDA: NOMBRE (M:SS.mmm)" con el mejor `bestLapMs` de la
+   * carrera. Los botones son los de la BATALLA (MENÚ / CREAR PARTIDA: una
+   * carrera nueva empieza por el lobby).
    */
   private createRaceMultiResults(centerX: number): void {
     const data = this.raceMultiData;
@@ -345,6 +347,25 @@ export class GameOverScene extends Phaser.Scene {
         color: DIM_COLOR,
       })
       .setOrigin(0.5);
+
+    // V4 (issue #9) — vuelta rápida de la carrera: el mejor `bestLapMs` de
+    // los `rfin` (viaja en el payload de resultados; null si nadie terminó).
+    // Etiqueta en oro, el mismo tono que el ganador del podio.
+    if (data.fastLap) {
+      this.add
+        .text(
+          centerX,
+          RACE_FAST_LAP.y,
+          `VUELTA RÁPIDA: ${nameOf(data.fastLap.peerId)} (${formatLapMs(data.fastLap.bestLapMs)})`,
+          {
+            fontFamily: 'monospace',
+            fontSize: `${RACE_FAST_LAP.fontSize}px`,
+            color: GOLD_COLOR,
+          },
+        )
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 6);
+    }
 
     const rowStyle: Phaser.Types.GameObjects.Text.TextStyle = {
       fontFamily: 'monospace',

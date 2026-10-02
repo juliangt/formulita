@@ -6,9 +6,12 @@ import {
   GAMEOVER_TRANSITION_MS,
   GHOST_INTERPOLATION_MS,
   MUTE_BUTTON,
+  MULTIPLAYER,
   RACE,
+  RACE_CONFETTI,
   RACE_FINISH_GRACE_MS,
   RACE_HUD,
+  RACE_LAP_BANNER,
   RACE_MULTI,
   SPECTATOR_OVERLAY,
   STATE_HZ,
@@ -37,11 +40,13 @@ import {
   type RankedCar,
 } from '../race/raceRanking';
 import {
+  fastestRaceLap,
   parseRaceSceneInit,
   raceMultiResultsPayload,
   racePracticeResultsPayload,
   type RaceSceneInit,
 } from '../race/results';
+import { raceEngineSpeed } from '../race/raceAudio';
 import {
   sampleFromProgress,
   unrollProgress,
@@ -68,6 +73,7 @@ import type { PointerEventEmitter } from '../systems/TouchSource';
 import { InputSystem, type IInputSource, type IInputState } from '../systems/InputSystem';
 import { RemoteCar } from '../entities/RemoteCar';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { formatLapBadge } from '../ui/format';
 import { MiniMap } from '../ui/MiniMap';
 import { MenuButton } from '../ui/MenuButton';
 import { MuteButton } from '../ui/MuteButton';
@@ -321,6 +327,15 @@ class RaceTouchControls implements IInputSource {
  * chat de espectador de #2 se extiende a "terminó la propia carrera"
  * (`isRaceSpectatorChatVisible`): quien cruzó la bandera lee y escribe en la
  * sala mientras sigue al líder actual del ranking vivo.
+ *
+ * V4 (issue #9) — pulido: dron del motor por velocidad (arranca con el GO!,
+ * el update emite `speed` con el mapeo normalizado de `race/raceAudio` y se
+ * apaga en pausa/fin/shutdown por el bus de sesión — la API del AudioManager
+ * es la misma de la BATALLA, perfil móvil de #4 incluido), cartel pop
+ * "¡VUELTA n/N!" al completar cada vuelta que no sea la final, burst de
+ * confeti al cruzar la meta propia y vuelta rápida de la carrera (el mejor
+ * `bestLapMs` de los `rfin`, elegida por `fastestRaceLap`) viajando en el
+ * payload de resultados para que el podio multi la destaque.
  */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';
@@ -337,6 +352,16 @@ export class RaceScene extends Phaser.Scene {
 
   /* Render del mundo + auto. */
   private carSprite!: Phaser.GameObjects.Image;
+
+  /** Bus de sesión (audio del motor, botones de HUD). Resuelto en create. */
+  private bus!: EventBus<GameEvents>;
+
+  /**
+   * V4 — confeti del cruce de meta final (one-shot: creado con `emitting:
+   * false` y disparado con `explode` una sola vez por carrera, igual que los
+   * bursts de GameScene). Objeto de escena: el SHUTDOWN lo destruye.
+   */
+  private confettiEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
 
   /* Input de carrera (mismo stack fusionado que el modo BATALLA). */
   private inputSystem!: InputSystem;
@@ -440,6 +465,7 @@ export class RaceScene extends Phaser.Scene {
 
     // Pista + núcleo puro frescos (el restart reutiliza la instancia).
     this.finished = false;
+    this.bus = this.sessionBus();
     this.trackDef = getTrackById(this.sceneInit.trackId) ?? TRACKS[0];
     this.path = buildTrackPath(this.trackDef);
     this.carPhysics = new CircuitPhysics(this.path, this.trackDef.widthPx);
@@ -469,6 +495,20 @@ export class RaceScene extends Phaser.Scene {
       .setDepth(10);
     this.syncCarSprite();
 
+    // V4 — confeti del cruce de meta final: burst multicolor one-shot sobre
+    // el auto (tint = paleta de la sala, cero colores mágicos nuevos).
+    this.confettiEmitter = this.add
+      .particles(0, 0, TEXTURE_KEYS.particle, {
+        lifespan: RACE_CONFETTI.lifespanMs,
+        speed: { min: RACE_CONFETTI.speedMin, max: RACE_CONFETTI.speedMax },
+        angle: { min: RACE_CONFETTI.angleMin, max: RACE_CONFETTI.angleMax },
+        scale: { start: RACE_CONFETTI.scaleStart, end: 0 },
+        alpha: { start: 1, end: 0 },
+        tint: [...MULTIPLAYER.palette],
+        emitting: false,
+      })
+      .setDepth(RACE_CONFETTI.depth);
+
     // Cámara: norte arriba, zoom fijo, sigue con lerp, clampada al mundo.
     this.cameras.main.setBounds(
       0,
@@ -487,6 +527,14 @@ export class RaceScene extends Phaser.Scene {
         this.handleSelfRaceFinished(event);
       } else {
         this.finishRace();
+      }
+    };
+
+    // V4 — cartel pop al completar una vuelta válida que NO sea la última
+    // (la última ya tiene su cartel de BANDERA A CUADROS + confeti).
+    this.lapTracker.onLapCompleted = (event) => {
+      if (event.lap < CIRCUIT.totalLaps) {
+        this.showLapBanner(event.lap);
       }
     };
 
@@ -535,6 +583,10 @@ export class RaceScene extends Phaser.Scene {
         this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
       }
       this.teardownMultiRace();
+      // V4 — salida por cualquier camino (MENÚ desde la pausa, transición a
+      // resultados): corta el dron del motor sin SFX de crash. No-op si ya
+      // se apagó con el fin de la carrera.
+      this.bus.emit('game-aborted', undefined);
     });
   }
 
@@ -565,6 +617,9 @@ export class RaceScene extends Phaser.Scene {
     if (!this.selfFinished) {
       const input = circuitInputFromState(this.inputSystem.getState());
       this.carPhysics.step(this.carState, dt, input);
+      // V4 — el dron del motor sigue la velocidad del auto (arranca con el
+      // GO!; se apaga en pausa/fin/shutdown por el bus de sesión).
+      this.bus.emit('speed', raceEngineSpeed(this.carState.speed));
     }
 
     // Vueltas: la coordenada de arco del frame alimenta al LapTracker.
@@ -1009,6 +1064,10 @@ export class RaceScene extends Phaser.Scene {
       roundRaceFinishPayload({ totalMs: event.totalMs, bestLapMs: event.bestLapMs }),
     );
     this.inputSystem.detach();
+    // V4 — confeti de la meta final propia + corte del dron (dejo de
+    // conducir: paso a espectador, el motor del auto propio se apaga).
+    this.explodeConfetti();
+    this.bus.emit('game-aborted', undefined);
     this.showFinishBanner(SPECTATOR_SUBTITLE);
     // V3 (issue #9) — "terminó la carrera" es puerta del chat de espectador:
     // quien cruzó la bandera lee y escribe en el chat de sala mientras los
@@ -1116,6 +1175,9 @@ export class RaceScene extends Phaser.Scene {
     this.raceConcluded = true;
     this.finished = true;
     this.inputSystem.detach();
+    // V4 — cierre de la carrera: aunque YO no haya terminado, dejo de
+    // conducir → el dron se apaga (no-op si ya estaba apagado).
+    this.bus.emit('game-aborted', undefined);
     this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
       this.scene.start(
         GameOverScene.KEY,
@@ -1124,8 +1186,64 @@ export class RaceScene extends Phaser.Scene {
           standings,
           this.myPeerId,
           this.rosterPlayers,
+          // V4 — vuelta rápida de la carrera: el mejor `bestLapMs` de los
+          // `rfin` (elección determinista en `fastestRaceLap`).
+          fastestRaceLap(
+            [...this.finishedPeers].map(([peerId, finish]) => ({
+              peerId,
+              bestLapMs: finish.bestLapMs,
+            })),
+          ),
         ),
       );
+    });
+  }
+
+  /** Burst one-shot de confeti sobre el auto (meta final, V4). */
+  private explodeConfetti(): void {
+    this.confettiEmitter.explode(
+      RACE_CONFETTI.burstCount,
+      this.carState.x,
+      this.carState.y,
+    );
+  }
+
+  /**
+   * V4 — pop "¡VUELTA 2/3!" al completar una vuelta (no la última): mismo
+   * lenguaje del countdown (texto gigante centrado en pantalla fija, pop de
+   * escala y fade). Se destruye solo al terminar el fade.
+   */
+  private showLapBanner(lap: number): void {
+    const banner = this.add
+      .text(
+        this.scale.width / 2,
+        this.scale.height / 2,
+        `¡${formatLapBadge(lap, CIRCUIT.totalLaps)}!`,
+        {
+          fontFamily: 'monospace',
+          fontSize: `${RACE_LAP_BANNER.fontSize}px`,
+          color: '#f7c531',
+        },
+      )
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 12)
+      .setDepth(60)
+      .setScrollFactor(0)
+      .setScale(RACE_LAP_BANNER.popScale);
+
+    this.tweens.add({
+      targets: banner,
+      scale: 1,
+      duration: RACE_LAP_BANNER.popMs,
+      ease: 'Cubic.Out',
+    });
+    this.tweens.add({
+      targets: banner,
+      alpha: 0,
+      delay: RACE_LAP_BANNER.holdMs,
+      duration: RACE_LAP_BANNER.fadeMs,
+      ease: 'Cubic.Out',
+      onComplete: () => banner.destroy(),
     });
   }
 
@@ -1389,6 +1507,9 @@ export class RaceScene extends Phaser.Scene {
 
   /** Fin de la cuenta: el GO! se desvanece y el mundo arranca. */
   private finishCountdown(): void {
+    // V4 — el dron del motor arranca con el GO! (mismo evento que la
+    // BATALLA; el AudioManager mantiene su perfil móvil de #4 intacto).
+    this.bus.emit('game-start', undefined);
     this.tweens.killTweensOf(this.countdownText);
     this.tweens.add({
       targets: this.countdownText,
@@ -1416,6 +1537,8 @@ export class RaceScene extends Phaser.Scene {
     // mitad de un toque/tecla (el attach vuelve en el RESUME).
     this.touch.detach();
     this.keyboard.detach();
+    // V4 — el motor no sigue sonando con la carrera congelada (Fase 7).
+    this.bus.emit('game-paused', undefined);
     this.scene.launch(PauseScene.KEY, { auto: this.pauseSystem.isAutoPaused, target: RaceScene.KEY });
     this.scene.pause();
   };
@@ -1426,6 +1549,9 @@ export class RaceScene extends Phaser.Scene {
     this.touch.attach();
     this.keyboard.attach();
     this.input.keyboard?.resetKeys();
+    // V4 — el dron vuelve con la carrera (el AudioManager re-arranca el
+    // motor; el evento `speed` del update lo re-sincroniza en el frame 1).
+    this.bus.emit('game-resumed', undefined);
   };
 
   /* ---------------------------------------------------------------- */
@@ -1443,6 +1569,11 @@ export class RaceScene extends Phaser.Scene {
     }
     this.finished = true;
     this.inputSystem.detach();
+
+    // V4 — confeti del cruce de la meta final + corte del dron del motor
+    // (sin SFX de crash: cruzar la meta no es un accidente).
+    this.explodeConfetti();
+    this.bus.emit('game-aborted', undefined);
 
     this.showFinishBanner();
 

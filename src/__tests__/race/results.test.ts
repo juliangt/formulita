@@ -2,15 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { TRACKS } from '../../race/tracks';
 import {
   defaultTrackId,
+  fastestRaceLap,
+  parseRaceMultiResults,
   parseRacePracticeResults,
   parseRaceSceneInit,
+  raceMultiResultsPayload,
   racePracticeResultsPayload,
 } from '../../race/results';
 
 /**
  * Tests de los contratos de init data / resultados de la RaceScene (issue #9,
  * V1): parseo defensivo (nunca lanza, degrada a defaults) y round-trip del
- * payload RaceScene → GameOverScene.
+ * payload RaceScene → GameOverScene. V4: vuelta rápida de la carrera multi
+ * (`fastestRaceLap` + su viaje en el payload de resultados).
  */
 
 describe('parseRaceSceneInit — init data del menú', () => {
@@ -80,5 +84,97 @@ describe('racePracticeResultsPayload + parseRacePracticeResults — RaceScene �
     expect(payload.bestLapMs).toBe(0);
     expect(payload.totalMs).toBe(0);
     expect(payload.trackName).toBe('MONZA');
+  });
+});
+
+describe('fastestRaceLap — vuelta rápida de la carrera multi (V4)', () => {
+  const standings = (peerId: string, bestLapMs: number) => ({ peerId, bestLapMs });
+
+  it('elige el mejor bestLapMs de los rfin', () => {
+    expect(
+      fastestRaceLap([standings('a', 41_500), standings('b', 39_987), standings('c', 40_200)]),
+    ).toEqual({ peerId: 'b', bestLapMs: 39_987 });
+  });
+
+  it('el empate cae a peerId ASC (determinista en todos los clientes)', () => {
+    expect(fastestRaceLap([standings('zeta', 40_000), standings('alfa', 40_000)])).toEqual({
+      peerId: 'alfa',
+      bestLapMs: 40_000,
+    });
+  });
+
+  it('ignora entradas inválidas: peerId vacío y ms no finito o ≤ 0', () => {
+    expect(
+      fastestRaceLap([
+        standings('', 38_000),
+        standings('sin-vuelta', 0),
+        standings('negativo', -5),
+        standings('nan', Number.NaN),
+        standings('valido', 42_100),
+      ]),
+    ).toEqual({ peerId: 'valido', bestLapMs: 42_100 });
+  });
+
+  it('sin candidatas válidas devuelve null', () => {
+    expect(fastestRaceLap([])).toBeNull();
+    expect(fastestRaceLap([standings('a', 0), standings('b', Number.NaN)])).toBeNull();
+  });
+
+  it('trunca los fraccionales de milisegundo (no redondea el cronómetro)', () => {
+    expect(fastestRaceLap([standings('a', 39_987.9)])).toEqual({
+      peerId: 'a',
+      bestLapMs: 39_987,
+    });
+  });
+});
+
+describe('raceMultiResultsPayload + parseRaceMultiResults — fastLap en el payload (V4)', () => {
+  /** Fila de podio válida (el parseo exige ≥ 1 standing con campos saneados). */
+  const standing = (peerId: string) => ({
+    position: 1,
+    peerId,
+    status: 'finished' as const,
+    totalMs: 121_000,
+    lap: 3,
+    s: 0,
+    progress: 3 * 7200,
+  });
+
+  it('default: el payload lleva fastLap null (quien no lo computa no se rompe)', () => {
+    const payload = raceMultiResultsPayload('monza', [standing('peer-1')], 'peer-1');
+    expect(payload.fastLap).toBeNull();
+    const parsed = parseRaceMultiResults(payload);
+    expect(parsed?.fastLap).toBeNull();
+  });
+
+  it('round-trip: la vuelta rápida elegida viaja y se conserva', () => {
+    const payload = raceMultiResultsPayload('monza', [standing('peer-1')], 'peer-1', [], {
+      peerId: 'peer-2',
+      bestLapMs: 39_987,
+    });
+    expect(payload.fastLap).toEqual({ peerId: 'peer-2', bestLapMs: 39_987 });
+    const parsed = parseRaceMultiResults(payload);
+    expect(parsed?.fastLap).toEqual({ peerId: 'peer-2', bestLapMs: 39_987 });
+  });
+
+  it('es defensivo: fastLap basura en el payload parsea a null sin lanzar', () => {
+    for (const fastLap of [
+      undefined,
+      null,
+      'junk',
+      {},
+      { peerId: '' },
+      { peerId: 'a', bestLapMs: 0 },
+      { peerId: 'a', bestLapMs: 'x' },
+    ]) {
+      const payload = {
+        mode: 'race-multi',
+        trackId: 'monza',
+        standings: [standing('peer-1')],
+        myPeerId: 'peer-1',
+        fastLap,
+      };
+      expect(parseRaceMultiResults(payload)?.fastLap).toBeNull();
+    }
   });
 });

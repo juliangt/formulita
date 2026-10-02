@@ -16,6 +16,8 @@
  *   esta rama (la pantalla de resultados mantiene su comportamiento previo).
  * - `parseRaceMultiResults` (V2): lo que RaceScene le pasa a GameOverScene
  *   al concluir la carrera MULTI (clasificación de `finalClassification`).
+ * - `fastestRaceLap` (V4): elige la vuelta rápida de la carrera multi entre
+ *   los `rfin` recibidos — viaja en el payload de resultados para el podio.
  *
  * Puro: sin Phaser, sin escenas — testeable directo con Vitest.
  */
@@ -149,6 +151,47 @@ export function parseRacePracticeResults(raw: unknown): RacePracticeResultsData 
 /* Resultados de la carrera MULTI (issue #9, V2)                       */
 /* ------------------------------------------------------------------ */
 
+/**
+ * V4 — vuelta rápida de la carrera multi: el mejor `bestLapMs` reportado por
+ * `rfin` (ver `fastestRaceLap`). Viaja en el payload de resultados para que
+ * el podio la destaque.
+ */
+export interface RaceFastLap {
+  /** Autor de la vuelta. */
+  peerId: string;
+  /** Tiempo de la vuelta (ms, > 0). */
+  bestLapMs: number;
+}
+
+/**
+ * V4 — elige la vuelta rápida de la carrera: el mejor `bestLapMs` (> 0 y
+ * finito) entre los que reportaron `rfin`. Empate → peerId ASC (mismo
+ * criterio determinista de `raceRanking`: todos los clientes con las mismas
+ * entradas eligen la misma vuelta). Entradas inválidas (peerId vacío, ms no
+ * finito o ≤ 0) se ignoran; sin candidatas válidas → null.
+ */
+export function fastestRaceLap(
+  laps: readonly { peerId: string; bestLapMs: number }[],
+): RaceFastLap | null {
+  let best: RaceFastLap | null = null;
+  for (const lap of laps) {
+    if (typeof lap.peerId !== 'string' || lap.peerId.length === 0) {
+      continue;
+    }
+    if (!Number.isFinite(lap.bestLapMs) || lap.bestLapMs <= 0) {
+      continue;
+    }
+    const beatsBest =
+      best === null ||
+      lap.bestLapMs < best.bestLapMs ||
+      (lap.bestLapMs === best.bestLapMs && lap.peerId < best.peerId);
+    if (beatsBest) {
+      best = { peerId: lap.peerId, bestLapMs: Math.floor(lap.bestLapMs) };
+    }
+  }
+  return best;
+}
+
 /** Resultados de la carrera multi (payload RaceScene → GameOverScene). */
 export interface RaceMultiResultsData {
   mode: 'race-multi';
@@ -161,6 +204,11 @@ export interface RaceMultiResultsData {
   players: PlayerInfo[];
   /** peerId propio dentro de `standings`. */
   myPeerId: string;
+  /**
+   * V4 — vuelta rápida de la carrera (null si nadie terminó, p. ej. cierre
+   * por gracia con la carrera a medio correr).
+   */
+  fastLap: RaceFastLap | null;
 }
 
 /** Coacciona una fila de la clasificación de carrera; null si es basura. */
@@ -208,14 +256,16 @@ function parseRaceFinalStanding(raw: unknown): RaceFinalStanding | null {
 
 /**
  * Arma el payload de resultados multi a partir del id de pista, la
- * clasificación final (local del ganador o la recibida por `race-over`) y
- * el roster congelado (nombres/colores para el podio).
+ * clasificación final (local del ganador o la recibida por `race-over`), el
+ * roster congelado (nombres/colores para el podio) y la vuelta rápida (V4;
+ * null por default para no romper a quien no la compute).
  */
 export function raceMultiResultsPayload(
   trackId: TrackId,
   standings: readonly RaceFinalStanding[],
   myPeerId: string,
   players: readonly PlayerInfo[] = [],
+  fastLap: RaceFastLap | null = null,
 ): RaceMultiResultsData {
   return {
     mode: 'race-multi',
@@ -224,6 +274,7 @@ export function raceMultiResultsPayload(
     standings: [...standings],
     players: [...players],
     myPeerId,
+    fastLap,
   };
 }
 
@@ -265,5 +316,29 @@ export function parseRaceMultiResults(raw: unknown): RaceMultiResultsData | null
     standings,
     players: parsePlayerInfoList(record.players) ?? [],
     myPeerId: record.myPeerId,
+    fastLap: parseRaceFastLap(record.fastLap),
   };
+}
+
+/**
+ * V4 — parseo defensivo de la vuelta rápida del payload: null ante basura,
+ * peerId vacío o ms no finito/≤ 0 (el receptor nunca lanza ni acepta una
+ * vuelta imposible).
+ */
+function parseRaceFastLap(raw: unknown): RaceFastLap | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.peerId !== 'string' || record.peerId.length === 0) {
+    return null;
+  }
+  if (
+    typeof record.bestLapMs !== 'number' ||
+    !Number.isFinite(record.bestLapMs) ||
+    record.bestLapMs <= 0
+  ) {
+    return null;
+  }
+  return { peerId: record.peerId, bestLapMs: Math.max(0, Math.floor(record.bestLapMs)) };
 }
