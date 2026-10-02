@@ -1,5 +1,5 @@
 /**
- * tracks — las 5 pistas del issue #9 (V0: data pura + registro).
+ * tracks — las 6 pistas del registro (issues #9 y #26: data pura + registro).
  *
  * Cada `TrackDefinition` describe un circuito cerrado inspirado en un GP
  * real: waypoints de control (26–32) sobre un mundo de 7000×7000 px que
@@ -17,7 +17,8 @@
  * - Radio de curvatura mínimo: en CADA punto de la polilínea densa el radio
  *   debe ser ≥ referenceSpeed / turnRateAtSpeed(referenceSpeed) ≈ 216 px —
  *   o sea, un auto a velocidad de referencia puede sostener cualquier curva
- *   sin levantar. Mínimos reales por pista: 236 (Mónaco) a 350 (Spa).
+ *   sin levantar. Mínimos reales por pista: 236 (Mónaco) a 350 (Spa); la
+ *   horquilla de GÁLVEZ se diseñó "abierta" (~300 px, como La Source).
  * - Sin auto-intersección (barrido de segmentos de la polilínea densa,
  *   excluyendo adyacentes): SUZUKA modela los esses SIN el cruce en 8 real.
  *
@@ -37,7 +38,7 @@ import { TrackPath } from './trackPath';
 import type { Point, SectorFraction } from './trackPath';
 
 /** Identificador de pista. */
-export type TrackId = 'monaco' | 'monza' | 'silverstone' | 'spa' | 'suzuka';
+export type TrackId = 'monaco' | 'monza' | 'silverstone' | 'spa' | 'suzuka' | 'galvez';
 
 /**
  * Paleta de render (V1): colores 0xrrggbb de cada capa del circuito.
@@ -75,13 +76,13 @@ export interface TrackDefinition {
   sectors: readonly SectorFraction[];
 }
 
-/** Fracciones de los 8 sectores iguales (compartidas por las 5 pistas). */
+/** Fracciones de los 8 sectores iguales (compartidas por las 6 pistas). */
 const EIGHT_SECTORS: readonly SectorFraction[] = Array.from(
   { length: CIRCUIT.sectorCount },
   (_, i) => ({ start: i / CIRCUIT.sectorCount, end: (i + 1) / CIRCUIT.sectorCount }),
 );
 
-/** Mundo común de las 5 pistas (px). */
+/** Mundo común de las 6 pistas (px). */
 const WORLD = { width: 7000, height: 7000 };
 
 /* ------------------------------------------------------------------ */
@@ -355,13 +356,78 @@ const SUZUKA: TrackDefinition = {
   ],
 };
 
-/** Registro de pistas (orden de exhibición en el menú). */
+/* ------------------------------------------------------------------ */
+/* GÁLVEZ — curvón, enlace en S y horquilla abierta (Buenos Aires)     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Issue #26 — inspirado en el trazado n°6 del GP de Argentina: recta
+ * principal hacia arriba, Curvón amplio (R≈500) en la parte superior, enlace
+ * en S bajando por un carril interior, giro por el sector bajo y HORQUILLA
+ * ABIERTA (R≈300, mismo criterio que La Source: la cerrazón real no es
+ * sostenible a referenceSpeed) que devuelve por la recta opuesta a meta.
+ * Kerbs celeste/blanco: identidad argentina del autódromo.
+ */
+const GALVEZ: TrackDefinition = {
+  id: 'galvez',
+  name: 'GÁLVEZ',
+  inspiration: 'Autódromo Juan y Oscar Gálvez (Buenos Aires) — Circuito n°6',
+  widthPx: 355,
+  worldSize: WORLD,
+  lapTargetMs: 40000,
+  sectors: EIGHT_SECTORS,
+  palette: {
+    grass: 0x3d7a3c,
+    grassAlt: 0x336833,
+    asphalt: 0x4e4e58,
+    asphaltAlt: 0x464650,
+    kerb: 0x74acdf,
+    kerbAlt: 0xe8e6e0,
+    startLine: 0xf7c531,
+  },
+  waypoints: [
+    { x: 900, y: 5450 },
+    { x: 917, y: 3950 },
+    { x: 933, y: 2450 },
+    { x: 950, y: 950 },
+    { x: 1096, y: 596 },
+    { x: 1450, y: 450 },
+    { x: 1804, y: 596 },
+    { x: 1950, y: 950 },
+    { x: 2100, y: 1350 },
+    { x: 2200, y: 1800 },
+    { x: 2100, y: 2250 },
+    { x: 1800, y: 2700 },
+    { x: 1700, y: 3150 },
+    { x: 1800, y: 3600 },
+    { x: 1950, y: 4050 },
+    { x: 1950, y: 5080 },
+    { x: 2067, y: 5363 },
+    { x: 2350, y: 5480 },
+    { x: 3400, y: 5480 },
+    { x: 4459, y: 5480 },
+    { x: 4614, y: 5522 },
+    { x: 4727, y: 5635 },
+    { x: 4769, y: 5790 },
+    { x: 4727, y: 5945 },
+    { x: 4614, y: 6058 },
+    { x: 4459, y: 6100 },
+    { x: 3400, y: 6100 },
+    { x: 2400, y: 6100 },
+    { x: 1300, y: 6100 },
+    { x: 1017, y: 5983 },
+    { x: 900, y: 5700 },
+  ],
+};
+
+/** Registro de pistas (orden de exhibición en el menú; #26 suma GÁLVEZ). */
 export const TRACKS: readonly TrackDefinition[] = [
   MONACO,
   MONZA,
   SILVERSTONE,
   SPA,
   SUZUKA,
+  GALVEZ,
 ];
 
 /** Pista por id (undefined si no existe). */
