@@ -42,7 +42,7 @@ Criterio de aceptación global: **sesión de 10 minutos sin errores de consola**
 
 ## Multijugador (multi-dispositivo: Wi-Fi + 4G mezclados)
 
-Criterio de aceptación (M3): partida de ~10 minutos con dispositivos REALES en redes mezcladas (uno en Wi-Fi, otro en 4G) sin errores de consola, mismo trazado en todos y leaderboard idéntico. Se prueba contra la versión publicada (<https://juliangt.github.io/formulita/>) o con `npm run dev` / `npm run serve` en la LAN.
+Criterio de aceptación (M3): partida de ~10 minutos con dispositivos REALES en redes mezcladas (uno en Wi-Fi, otro en 4G) sin errores de consola, mismo trazado en todos y leaderboard idéntico. Se prueba contra la versión publicada (<https://juliangt.github.io/formulita/>) o con `npm run dev` / `npm run preview` en la LAN.
 
 - [ ] Dos o más dispositivos crean/unen por palabra y ven el MISMO roster (nombres, colores, contador n/10) en todas las pantallas.
 - [ ] INICIAR (anfitrión) arranca el countdown en todos casi a la vez; nadie ve la pista moverse antes del GO!.
