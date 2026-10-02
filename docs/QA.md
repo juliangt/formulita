@@ -66,7 +66,7 @@ Criterio de aceptación (M3): partida de ~10 minutos con dispositivos REALES en 
 - [ ] Un peer en background >20 s desaparece del mundo/minimapa y figura como ABANDONÓ en el podio; la carrera concluye igual.
 - [ ] Escalado móvil 720×1280 (Scale.FIT): HUD (vueltas/tiempos/Pn-N), minimapa, botón de mute y botones táctiles ◀ ▶ GAS FRENO se ven y alcanzan bien en un teléfono chico — todo el HUD se dibuja en coordenadas del lienzo base y el canvas escala completo sin distorsión.
 - [ ] Largada hacia **arriba** de la pantalla en las 5 pistas (auto y parrilla), y **gas manual**: sin tocar GAS el auto desacelera sola (coast); con GAS llega al techo de velocidad (issue #20).
-- [ ] Overlay MULTIJUGADOR en viewport con letterbox (≠ 9:16): el input de nombre se ve DENTRO del panel y acepta texto; tocar CREAR/UNIRSE sin nombre muestra "INGRESÁ TU NOMBRE" (issue #21). Ídem input de palabra de sala en UNIRSE y los inputs de chat en DM.
+- [ ] Subpantalla EN LÍNEA del menú (issue #22: reemplaza a MULTIJUGADOR y CHAT) en viewport con letterbox (≠ 9:16): el input TU NOMBRE se ve DENTRO del panel y acepta texto; tocar CREAR/UNIRSE/CHAT sin nombre muestra "INGRESÁ TU NOMBRE" (issue #21) y CHAT no abre el chat. Ídem input de palabra de sala en UNIRSE y los inputs de chat en DM.
 - [ ] El pasto corta: cortar por afuera salta sectores de la vuelta y **la vuelta no cuenta** (anti-corte por checkpoints).
 - [ ] Regresión: el modo solo (JUGAR) y la BATALLA multi (leaderboard, espectador, chat) funcionan exactamente igual que antes.
 
@@ -105,6 +105,6 @@ Flujo social con 3 dispositivos (uno iOS, uno Android, uno desktop):
 - [ ] **2 DM simultáneos** al chat de sala (p. ej. A↔C mientras B escribe en sala): los mensajes no se cruzan de hilo y el throttle de cada hilo es independiente.
 - [ ] Tocar MOSTRARME DISPONIBLE: NO → SÍ aparece en las listas de los demás en ~1,5 s; SÍ → NO desaparece y su hilo de DM pasa a DESCONECTADO con el input bloqueado.
 - [ ] **INVITAR A PARTIDA** (desde un lobby): el invitado ve el banner «N TE INVITÓ A "PALABRA"», UNIRSE lo lleva al lobby con la palabra pre-cargada y IGNORAR lo descarta.
-- [ ] El badge del botón CHAT del menú cuenta los no leídos de sala + DMs y se limpia al abrir cada hilo.
+- [ ] El badge del botón EN LÍNEA del menú (issue #22: heredado del viejo botón CHAT) cuenta los no leídos de sala + DMs y se limpia al abrir cada hilo; el nombre editado en TU NOMBRE es el mismo en la sala y en el chat.
 - [ ] Sesión de ~10 minutos de chat (sala + DMs + bloqueos) sin errores ni warnings de consola en ningún dispositivo.
 - [ ] Cerrar la pestaña y volver: no queda rastro de mensajes ni hilos (efímero); solo el toggle de disponibilidad se recuerda.

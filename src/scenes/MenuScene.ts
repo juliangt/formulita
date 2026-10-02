@@ -12,7 +12,7 @@ import {
   parseCpuDifficulty,
   type CpuDifficulty,
 } from '../race/results';
-import { chatMenuButtonLabel } from '../chat/dmView';
+import { onlineMenuButtonLabel } from '../chat/dmView';
 import { getSocialChatSession } from '../chat/socialChatSession';
 import { sanitizePlayerName } from '../net/protocol';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
@@ -57,7 +57,7 @@ const FS_LABEL_FULLSCREEN = 'VENTANA';
  * Layout del overlay selector de pistas (V1, issue #9): panel centrado con
  * título, una fila por pista (botón con el nombre + hint del circuito real
  * que lo inspira), selector de DIFICULTAD del rival (#14) y CERRAR. Mismo
- * patrón del overlay multijugador.
+ * patrón de la subpantalla EN LÍNEA.
  */
 const TRACK_PICKER = {
   /** Opacidad del velo oscuro sobre el menú (0–1). */
@@ -95,7 +95,42 @@ const TRACK_PICKER = {
   closeHeight: 88,
 } as const;
 
-/** Input DOM del nombre multijugador (overlay simple sobre el menú). */
+/**
+ * Issue #22 — layout de la subpantalla EN LÍNEA (evolución del overlay
+ * multijugador): título, identidad TU NOMBRE (input precargado del perfil),
+ * aviso "INGRESÁ TU NOMBRE" (#21), botones CREAR SALA / UNIRSE (lobby), CHAT
+ * (ChatScene con identidad compartida) y CERRAR. Mismo panel centrado del
+ * selector de pistas; los botones de acción van al mismo paso de 130 px.
+ */
+const ONLINE = {
+  /** Centro Y y tamaño del panel. */
+  panelY: 712,
+  panelWidth: 620,
+  panelHeight: 952,
+  /** Y del título EN LÍNEA (centro). */
+  titleY: 320,
+  /** Y del rótulo TU NOMBRE y del input DOM (centros). */
+  nameLabelY: 440,
+  inputY: 530,
+  /** Y del aviso "INGRESÁ TU NOMBRE" (centro), entre el input y CREAR SALA. */
+  warningY: 606,
+  /** Centros Y de las filas de botones: CREAR SALA / UNIRSE / CHAT, al mismo
+   * paso de 130 px (20 px de aire entre botones de 110 px). */
+  createY: 700,
+  joinY: 830,
+  chatY: 960,
+  /** Tamaño de los tres botones de acción y fuente de su etiqueta. */
+  actionWidth: 440,
+  actionHeight: 110,
+  actionFontSize: 42,
+  /** Botón CERRAR. */
+  closeY: 1090,
+  closeWidth: 300,
+  closeHeight: 96,
+  closeFontSize: 34,
+} as const;
+
+/** Input DOM del nombre compartido por multijugador y chat (issue #22). */
 const NAME_INPUT_CSS = {
   'font-family': 'monospace',
   'font-size': '44px',
@@ -111,9 +146,9 @@ const NAME_INPUT_CSS = {
 };
 
 /**
- * Issue #21 — aviso cuando se toca CREAR SALA/UNIRSE sin nombre. Antes era un
- * `return` silencioso (botones que parecían muertos): ahora un texto efímero
- * bajo el input (mismo rojo de error que usa el lobby en setStatus).
+ * Issue #21 — aviso cuando se toca CREAR SALA/UNIRSE/CHAT sin nombre. Antes
+ * era un `return` silencioso (botones que parecían muertos): ahora un texto
+ * efímero bajo el input (mismo rojo de error que usa el lobby en setStatus).
  */
 const NAME_WARNING_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'monospace',
@@ -142,6 +177,11 @@ const NAME_WARNING_FADE_MS = 400;
  * - Fase 7 — fullscreen opcional en desktop: botón en la esquina superior
  *   izquierda (espejo del mute) + tecla F. La etiqueta sigue al estado real
  *   vía los eventos ENTER/LEAVE_FULLSCREEN del ScaleManager.
+ * - Issue #22 — EN LÍNEA: MULTIJUGADOR y CHAT se unifican en UN botón que
+ *   abre la subpantalla con la identidad compartida (TU NOMBRE, precargada
+ *   del perfil), el flujo CREAR SALA/UNIRSE (goLobby de M1) y el CHAT (la
+ *   ChatScene de C2/C3, que ahora también guarda el nombre editado antes de
+ *   lanzarse). El badge de no leídos (C3) vive en el botón EN LÍNEA.
  */
 export class MenuScene extends Phaser.Scene {
   static readonly KEY = 'Menu';
@@ -149,16 +189,23 @@ export class MenuScene extends Phaser.Scene {
   private road!: Phaser.GameObjects.TileSprite;
   private muteButton!: MuteButton;
   private fullscreenButton: MenuButton | null = null;
-  /** C3 — botón CHAT con badge de no leídos de la sesión social. */
-  private chatButton: MenuButton | null = null;
+  /**
+   * C3 + issue #22 — botón EN LÍNEA con badge de no leídos de la sesión
+   * social. DECISIÓN del badge: va en el botón EN LÍNEA (no en el subbotón
+   * CHAT de la subpantalla) porque es la única superficie siempre visible y
+   * ya se actualiza en vivo desde `update()`; el subbotón CHAT sólo existe
+   * con la subpantalla abierta, cuando el badge ya cumplió su trabajo.
+   */
+  private onlineButton: MenuButton | null = null;
   /** Último label del badge (evita repintar el texto en cada frame). */
-  private lastChatLabel = '';
+  private lastOnlineLabel = '';
 
-  /* M1 — overlay multijugador (nombre + crear/unirse), null si cerrado. */
-  private multiOverlay: Phaser.GameObjects.Container | null = null;
-  private multiNameInput: Phaser.GameObjects.DOMElement | null = null;
+  /* Issue #22 — subpantalla EN LÍNEA (nombre + crear/unirse + chat), null
+   * si cerrada. Antes era el overlay multijugador de M1. */
+  private onlineOverlay: Phaser.GameObjects.Container | null = null;
+  private onlineNameInput: Phaser.GameObjects.DOMElement | null = null;
   /** Issue #21 — aviso "INGRESÁ TU NOMBRE" (muere con el overlay). */
-  private multiNameWarning: Phaser.GameObjects.Text | null = null;
+  private onlineNameWarning: Phaser.GameObjects.Text | null = null;
 
   /* V1 (issue #9) — overlay del selector de pistas de ENTRENAR. */
   private trackOverlay: Phaser.GameObjects.Container | null = null;
@@ -238,24 +285,9 @@ export class MenuScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-ENTER', this.startGame);
     this.input.keyboard?.on('keydown-SPACE', this.startGame);
 
-    // M1 — MULTIJUGADOR: abre el overlay de nombre + crear/unirse (el flujo
-    // pide el nombre UNA vez acá, persistido en PlayerProfileRepository, y
-    // luego pasa a LobbyScene con el modo elegido).
-    new MenuButton(this, {
-      x: centerX,
-      y: MENU.multiY,
-      width: MENU.multiWidth,
-      height: MENU.multiHeight,
-      label: 'MULTIJUGADOR',
-      tint: 0xb04ee0,
-      fontSize: MENU.multiFontSize,
-      bus,
-      onPress: this.openMultiplayerOverlay,
-    });
-
     // #14 — GRAN PREMIO: abre el selector de pistas + dificultad del rival y
     // lanza RaceScene en modo VS CPU (una persona, 3 vueltas contra 1 CPU,
-    // sin red). El botón entre JUGAR y MULTIJUGADOR: mismo layout de V1 #9.
+    // sin red). El botón entre JUGAR y EN LÍNEA: mismo layout de V1 #9.
     new MenuButton(this, {
       x: centerX,
       y: MENU.trainY,
@@ -268,24 +300,24 @@ export class MenuScene extends Phaser.Scene {
       onPress: this.openTrackPicker,
     });
 
-    // C2 (issue #2) — CHAT: abre el overlay social con la tab PÚBLICO por
-    // default (en el menú no hay sala de partida: SALA llega deshabilitada).
-    // El overlay NO está en gameConfig: se registra on-demand como en C1.
+    // Issue #22 — EN LÍNEA: UNA entrada para todo lo online (identidad TU
+    // NOMBRE + CREAR SALA/UNIRSE + CHAT, todo en la subpantalla). Hereda el
+    // violeta del viejo MULTIJUGADOR.
     // C3 — el label lleva el BADGE de no leídos de la sesión (sala + DMs):
     // la sesión social ya existe desde el Boot (eager, auditoría #2) y su
     // constructor aplicó el ajuste persistido — acá solo se lee el store.
     const social = getSocialChatSession(this.registry);
-    this.lastChatLabel = chatMenuButtonLabel(social.store.totalUnread);
-    this.chatButton = new MenuButton(this, {
+    this.lastOnlineLabel = onlineMenuButtonLabel(social.store.totalUnread);
+    this.onlineButton = new MenuButton(this, {
       x: centerX,
-      y: MENU.chatY,
-      width: MENU.chatWidth,
-      height: MENU.chatHeight,
-      label: this.lastChatLabel,
+      y: MENU.onlineY,
+      width: MENU.onlineWidth,
+      height: MENU.onlineHeight,
+      label: this.lastOnlineLabel,
       tint: 0xb04ee0,
-      fontSize: MENU.chatFontSize,
+      fontSize: MENU.onlineFontSize,
       bus,
-      onPress: this.openChatOverlay,
+      onPress: this.openOnlineOverlay,
     });
 
     // Ayuda de controles y extras según el dispositivo. El fullscreen (Fase
@@ -318,12 +350,13 @@ export class MenuScene extends Phaser.Scene {
       0,
       TRACK.tileHeight,
     );
-    // C3 — badge en vivo: los DM pueden llegar con el menú abierto (la sala
-    // pública sigue viva detrás); el label solo se toca si cambió de verdad.
-    const label = chatMenuButtonLabel(getSocialChatSession(this.registry).store.totalUnread);
-    if (label !== this.lastChatLabel) {
-      this.lastChatLabel = label;
-      this.chatButton?.setLabel(label);
+    // C3 + #22 — badge en vivo sobre EN LÍNEA: los DM pueden llegar con el
+    // menú abierto (la sala pública sigue viva detrás); el label solo se toca
+    // si cambió de verdad.
+    const label = onlineMenuButtonLabel(getSocialChatSession(this.registry).store.totalUnread);
+    if (label !== this.lastOnlineLabel) {
+      this.lastOnlineLabel = label;
+      this.onlineButton?.setLabel(label);
     }
   }
 
@@ -362,27 +395,30 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private readonly startGame = (): void => {
-    // Con un overlay abierto (multijugador o selector de pistas), Enter/
-    // Espacio son del input de ese overlay: no arrancan una carrera sola
+    // Con una subpantalla abierta (EN LÍNEA o selector de pistas), Enter/
+    // Espacio son del input de esa pantalla: no arrancan una carrera sola
     // atravesada.
-    if (this.multiOverlay || this.trackOverlay) {
+    if (this.onlineOverlay || this.trackOverlay) {
       return;
     }
     this.scene.start(GameScene.KEY);
   };
 
   /* ---------------------------------------------------------------- */
-  /* M1 — overlay multijugador: nombre + crear/unirse                   */
+  /* Issue #22 — subpantalla EN LÍNEA: nombre + crear/unirse + chat     */
   /* ---------------------------------------------------------------- */
 
   /**
-   * Overlay DOM/Phaser sobre el menú: pide el nombre (una sola vez — se
-   * precarga el guardado) y ofrece CREAR SALA / UNIRSE. La capa oscura es
-   * interactiva y corta la propagación para que los botones de abajo no
-   * disparen taps atravesados.
+   * Subpantalla DOM/Phaser sobre el menú (evolución del overlay multijugador
+   * de M1): identidad TU NOMBRE compartida (precargada del perfil, una sola
+   * vez — la reutilizan la sala y el chat), CREAR SALA / UNIRSE (goLobby de
+   * M1 con el feedback "INGRESÁ TU NOMBRE" de #21), CHAT (ChatScene de C2/
+   * C3, que ahora guarda el nombre editado antes de lanzarse) y CERRAR. La
+   * capa oscura es interactiva y corta la propagación para que los botones
+   * de abajo no disparen taps atravesados.
    */
-  private readonly openMultiplayerOverlay = (): void => {
-    if (this.multiOverlay) {
+  private readonly openOnlineOverlay = (): void => {
+    if (this.onlineOverlay) {
       return;
     }
     const centerX = this.scale.width / 2;
@@ -396,12 +432,14 @@ export class MenuScene extends Phaser.Scene {
     dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
       event.stopPropagation();
     });
-    const panel = this.add.rectangle(centerX, 660, 620, 820, 0x14141c).setStrokeStyle(6, 0x3a3a44);
+    const panel = this.add
+      .rectangle(centerX, ONLINE.panelY, ONLINE.panelWidth, ONLINE.panelHeight, 0x14141c)
+      .setStrokeStyle(6, 0x3a3a44);
     overlay.add([dim, panel]);
 
     overlay.add(
       this.add
-        .text(centerX, 340, 'MULTIJUGADOR', {
+        .text(centerX, ONLINE.titleY, 'EN LÍNEA', {
           fontFamily: 'monospace',
           fontSize: '56px',
           color: '#f2f2f2',
@@ -411,7 +449,7 @@ export class MenuScene extends Phaser.Scene {
     );
     overlay.add(
       this.add
-        .text(centerX, 470, 'TU NOMBRE', {
+        .text(centerX, ONLINE.nameLabelY, 'TU NOMBRE', {
           fontFamily: 'monospace',
           fontSize: '28px',
           color: '#9aa0a8',
@@ -419,21 +457,21 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5),
     );
 
-    this.multiNameInput = this.add.dom(centerX, 570, 'input', NAME_INPUT_CSS) as Phaser.GameObjects.DOMElement;
-    const inputNode = this.multiNameInput.node as HTMLInputElement;
+    this.onlineNameInput = this.add.dom(centerX, ONLINE.inputY, 'input', NAME_INPUT_CSS) as Phaser.GameObjects.DOMElement;
+    const inputNode = this.onlineNameInput.node as HTMLInputElement;
     applyMobileInputAttributes(inputNode, 'name');
     inputNode.value = storedName;
     inputNode.placeholder = 'PILOTO';
-    this.multiNameInput.setOrigin(0.5).setDepth(101);
+    this.onlineNameInput.setOrigin(0.5).setDepth(101);
 
     // Issue #21 — aviso efímero bajo el input (entre el input y CREAR SALA).
     // Texto de la escena, no DOM: el sync del contenedor no lo afecta.
     const nameWarning = this.add
-      .text(centerX, 648, NAME_WARNING_MESSAGE, NAME_WARNING_STYLE)
+      .text(centerX, ONLINE.warningY, NAME_WARNING_MESSAGE, NAME_WARNING_STYLE)
       .setOrigin(0.5)
       .setVisible(false);
     overlay.add(nameWarning);
-    this.multiNameWarning = nameWarning;
+    this.onlineNameWarning = nameWarning;
 
     /** Muestra el aviso opaco y agenda su fade (el destroy del overlay lo corta). */
     const showNameWarning = (): void => {
@@ -456,8 +494,11 @@ export class MenuScene extends Phaser.Scene {
     // muere con el nodo (el destroy del DOMElement lo retira del documento).
     inputNode.addEventListener('input', hideNameWarning);
 
+    /** El nombre del input, sanitizado (puede quedar vacío: sin nombre). */
+    const readName = (): string => sanitizePlayerName(inputNode.value);
+
     const goLobby = (mode: 'create' | 'join'): void => {
-      const name = sanitizePlayerName(inputNode.value);
+      const name = readName();
       if (name.length === 0) {
         // Sin nombre no hay lobby: ahora HAY feedback (antes `return` mudo —
         // botones que parecían muertos) y el foco deja el teclado listo.
@@ -466,19 +507,36 @@ export class MenuScene extends Phaser.Scene {
         return;
       }
       getPlayerProfileRepository(this.registry).save({ name });
-      this.closeMultiplayerOverlay();
+      this.closeOnlineOverlay();
       this.scene.start(LobbyScene.KEY, { mode, name });
+    };
+
+    const goChat = (): void => {
+      const name = readName();
+      if (name.length === 0) {
+        // Mismo contrato de identidad que la sala (#22): sin nombre hay
+        // feedback y el chat NO se abre.
+        showNameWarning();
+        inputNode.focus();
+        return;
+      }
+      // Identidad compartida (#22): guardar el nombre editado ANTES de lanzar
+      // el chat — la tab PÚBLICO de ChatScene anuncia el nombre del perfil
+      // (client.updateSelf) y así sala y chat reflejan el mismo nombre.
+      getPlayerProfileRepository(this.registry).save({ name });
+      this.closeOnlineOverlay();
+      this.openChatOverlay();
     };
 
     overlay.add(
       new MenuButton(this, {
         x: centerX,
-        y: 740,
-        width: 440,
-        height: 110,
+        y: ONLINE.createY,
+        width: ONLINE.actionWidth,
+        height: ONLINE.actionHeight,
         label: 'CREAR SALA',
         tint: 0x1d8f43,
-        fontSize: 42,
+        fontSize: ONLINE.actionFontSize,
         bus,
         onPress: () => goLobby('create'),
       }).container,
@@ -486,12 +544,12 @@ export class MenuScene extends Phaser.Scene {
     overlay.add(
       new MenuButton(this, {
         x: centerX,
-        y: 880,
-        width: 440,
-        height: 110,
+        y: ONLINE.joinY,
+        width: ONLINE.actionWidth,
+        height: ONLINE.actionHeight,
         label: 'UNIRSE',
         tint: 0x3c6cd6,
-        fontSize: 42,
+        fontSize: ONLINE.actionFontSize,
         bus,
         onPress: () => goLobby('join'),
       }).container,
@@ -499,31 +557,44 @@ export class MenuScene extends Phaser.Scene {
     overlay.add(
       new MenuButton(this, {
         x: centerX,
-        y: 1020,
-        width: 300,
-        height: 96,
+        y: ONLINE.chatY,
+        width: ONLINE.actionWidth,
+        height: ONLINE.actionHeight,
+        label: 'CHAT',
+        tint: 0xb04ee0,
+        fontSize: ONLINE.actionFontSize,
+        bus,
+        onPress: goChat,
+      }).container,
+    );
+    overlay.add(
+      new MenuButton(this, {
+        x: centerX,
+        y: ONLINE.closeY,
+        width: ONLINE.closeWidth,
+        height: ONLINE.closeHeight,
         label: 'CERRAR',
         tint: 0x525868,
-        fontSize: 34,
+        fontSize: ONLINE.closeFontSize,
         bus,
-        onPress: this.closeMultiplayerOverlay,
+        onPress: this.closeOnlineOverlay,
       }).container,
     );
 
-    this.multiOverlay = overlay;
+    this.onlineOverlay = overlay;
   };
 
-  private readonly closeMultiplayerOverlay = (): void => {
+  private readonly closeOnlineOverlay = (): void => {
     // El aviso (texto) muere con el contenedor del overlay; acá solo se corta
     // su fade pendiente y se suelta la referencia.
-    if (this.multiNameWarning) {
-      this.tweens.killTweensOf(this.multiNameWarning);
+    if (this.onlineNameWarning) {
+      this.tweens.killTweensOf(this.onlineNameWarning);
     }
-    this.multiNameWarning = null;
-    this.multiNameInput?.destroy();
-    this.multiNameInput = null;
-    this.multiOverlay?.destroy();
-    this.multiOverlay = null;
+    this.onlineNameWarning = null;
+    this.onlineNameInput?.destroy();
+    this.onlineNameInput = null;
+    this.onlineOverlay?.destroy();
+    this.onlineOverlay = null;
   };
 
   /* ---------------------------------------------------------------- */
@@ -531,7 +602,7 @@ export class MenuScene extends Phaser.Scene {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Overlay simple de selección de pista (patrón del overlay multijugador):
+   * Overlay simple de selección de pista (patrón de la subpantalla EN LÍNEA):
    * las 5 pistas del registro por nombre + hint, el selector de DIFICULTAD
    * del rival (#14: FÁCIL / NORMAL / DIFÍCIL, default NORMAL) y CERRAR. V1
    * NO usa miniaturas (`TrackThumb` llega con el lobby de V2): para entrenar,
@@ -539,7 +610,7 @@ export class MenuScene extends Phaser.Scene {
    * VS CPU con la dificultad elegida.
    */
   private readonly openTrackPicker = (): void => {
-    if (this.trackOverlay || this.multiOverlay) {
+    if (this.trackOverlay || this.onlineOverlay) {
       return;
     }
     const centerX = this.scale.width / 2;
@@ -712,12 +783,11 @@ export class MenuScene extends Phaser.Scene {
    * PauseScene) con la tab PÚBLICO activa por default: en el menú no hay sala
    * de partida y la tab SALA aparece deshabilitada con su aviso. ChatScene se
    * registra on-demand (igual que en el lobby): gameConfig no se toca.
+   * Issue #22: ya no es un botón directo del menú — lo llama la subpantalla
+   * EN LÍNEA (goChat) DESPUÉS de cerrarse y de guardar el nombre editado en
+   * el perfil (la tab PÚBLICO anuncia ese nombre vía client.updateSelf).
    */
   private readonly openChatOverlay = (): void => {
-    // Con el overlay multijugador abierto, CHAT no pisa el foco del nombre.
-    if (this.multiOverlay) {
-      return;
-    }
     if (!this.scene.get(ChatScene.KEY)) {
       this.scene.add(ChatScene.KEY, ChatScene, false);
     }

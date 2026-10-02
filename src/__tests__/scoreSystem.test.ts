@@ -271,7 +271,7 @@ describe('balance de Fase 5 — sanidad', () => {
       MENU.recordY,
       MENU.coinsY,
       MENU.playY,
-      MENU.multiY,
+      MENU.onlineY,
       MENU.helpY,
     ]) {
       expect(y).toBeGreaterThan(0);
@@ -295,11 +295,11 @@ describe('balance de Fase 5 — sanidad', () => {
       expect(x).toBeGreaterThan(0);
       expect(x).toBeLessThanOrEqual(GAME_WIDTH);
     }
-    // M1 — JUGAR y MULTIJUGADOR entran en pantalla y no se pisan entre sí
+    // M1 + #22 — JUGAR y EN LÍNEA entran en pantalla y no se pisan entre sí
     // ni con la ayuda de controles.
     expect(MENU.playY + MENU.playHeight / 2).toBeLessThan(MENU.helpY);
-    expect(MENU.playY + MENU.playHeight / 2).toBeLessThan(MENU.multiY - MENU.multiHeight / 2);
-    expect(MENU.multiY + MENU.multiHeight / 2).toBeLessThan(MENU.helpY);
+    expect(MENU.playY + MENU.playHeight / 2).toBeLessThan(MENU.onlineY - MENU.onlineHeight / 2);
+    expect(MENU.onlineY + MENU.onlineHeight / 2).toBeLessThan(MENU.helpY);
     expect(GAME_OVER.retryY + GAME_OVER.buttonHeight / 2).toBeLessThan(GAME_OVER.menuY);
   });
 });

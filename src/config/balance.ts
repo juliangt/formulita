@@ -193,6 +193,12 @@ export const RACE_HUD = {
  * MULTIJUGADOR y el bloque inferior volvió a reacomodarse: los tres botones
  * grandes bajaron de 118 a 96/88 px de alto y la ayuda compactó su interlineado
  * para que todo siga quepa en el lienzo sin tocarse.
+ *
+ * Issue #22 — EN LÍNEA: MULTIJUGADOR y CHAT se unifican en UN botón (la
+ * identidad TU NOMBRE, la sala y el chat viven en la subpantalla que abre).
+ * La columna queda con tres botones al mismo paso de 108 px y la ayuda de
+ * controles sube a `helpY` 1180 (el aire que dejó el cuarto botón se reparte
+ * entre el último botón y la ayuda).
  */
 export const MENU = {
   /** Velocidad de scroll de la pista de fondo (px/s). */
@@ -224,28 +230,19 @@ export const MENU = {
   trainHeight: 88,
   /** Tamaño de fuente de la etiqueta ENTRENAR (px). */
   trainFontSize: 40,
-  /* M1 — botón MULTIJUGADOR: debajo de ENTRENAR, mismo ancho (13 caracteres
-   * de monospace tienen que entrar en 400 px). */
-  /** Centro Y del botón MULTIJUGADOR. */
-  multiY: 1056,
-  /** Ancho/alto del botón MULTIJUGADOR (mismo ancho que JUGAR/ENTRENAR). */
-  multiWidth: 400,
-  multiHeight: 88,
-  /** Tamaño de fuente de la etiqueta MULTIJUGADOR (px). */
-  multiFontSize: 40,
-  /* C2 (issue #2) — botón CHAT: debajo de MULTIJUGADOR, mismo ancho; abre el
-   * overlay con la tab PÚBLICO (el chat social vive también en el menú). El
-   * bloque de ayuda compactó su interlineado para hacerle sitio (helpY
-   * 1204 → 1220, helpLineHeight 34 → 30). */
-  /** Centro Y del botón CHAT del menú. */
-  chatY: 1136,
-  /** Ancho/alto del botón CHAT (mismo ancho que JUGAR/ENTRENAR/MULTIJUGADOR). */
-  chatWidth: 400,
-  chatHeight: 64,
-  /** Tamaño de fuente de la etiqueta CHAT (px). */
-  chatFontSize: 34,
-  /** Y del centro del bloque de ayuda de controles. */
-  helpY: 1220,
+  /* Issue #22 — botón EN LÍNEA: debajo de GRAN PREMIO, mismo ancho y mismo
+   * paso de grilla que JUGAR/GRAN PREMIO. Abre la subpantalla de identidad
+   * (TU NOMBRE) + CREAR SALA/UNIRSE + CHAT. Su etiqueta lleva el badge de
+   * no leídos del chat (C3): `onlineMenuButtonLabel`. */
+  /** Centro Y del botón EN LÍNEA. */
+  onlineY: 1056,
+  /** Ancho/alto del botón EN LÍNEA (mismo ancho que JUGAR/GRAN PREMIO). */
+  onlineWidth: 400,
+  onlineHeight: 88,
+  /** Tamaño de fuente de la etiqueta EN LÍNEA (px). */
+  onlineFontSize: 40,
+  /** Y del centro del bloque de ayuda de controles (#22: 1220 → 1180). */
+  helpY: 1180,
   /** Separación vertical entre líneas de ayuda (px). */
   helpLineHeight: 30,
   /** Tamaño de fuente de las líneas de récord/monedas (px). */
