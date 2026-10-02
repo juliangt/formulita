@@ -141,7 +141,7 @@ El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde �
 
 ## Multijugador (P2P, sin servidor)
 
-Ambos modos multijugador corren sobre **Trystero sobre WebRTC** (señalización BitTorrent — `@trystero-p2p/torrent`): no hay servidor propio. La **palabra de sala** (5–9 letras, pronunciable por teléfono) es la clave que define la pista: todos los clientes de una sala generan exactamente el mismo contenido sin negociar nada por la red.
+Ambos modos multijugador corren sobre **Trystero sobre WebRTC** (señalización BitTorrent — `@trystero-p2p/torrent`): no hay servidor propio. La **palabra de sala** (5–9 letras, pronunciable por teléfono) es la clave que define la pista: todos los clientes de una sala generan exactamente el mismo contenido sin negociar nada por la red. Los trackers de señalización son los defaults de la librería salvo que definas `VITE_TRYSTERO_RELAYS` (opcional — ver [Configuración](#configuración-y-publicación)).
 
 **Cómo entrar**: Menú → **EN LÍNEA** → poné tu nombre → crear sala (el juego te da la palabra) o unirse con la palabra del anfitrión. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna en función del roster (determinista e idéntico para todos). Con 2 o más en sala, el **anfitrión** elige modo (**BATALLA** o **CARRERA**) y, en carrera, la pista (con miniatura); aprieta **INICIAR** y el countdown arranca sincronizado en todos.
 
@@ -223,6 +223,15 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 
 - **Qué es**: el namespace de matchmaking de Trystero — un string público que agrupa las salas de ESTA aplicación dentro de los trackers de señalización. **NO es un secreto ni una API key**: queda visible en el bundle, y dos navegadores solo se encuentran si usan el mismo appId + la misma palabra de sala.
 - **Si falta**: el build funciona igual (el requisito es de RUNTIME, no de build); al abrir el multijugador o el chat el lobby **falla rápido** con el error visible "falta VITE_TRYSTERO_APP_ID" en vez de conectar en silencio.
+
+### `VITE_TRYSTERO_RELAYS` (opcional)
+
+- **Qué es**: la lista de **trackers de señalización BitTorrent** que usa Trystero para el encuentro inicial entre jugadores (CSV de `wss://`/`ws://`). El tracker es solo el casamentero: una vez establecida la conexión, el tráfico del juego es **P2P directo** entre navegadores y nunca pasa por él.
+- **Si falta o queda vacía**: la librería usa sus trackers default — comportamiento actual; no hace falta definirla.
+- **Cuándo cambiarlo**: solo si querés depender de trackers propios (autoalojados) o si un default dejara de funcionar.
+- **Riesgo de fragmentación**: la sala existe DENTRO de los trackers usados — dos jugadores con listas **disjuntas** (sin ningún tracker en común) nunca se encuentran, aunque compartan appId y palabra de sala; con al menos un tracker compartido sí conectan. Cualquier lista custom tiene que ser **igual en todas las instalaciones** (coordiná el cambio con todos los jugadores).
+- Formato y validación: `wss://a, wss://b` — se ignoran entradas vacías o sin `wss://`/`ws://`; si la variable tiene contenido pero ninguna URL válida, el multijugador **falla rápido** con error visible (no degrada en silencio a los defaults, que fragmentaría el matchmaking). Con lista custom se usan TODAS las URLs (la redundancia de la librería solo aplica a sus defaults).
+- **Producción (Pages)**: para que llegue al deploy hay que agregarla al paso de build de `.github/workflows/deploy.yml` junto a `VITE_TRYSTERO_APP_ID` (`VITE_TRYSTERO_RELAYS: ${{ vars.VITE_TRYSTERO_RELAYS }}`); en dev alcanza con `.env.local`.
 
 ### Publicación (GitHub Pages)
 
