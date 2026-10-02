@@ -66,8 +66,9 @@ describe('tracks — registro', () => {
       expect(def.waypoints.length).toBeLessThanOrEqual(35);
       expect(def.lapTargetMs).toBe(40000);
       expect(def.sectors).toHaveLength(CIRCUIT.sectorCount);
-      expect(def.worldSize.width).toBe(2800);
-      expect(def.worldSize.height).toBe(2800);
+      // Issue #18: mundo del circuito ×2.5 (2800 → 7000).
+      expect(def.worldSize.width).toBe(7000);
+      expect(def.worldSize.height).toBe(7000);
       expect(def.widthPx).toBeGreaterThan(0);
       // Sectores: fracciones contiguas que cubren [0, 1].
       expect(def.sectors[0].start).toBe(0);
@@ -78,12 +79,12 @@ describe('tracks — registro', () => {
         }
       });
       expect(def.sectors[def.sectors.length - 1].end).toBeCloseTo(1, 12);
-      // Waypoints dentro del mundo.
+      // Waypoints dentro del mundo (margen de 250 px de la escala ×2.5).
       for (const wp of def.waypoints) {
-        expect(wp.x).toBeGreaterThan(100);
-        expect(wp.x).toBeLessThan(2700);
-        expect(wp.y).toBeGreaterThan(100);
-        expect(wp.y).toBeLessThan(2700);
+        expect(wp.x).toBeGreaterThan(250);
+        expect(wp.x).toBeLessThan(6750);
+        expect(wp.y).toBeGreaterThan(250);
+        expect(wp.y).toBeLessThan(6750);
       }
     }
   });

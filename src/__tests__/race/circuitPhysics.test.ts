@@ -13,21 +13,24 @@ import { TrackPath } from '../../race/trackPath';
  * pasto que recorta el techo, giro que decae con la velocidad, freno, avance
  * auto-acelerado y defensas contra dt inválido. dt inyectado, sin Phaser.
  *
- * Se usa un anillo amplio (R=4000) como pista: en los tramos cortos que
- * simulan los tests el auto se mantiene sobre el asfalto, así el clamp de
- * velocidad se valida sin interferencia del pasto (que tiene sus propios
- * tests con estados colocados a propósito fuera del eje).
+ * Se usa un anillo amplio como pista: en los tramos cortos que simulan los
+ * tests el auto se mantiene sobre el asfalto, así el clamp de velocidad se
+ * valida sin interferencia del pasto (que tiene sus propios tests con
+ * estados colocados a propósito fuera del eje). Issue #18: el anillo y el
+ * ancho escalan ×2.5 con el mundo (R=10000, W=375) — a la nueva punta
+ * (750 px/s) el auto sin girar se aparta del eje d²/2R: con la escala vieja
+ * salía del asfalto durante el tick largo de 1.5 s.
  */
 
 const DT = 1 / 60;
-const RADIUS = 4000;
+const RADIUS = 10000;
 const gentle = new TrackPath(
   Array.from({ length: 16 }, (_, i) => {
     const theta = (2 * Math.PI * i) / 16;
     return { x: Math.cos(theta) * RADIUS, y: Math.sin(theta) * RADIUS };
   }),
 );
-const WIDTH = 150;
+const WIDTH = 375;
 const physics = new CircuitPhysics(gentle, WIDTH);
 
 /** Estado parado sobre el eje de la pista en s. */

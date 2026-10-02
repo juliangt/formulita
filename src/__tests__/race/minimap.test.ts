@@ -27,7 +27,7 @@ describe('computeMiniMapTransform', () => {
       const t = computeMiniMapTransform(path, SIZE, PADDING);
 
       // Escala única para ambos ejes (el circuito nunca se deforma) y menor
-      // que 1: el mundo de 2800 px entra en un cuadrado de 180.
+      // que 1: el mundo de 7000 px (issue #18) entra en un cuadrado de 180.
       expect(t.scale).toBeGreaterThan(0);
       expect(t.scale).toBeLessThan(1);
 

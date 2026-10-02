@@ -99,6 +99,9 @@ import { PauseScene } from './PauseScene';
 
 /* ------------------------------------------------------------------ */
 /* Constantes visuales del circuito (presentación, no gameplay)         */
+/* Issue #18: los px de MUNDO escalan ×2.5 con el circuito (quedan con   */
+/* la misma proporción sobre la pista y el mismo tamaño en pantalla con  */
+/* el nuevo zoom); los px de PANTALLA (HUD, carteles) no cambian.        */
 /* ------------------------------------------------------------------ */
 
 /** Prefijo de la textura pre-horneada por pista (`race-track-<id>`). */
@@ -111,17 +114,18 @@ const TRACK_TEXTURE_PREFIX = 'race-track-';
 const CAR_SPRITE_ANGLE_OFFSET = Math.PI / 2;
 
 /** Ancho de las franjas de corte del pasto (px, alternadas con grassAlt). */
-const GRASS_STRIPE_PX = 200;
+const GRASS_STRIPE_PX = 500;
 
 /** Largo de cada bloque de kerb a lo largo del arco (px). */
-const KERB_BLOCK_PX = 64;
+const KERB_BLOCK_PX = 160;
 /** Cuánto sobresale el kerb más allá del borde del asfalto (px). */
-const KERB_EXTRA_WIDTH_PX = 18;
-/** Curvatura mínima (1/px) que merece kerbs: radio < ~333 px. */
-const KERB_CURVATURE_THRESHOLD = 0.003;
+const KERB_EXTRA_WIDTH_PX = 45;
+/** Curvatura mínima (1/px) que merece kerbs: radio < ~833 px. Issue #18:
+ * el umbral es 1/px de mundo ⇒ se DIVIDE por la escala (0.003 → 0.0012). */
+const KERB_CURVATURE_THRESHOLD = 0.0012;
 
 /** Grosor de las líneas blancas del borde del asfalto (px). */
-const EDGE_LINE_WIDTH_PX = 4;
+const EDGE_LINE_WIDTH_PX = 10;
 /** Color de las líneas del borde (blanco hueso de la paleta kerbAlt-ish). */
 const EDGE_LINE_COLOR = 0xe8e6e0;
 
@@ -134,7 +138,7 @@ const START_LINE_SQUARES = 8;
 
 /** Marcas de sector: línea fina translúcida cruzando el asfalto. */
 const SECTOR_MARK_ALPHA = 0.28;
-const SECTOR_MARK_WIDTH_PX = 6;
+const SECTOR_MARK_WIDTH_PX = 15;
 
 /** Cartel de fin de carrera (bandera a cuadros). */
 const FINISH_LABEL = '¡BANDERA A CUADROS!';
@@ -415,8 +419,9 @@ class RaceTouchControls implements IInputSource {
    * rivales y SFX de largada + adelantamiento (detección pura con
    * enfriamiento en `race/racePositionSwap`, sonando por el bus como
    * `race-go`/`race-overtake`). Práctica y multi: cero cambios, salvo el
-   * destacado del minimapa en multi (opt-in genérico). La cámara NO cambia:
-   * su zoom fijo ya elegido prioriza legibilidad móvil (decisión V3).
+   * destacado del minimapa en multi (opt-in genérico). La cámara conserva SU
+   * mecánica (zoom fijo + lerp; decisión V3): el valor del zoom lo actualizó
+   * el issue #18 (ver `RACE.cameraZoom`).
    */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';

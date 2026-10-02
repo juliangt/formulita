@@ -22,8 +22,8 @@ import { TRACKS } from '../../race/tracks';
 /** Longitud de vuelta "wire" de los tests (px; cualquier pista ronda esto). */
 const LAP_LENGTH = 7000;
 
-/** Medio ancho de pista "wire" (px; MÓNACO tiene widthPx 116). */
-const HALF_WIDTH = 58;
+/** Medio ancho de pista "wire" (px; MÓNACO tiene widthPx 290 desde #18). */
+const HALF_WIDTH = 145;
 
 const ROSTER: PlayerInfo[] = [
   { peerId: 'peer-ana', name: 'Ana', color: 0xd63c3c },

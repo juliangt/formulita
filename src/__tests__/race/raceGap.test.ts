@@ -148,10 +148,11 @@ describe('computeRaceGaps — defensas (V3 #14)', () => {
   });
 
   it('velocidad propia exactamente en el piso sí muestra', () => {
+    // 225 px adelante al piso exacto (75 px/s desde el #18) = 3 s.
     const gaps = computeRaceGaps(
       1000,
       RACE_VS_CPU.gapMinOwnSpeedPx,
-      [{ peerId: 'ahead', progress: 1090 }],
+      [{ peerId: 'ahead', progress: 1225 }],
       OPTIONS,
     );
     expect(gaps.ahead?.seconds).toBe(3);

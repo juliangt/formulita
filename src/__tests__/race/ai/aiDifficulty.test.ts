@@ -215,7 +215,7 @@ function countMistakes(difficulty: 'easy' | 'normal' | 'hard', seed: number, sim
     }),
     mulberry32(seed),
   );
-  const state: CarState = { x: start.x, y: start.y, heading: start.angle, speed: 150 };
+  const state: CarState = { x: start.x, y: start.y, heading: start.angle, speed: 375 };
   for (let step = 0; step < simS / DT; step += 1) {
     driver.drive(state, DT);
   }
@@ -258,7 +258,7 @@ describe('errores humanos — frecuencia Poisson por dificultad', () => {
       }),
       mulberry32(7),
     );
-    const state: CarState = { x: start.x, y: start.y, heading: start.angle, speed: 150 };
+    const state: CarState = { x: start.x, y: start.y, heading: start.angle, speed: 375 };
     const episodeCapSteps = RACE_AI.mistakeMs / 1000 / DT + 2;
     let run = 0;
     let longestRun = 0;
@@ -291,7 +291,7 @@ describe('errores humanos — frecuencia Poisson por dificultad', () => {
         mistakeMagPx: RACE_AI.mistakeMagPx.easy,
       }),
     );
-    const state: CarState = { x: start.x, y: start.y, heading: start.angle, speed: 150 };
+    const state: CarState = { x: start.x, y: start.y, heading: start.angle, speed: 375 };
     for (let step = 0; step < 600; step += 1) {
       const input = driver.drive(state, DT);
       expect([-1, 0, 1]).toContain(input.steer);
@@ -336,19 +336,19 @@ function simulateOvertake(
       x: start.x,
       y: start.y,
       heading: start.angle,
-      speed: 250,
+      speed: 625,
     };
     const config = driverConfig({ aggression, lineOffsetPx: 0 });
     const rng: (() => number) | undefined = rngValue === null ? undefined : () => rngValue;
     const driver = new AiDriver(path, line, config, rng);
     const physics = new CircuitPhysics(path, track.widthPx);
-    let carS = s0 + 150;
+    let carS = s0 + 375;
     const laterals: number[] = [];
     for (let step = 0; step < 6 / DT; step += 1) {
       let cars: AiCarVision[] | undefined;
       if (withTraffic) {
-        cars = [{ s: carS, lateral: 0, speed: 60 }];
-        carS += 60 * DT;
+        cars = [{ s: carS, lateral: 0, speed: 150 }];
+        carS += 150 * DT;
       }
       const input = driver.drive(state, DT, { cars });
       physics.step(state, DT, input);
@@ -375,9 +375,11 @@ describe('adelantamiento — búsqueda de hueco con visión', () => {
     // Stub RNG 0: siempre intenta (roll < chance para cualquier agresión).
     const run = simulateOvertake(0.5, 0);
     // Durante la aproximación la trazada se desvía MÁS que el control.
-    expect(run.maxDeviationPx).toBeGreaterThan(15);
+    // (Umbrales ×2.5 con el mundo del #18: el desvío de la maniobra es
+    // `overtakeSidePx`, que escaló 34 → 85.)
+    expect(run.maxDeviationPx).toBeGreaterThan(38);
     // Pasado el auto, el desvío vuelve a ~0 (retorno suave a la línea).
-    expect(run.finalDeviationPx).toBeLessThan(10);
+    expect(run.finalDeviationPx).toBeLessThan(25);
   });
 
   it('con aggression baja lo intenta MENOS (determinista con stub de RNG)', () => {
@@ -385,10 +387,10 @@ describe('adelantamiento — búsqueda de hueco con visión', () => {
     // tímido (chance 0.325) jamás — mismo mundo, misma seed, distinto carácter.
     const aggressive = simulateOvertake(0.9, 0.9);
     const shy = simulateOvertake(0.1, 0.9);
-    expect(aggressive.maxDeviationPx).toBeGreaterThan(15);
-    expect(shy.maxDeviationPx).toBeLessThan(5);
+    expect(aggressive.maxDeviationPx).toBeGreaterThan(38);
+    expect(shy.maxDeviationPx).toBeLessThan(13);
     // Y sin maniobra no hay desvío final que explicar.
-    expect(shy.finalDeviationPx).toBeLessThan(5);
+    expect(shy.finalDeviationPx).toBeLessThan(13);
   });
 });
 

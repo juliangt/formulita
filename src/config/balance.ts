@@ -448,17 +448,17 @@ export const DIFFICULTY = {
  * interpola de `turnRateBase` (parado) a `turnRateAtMaxSpeed` (a punta).
  */
 export const CIRCUIT = {
-  /** Velocidad máxima en asfalto (px/s). */
-  maxSpeed: 300,
-  /** Aceleración con el acelerador (px/s²): 0 → maxSpeed en ≈ 1.25 s. */
-  acceleration: 240,
-  /** Frenada a fondo (px/s²): maxSpeed → 0 en ≈ 0.47 s. */
-  brakeDeceleration: 640,
-  /** Roce al soltar todo (px/s²): la velocidad decae hacia 0. */
-  coastDrag: 130,
-  /** Tasa de giro a velocidad 0 (rad/s). */
+  /** Velocidad máxima en asfalto (px/s). Issue #18: 300 × 2.5. */
+  maxSpeed: 750,
+  /** Aceleración con el acelerador (px/s²): 0 → maxSpeed en ≈ 1.25 s. Issue #18: ×2.5. */
+  acceleration: 600,
+  /** Frenada a fondo (px/s²): maxSpeed → 0 en ≈ 0.47 s. Issue #18: ×2.5. */
+  brakeDeceleration: 1600,
+  /** Roce al soltar todo (px/s²): la velocidad decae hacia 0. Issue #18: ×2.5. */
+  coastDrag: 325,
+  /** Tasa de giro a velocidad 0 (rad/s). Issue #18: SIN cambio (los rad/s no escalan). */
   turnRateBase: 3.4,
-  /** Tasa de giro a velocidad máxima (rad/s): a más velocidad, menos giro. */
+  /** Tasa de giro a velocidad máxima (rad/s): a más velocidad, menos giro. Issue #18: SIN cambio. */
   turnRateAtMaxSpeed: 1.2,
   /** Techo de velocidad en pasto, como fracción de `maxSpeed`. */
   grassMaxSpeedFactor: 0.45,
@@ -468,9 +468,10 @@ export const CIRCUIT = {
    * sostener la punta). Con ella se valida: (a) el radio de curvatura de
    * cada punto de las 5 pistas — debe permitir sostener la curva a esta
    * velocidad con la tasa de giro disponible — y (b) la longitud de vuelta
-   * contra la banda 36–44 s (objetivo 40 s ⇒ pista de ~7200 px).
+   * contra la banda 36–44 s (objetivo 40 s ⇒ pista de ~18000 px).
+   * Issue #18: 180 × 2.5 (mundo ×2.5 ⇒ vuelta de ~40 s intacta).
    */
-  referenceSpeed: 180,
+  referenceSpeed: 450,
   /** Ventanas de sector por vuelta (checkpoints anti-corte). */
   sectorCount: 8,
   /** Vueltas por carrera. */
@@ -478,13 +479,14 @@ export const CIRCUIT = {
   /** Banda de validación de duración de vuelta (s) a `referenceSpeed`. */
   lapMinSeconds: 36,
   lapMaxSeconds: 44,
-  /* Parrilla de salida: 2 columnas escalonadas detrás de la meta. */
+  /* Parrilla de salida: 2 columnas escalonadas detrás de la meta.
+   * Issue #18: los offsets de parrilla son px de mundo ⇒ ×2.5. */
   /** Separación en s entre filas consecutivas (px de arco). */
-  gridRowStepPx: 70,
+  gridRowStepPx: 175,
   /** Lateral de cada columna respecto del eje (px; ±este valor). */
-  gridLateralOffsetPx: 35,
+  gridLateralOffsetPx: 88,
   /** Distancia de la primera fila (pole) detrás de la meta (px de arco). */
-  gridStartOffsetPx: 140,
+  gridStartOffsetPx: 350,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -498,11 +500,15 @@ export const CIRCUIT = {
  */
 export const RACE = {
   /* Cámara: sigue al auto con lerp (norte arriba, sin rotación), zoom fijo
-   * y clampada al mundo de la pista. El zoom < 1 muestra más contexto del
-   * circuito: a 300 px/s la punta cruza la pantalla en ~3 s a zoom 1, y con
-   * 0.8 se ve lo suficiente para planificar la curva siguiente. */
+   * y clampada al mundo de la pista. Issue #18 — el mundo del circuito se
+   * escaló ×2.5 y el zoom sube de 0.8 a 2.2 para que el ASFALTO llene la
+   * pantalla al conducir: ≥ 80% del ancho (720 px) en TODAS las pistas. La
+   * más angosta (Mónaco, widthPx 290) da 290 × 2.2 = 638 px = 88.6% ≥ 80% ✓
+   * (el resto, más ancho, sobrepasa el criterio); a 750 px/s la punta cruza
+   * la pantalla en ~1 s, el ritmo del juego en pantalla se conserva porque
+   * las velocidades escalaron ×2.5 junto al mundo. */
   /** Zoom fijo de la cámara (1 = px de mundo 1:1). */
-  cameraZoom: 0.8,
+  cameraZoom: 2.2,
   /** Lerp de seguimiento (por frame, interpolación exponencial de Phaser). */
   cameraLerp: 0.14,
   /* HUD de carrera (RaceHud): columna del borde superior izquierdo. El
@@ -583,8 +589,8 @@ export const RACE_MULTI = {
 export const RACE_VS_CPU = {
   /** Techo del |gap| mostrado (s): más lejos se clampea (ya no informa). */
   gapMaxSeconds: 30,
-  /** Velocidad propia mínima (px/s) para confiar en el gap en tiempo. */
-  gapMinOwnSpeedPx: 30,
+  /** Velocidad propia mínima (px/s) para confiar en el gap en tiempo. Issue #18: ×2.5. */
+  gapMinOwnSpeedPx: 75,
   /** Y del texto de gaps (centro), bajo el badge de posición (184). */
   gapY: 222,
   /** Tamaño de fuente del gap (px): discreto, como el tiempo total. */
@@ -681,12 +687,13 @@ export const RACE_AI = {
   /**
    * Desvío lateral (px) del error humano: cuánto se va el auto de SU
    * trazada durante el fallo (el aim queda siempre clampeado al asfalto:
-   * el error cuesta tiempo, no tira al rival al pasto).
+   * el error cuesta tiempo, no tira al rival al pasto). Issue #18: ×2.5
+   * (px de mundo).
    */
   mistakeMagPx: {
-    easy: 45,
-    normal: 26,
-    hard: 12,
+    easy: 113,
+    normal: 65,
+    hard: 30,
   },
   /**
    * aggression — base de agresividad (0–1) por dificultad: cuánto BUSCA el
@@ -711,10 +718,13 @@ export const RACE_AI = {
     hard: 0.01,
   },
 
-  /* --- Parámetros comunes (todas las dificultades) --------------------- */
+  /* --- Parámetros comunes (todas las dificultades) ---------------------
+   * Issue #18: TODOS los px/px-s de acá escalan ×2.5 con el mundo del
+   * circuito (lookahead, margen de frenada, offsets y velocidades de la
+   * maniobra); los rad/segundos/fracciones no cambian. */
 
   /** Distancia del punto de mira sobre la línea (px de arco). */
-  lookAheadPx: 120,
+  lookAheadPx: 300,
   /** Zona muerta del error angular (rad): debajo, volante recto. */
   steerDeadzoneRad: 0.06,
   /**
@@ -723,13 +733,13 @@ export const RACE_AI = {
    * (debajo del margen regula soltando el acelerador — evita frenadas
    * nerviosas de bang-bang longitudinal).
    */
-  brakeMarginSpeedPx: 10,
+  brakeMarginSpeedPx: 25,
   /** Rivales CPU del GRAN PREMIO (V1): parrilla de 8 con el jugador. */
   rivalCount: 7,
   /** Desvío personal ± de velocidad (fracción sobre AMBOS presets). */
   speedPctSpread: 0.05,
   /** Desvío personal ± del offset lateral propio sobre la línea (px). */
-  lineOffsetSpreadPx: 10,
+  lineOffsetSpreadPx: 25,
   /**
    * Cuánto recorta la agresividad el margen de frenada (0 = nada, 1 =
    * margen × (1 − gain)): los agresivos frenan más tarde.
@@ -754,19 +764,20 @@ export const RACE_AI = {
   /** Probabilidad de que un error sea de DESVÍO lateral (vs frenada). */
   mistakeLateralChance: 0.5,
 
-  /* --- Adelantamiento (V2) ---------------------------------------------- */
+  /* --- Adelantamiento (V2) ----------------------------------------------
+   * Issue #18: los px/px-s de la maniobra escalan ×2.5 con el mundo. ------ */
 
   /** Ventana de detección del auto de adelante (px de progreso). */
-  overtakeGapPx: 240,
+  overtakeGapPx: 600,
   /**
    * Diferencia de velocidad mínima (px/s) para INICIAR la maniobra: no
    * desvía su trazada por un auto que no está cerrando.
    */
-  overtakeClosingPx: 10,
+  overtakeClosingPx: 25,
   /** Desvío lateral hacia el hueco elegido (px sobre SU trazada). */
-  overtakeSidePx: 34,
+  overtakeSidePx: 85,
   /** Velocidad del desvío lateral (px/s): ida y retorno suaves. */
-  overtakeLateralSpeedPx: 170,
+  overtakeLateralSpeedPx: 425,
   /**
    * Probabilidad MÍNIMA de intentar una maniobra (con agresividad 0):
    * intenta con `base + (1 − base) × agresividad`; con RNG fallado entra a
@@ -781,8 +792,9 @@ export const RACE_AI = {
   /**
    * Gap de progreso al jugador (px) al que el ajuste de goma llega a SU
    * tope ±`rubberBandPct` (interpolación lineal entre 0 y este gap).
+   * Issue #18: ×2.5 (px de mundo).
    */
-  rubberBandFullGapPx: 600,
+  rubberBandFullGapPx: 1500,
 } as const;
 
 /* ------------------------------------------------------------------ */

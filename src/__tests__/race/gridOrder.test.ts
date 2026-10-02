@@ -96,9 +96,11 @@ describe('assignGridOrder — casillas', () => {
 
   it('con pista resuelve coordenadas de mundo sobre el asfalto', () => {
     for (const slot of grid) {
-      // La casilla proyectada cae a ±gridLateralOffsetPx del eje.
+      // La casilla proyectada cae a ±gridLateralOffsetPx del eje (tolerancia
+      // de 0.05 px: el ruido float de la proyección crece con el mundo ×2.5
+      // del issue #18 — medía ~0.005 px sobre coordenadas de 7000).
       const proj = path.project(slot.x, slot.y);
-      expect(Math.abs(proj.lateral)).toBeCloseTo(Math.abs(slot.lateral), 2);
+      expect(Math.abs(proj.lateral)).toBeCloseTo(Math.abs(slot.lateral), 1);
       expect(slot.angle).toBeTypeOf('number');
     }
   });

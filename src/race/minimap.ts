@@ -71,8 +71,12 @@ export function worldToMiniMap(x: number, y: number, transform: MiniMapTransform
   };
 }
 
-/** Paso de muestreo del contorno (px de arco): el minimapa es chico. */
-const CONTOUR_STEP_PX = 48;
+/**
+ * Paso de muestreo del contorno (px de arco): el minimapa es chico.
+ * Issue #18: escala ×2.5 con el mundo para mantener el MISMO número de
+ * puntos (y la misma resolución en pantalla del widget de 180 px).
+ */
+const CONTOUR_STEP_PX = 120;
 
 /**
  * Puntos del contorno de la pista (eje muestreado a paso casi constante) ya

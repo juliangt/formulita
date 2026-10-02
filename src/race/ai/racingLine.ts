@@ -41,25 +41,28 @@ export interface RacingLinePoint {
 
 /* ------------------------------------------------------------------ */
 /* Constantes geométricas del módulo (no gameplay: ver RACE_AI)         */
+/* Issue #18: todas las distancias en px de mundo escalan ×2.5 con el   */
+/* mundo del circuito (misma resolución relativa de muestreo y de       */
+/* offsets); las velocidades salen de `CIRCUIT` y ya escalan solas.     */
 /* ------------------------------------------------------------------ */
 
 /** Paso objetivo entre puntos de la línea (px de arco). */
-const STEP_PX = 10;
+const STEP_PX = 25;
 
 /** Media-ventana (px) de la diferencia central de tangentes para κ. */
-const CURVATURE_WINDOW_PX = 26;
+const CURVATURE_WINDOW_PX = 65;
 
 /**
  * Radio de curvatura (px) al que el offset pide TODO su rango: curvas más
- * cerradas que esto (r < 160) no piden más — el corte de apex ya está.
+ * cerradas que esto (r < 400) no piden más — el corte de apex ya está.
  */
-const OFFSET_SATURATION_RADIUS_PX = 160;
+const OFFSET_SATURATION_RADIUS_PX = 400;
 
 /** Margen de la línea al borde del asfalto (px): |offset| ≤ widthPx/2 − esto. */
-export const RACING_LINE_EDGE_MARGIN_PX = 14;
+export const RACING_LINE_EDGE_MARGIN_PX = 35;
 
 /** Ancho (px) de la ventana de suavizado del offset. */
-const SMOOTHING_WINDOW_PX = 90;
+const SMOOTHING_WINDOW_PX = 225;
 
 /** Pasadas de media móvil sobre el offset (más = más lisa y más "centrada"). */
 const SMOOTHING_PASSES = 2;

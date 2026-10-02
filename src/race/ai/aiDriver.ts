@@ -126,26 +126,28 @@ export function rubberBandMultiplier(
 
 /* ------------------------------------------------------------------ */
 /* Constantes del módulo (no gameplay: los presets viven en RACE_AI)    */
+/* Issue #18: los px de mundo escalan ×2.5 con el circuito.             */
 /* ------------------------------------------------------------------ */
 
 /**
  * Paso del escaneo de frenada sobre la línea (px de arco): muestrear el
- * horizonte a este ritmo captura cualquier curva de la pista (radios ≥ 87 px
- * ⇒ arcos de curva mucho más largos que el paso) sin costar por frame.
+ * horizonte a este ritmo captura cualquier curva de la pista (radios ≥
+ * 216 px ⇒ arcos de curva mucho más largos que el paso) sin costar por
+ * frame.
  */
-const BRAKE_SCAN_STEP_PX = 40;
+const BRAKE_SCAN_STEP_PX = 100;
 
 /** Horizonte máximo del escaneo de frenada (px de arco): frenar de punta a
- * la curva más lenta ocupa ~50 px (`CIRCUIT.brakeDeceleration`), así que con
- * margen sobra — mirar más lejos no cambia ninguna decisión. */
-const BRAKE_SCAN_MAX_PX = 240;
+ * la curva más lenta ocupa ~176 px (`CIRCUIT.brakeDeceleration`), así que
+ * con margen sobra — mirar más lejos no cambia ninguna decisión. */
+const BRAKE_SCAN_MAX_PX = 600;
 
 /** dt máximo aceptado por paso (anti-espiral; igual criterio que la física). */
 const MAX_DT_S = 0.25;
 
 /** Ventana hacia ATRÁS (px de progreso) al elegir el lado del hueco: un auto
  * apenas detrás y a la par también ocupa lado. */
-const SIDE_SCAN_BEHIND_PX = 60;
+const SIDE_SCAN_BEHIND_PX = 150;
 
 /** Probabilidad de que el error humano sea hacia un lado u otro (50/50). */
 const MISTAKE_SIDE_CHANCE = 0.5;
