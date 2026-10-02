@@ -1,14 +1,24 @@
 # Formulita
 
-Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 4 + Vite + TypeScript strict.**
+Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (720×1280). **Phaser 4 + Vite + TypeScript strict.**
 
-Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor), **carrera en circuito** (5 pistas de F1, en solitario para entrenar o contra otros jugadores), **GRAN PREMIO contra la CPU** (7 rivales con IA de línea de carrera, 100% local/offline) y **chat social opt-in** (chat de sala, mensajes directos e invitaciones a partida — nadie aparece en ninguna lista hasta habilitarlo).
-
-> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1) + chat social (issue #2) + carrera en circuito (issue #9) + gran premio vs CPU (issue #14).**
+**👉 Jugá la versión publicada: <https://juliangt.github.io/formulita/>**
 
 ---
 
-## Cómo correr
+## Modos de juego
+
+| Modo | Botón del menú | Jugadores | ¿Necesita red? | En una línea |
+| --- | --- | --- | --- | --- |
+| **Infinito** | JUGAR | 1 | No | Carrera infinita esquivable: turbo, DRS, monedas, pickups, rivales, restos y aceite; la dificultad sube con la distancia. |
+| **Gran Premio** | GRAN PREMIO | 1 vs 7 CPU | No (100% offline) | 3 vueltas (~2 min) por 5 pistas de F1 contra rivales con IA de línea de carrera; 3 dificultades y récords por pista × dificultad. |
+| **Batalla** | MULTIJUGADOR | 2–10 | Sí (P2P, sin servidor) | Todos corren la MISMA pista (definida por la palabra de sala); gana el que más monedas juntó. Eliminado = espectador. |
+| **Carrera** | MULTIJUGADOR | 2–10 | Sí (P2P, sin servidor) | Vueltas por circuito cerrado con ranking en vivo y podio final; la pista y la parrilla son idénticas en todos los dispositivos. |
+| **Chat social** | CHAT | — | Sí (P2P) | Chat de sala, presencia pública **opt-in** con mensajes directos e invitaciones a partida; nadie aparece en ninguna lista hasta habilitarlo. |
+
+---
+
+## Empezar
 
 Requisitos: Node 20+ (probado en Node 22) y npm 10+.
 
@@ -17,6 +27,7 @@ npm install
 npm run dev        # dev server en http://localhost:5173 (expuesto en la LAN)
 npm run build      # chequeo de tipos (tsc) + build de producción en dist/
 npm run preview    # sirve el build de producción (http://localhost:4173)
+npm run serve      # sirve dist/ en el puerto 5200 (sin cache, útil en iOS)
 npm test           # suite de tests (Vitest)
 ```
 
@@ -29,7 +40,7 @@ npm test           # suite de tests (Vitest)
 3. Abrí esa URL en el navegador del celular (`server.host: true` ya está configurado en `vite.config.ts`).
 4. Si no conecta: revisá que el firewall de tu máquina permita conexiones entrantes al puerto 5173.
 
-También funciona con `npm run preview` (puerto 4173) para probar el build de producción desde el celular.
+También funciona con `npm run preview` (puerto 4173) o `npm run serve` (puerto 5200) para probar el build desde el celular.
 
 ### Instalarla como "app" (opcional)
 
@@ -38,6 +49,8 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 ---
 
 ## Controles
+
+### Modo Infinito (JUGAR)
 
 | Acción | Teclado | Táctil (HUD) |
 | --- | --- | --- |
@@ -52,25 +65,37 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 | Pantalla completa (solo desktop, menú) | F | — |
 | Jugar / Reintentar (menús) | Enter o Espacio | Botones |
 
+### Modos de circuito (GRAN PREMIO y CARRERA)
+
+El auto es **auto-acelerado**: el acelerador va pisado todo el viaje; frenar y doblar son las únicas acciones.
+
+| Acción | Teclado | Táctil (HUD) |
+| --- | --- | --- |
+| Doblar | ← → o A / D | ◀ ▶ (abajo-izquierda) |
+| Freno | ↓ / S / Espacio | FRENO (abajo-derecha) |
+
+Común a todos los modos:
+
 - Los botones táctiles soportan **multi-touch real** (tracking de `pointerId` por botón): doblar y acelerar a la vez.
-- La carrera arranca con un **countdown 3-2-1-GO!**: el mundo (pista, rivales, puntaje) está congelado hasta el final de la cuenta.
-- La **pausa es real**: botón en pantalla, tecla P, o **automática** al cambiar de pestaña / perder el foco de la ventana. Física, scroll, spawn y puntaje quedan congelados de verdad hasta reanudar.
+- La carrera arranca con un **countdown 3-2-1-GO!**: el mundo está congelado hasta el final de la cuenta.
+- La **pausa es real**: botón en pantalla, tecla P, o **automática** al cambiar de pestaña / perder el foco. Física, scroll, spawn y puntaje quedan congelados de verdad hasta reanudar.
 
 ---
 
-## Cómo se juega
+## Modo Infinito
 
-- **Velocidad autónoma**: la base avanza sola; el acelerador sube hasta la punta (420 px/s) y el freno baja al mínimo.
+La base avanza sola; el acelerador sube hasta la punta (504 px/s) y el freno baja al mínimo.
+
 - **Turbo** (medidor 0–100): drena ~28/s (≈3,5 s de uso), ×1.6 de punta, recarga pasiva lenta + pickup de relámpago (+50).
-- **DRS**: activable solo sobre el 75% de la velocidad máxima, dura 3 s (×1.25), cooldown de 8 s; el pickup de alerón lo resetea. El chip del HUD muestra listo / activo / cooldown.
+- **DRS**: activable solo por encima del 75% de la velocidad máxima, dura 3 s (×1.25), cooldown de 8 s; el pickup de alerón lo resetea. El chip del HUD muestra listo / activo / cooldown.
 - **Entidades de pista**: líneas y zigzags de monedas, rivales con cambio de carril, restos (crash) y aceite (derrape no destructivo), pickups. Generación procedural con **garantía de pasabilidad** (siempre queda un carril libre).
 - **Puntaje**: distancia (escalada por velocidad real) + bonus por velocidad sostenida + 50 pts por moneda. Las monedas son economía aparte.
 - **Dificultad**: rampa por distancia (rivales más rápidos, oleadas más densas, más variedad de patrones).
-- **Muerte por daño acumulado**: los choques no matan de un golpe — la barra CHASIS baja y al llegar a 0 viene el crash de siempre (explosión, flash, shake y Game Over con resumen y récord). Detalles abajo.
+- **Persistencia**: puntaje y monedas se guardan en `localStorage` (con fallback en memoria para modo privado). Los récords de este modo no se mezclan con los de otros modos.
 
 ### Salud del vehículo (barra CHASIS)
 
-El auto tiene **100 HP de chasis**, visibles en la barra **CHASIS** del HUD (verde → amarillo → rojo, debajo del chip DRS). Al llegar a 0 se produce el crash de siempre: explosión + shake + Game Over con resumen/récord en solo, o eliminación + modo espectador en multi.
+El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde → amarillo → rojo). Al llegar a 0 viene el crash: explosión + shake + Game Over con resumen/récord en solo, o eliminación + modo espectador en multi.
 
 | Fuente de daño / reparación | Efecto |
 | --- | --- |
@@ -82,48 +107,126 @@ El auto tiene **100 HP de chasis**, visibles en la barra **CHASIS** del HUD (ver
 
 - **Estado crítico (≤ 25% de vida)**: la barra CHASIS parpadea y el auto echa **humo gris** continuo — la señal de buscar botiquín o manejar limpio.
 - **Feedback del daño**: flash + shake en cada golpe, **parpadeo** rítmico del auto durante los i-frames y **chispas** en el borde del auto mientras roza la pared.
-- **Determinismo multi**: la familia de pickups pasó de pesar 9 a **12** (entró el botiquín con peso 3), así que la misma seed de sala genera una **pista distinta a la de builds previas** — pero idéntica entre todos los clientes de esta build.
 
 ---
 
-## Multijugador (battle royale por monedas)
+## Gran Premio (contra la CPU)
 
-**Battle royale de 2 a 10 jugadores por monedas, P2P sin servidor.** Todos corren la MISMA pista — la **palabra de sala** es la clave que la define — y gana el que **más monedas juntó** al cierre: sobrevivir solo da más tiempo para juntar, no la corona (desempate por kilómetros y luego por puntaje). Si tu chasis llega a 0 quedás **eliminado como espectador**: seguís viendo la carrera de los demás hasta que queda un solo vivo, y entonces todos ven el **leaderboard final** — idéntico en todos los dispositivos, mismo orden y mismo ganador.
+**Una carrera de F1 de verdad contra 7 rivales con IA, 100% local y offline.** Elegís pista y dificultad, arrancás desde una parrilla de 8 autos y corré **3 vueltas (~2 min)** por cualquiera de las **5 pistas** (MÓNACO, MONZA, SILVERSTONE, SPA, SUZUKA). No necesita red — ni matchmaking ni sincronización: los rivales se simulan en tu dispositivo, con la MISMA física del circuito que el resto de los modos (el auto de cada rival decide su manejo, no hace trampas de velocidad).
 
 ### Cómo se juega
 
-1. Menú → **MULTIJUGADOR** → crear sala (el juego te da una **palabra de sala** de 5–9 letras, pronunciable por teléfono) o **unirse** con la palabra que te pasó el anfitrión.
-2. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna solo en función del roster (determinista e idéntico para todos).
-3. Con 2 o más en sala, el **anfitrión** aprieta **INICIAR**: se difunde la semilla de la pista y el countdown 3-2-1-GO! arranca en todos.
-4. Corré, esquivá y juntá monedas. Si tu chasis llega a 0 quedás **eliminado** (pasás a espectador); la partida termina al quedar 1 vivo.
-5. Leaderboard final: **monedas DESC → km DESC → puntaje DESC**. ¡GANASTE! si tu fila es la 1.
+1. Menú → **GRAN PREMIO** → elegí pista y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
+2. Countdown 3-2-1-GO! y largada: **mismos controles que la carrera en circuito** (auto-acelerado — ver [Controles](#controles)).
+3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD** y minimapa con **tu punto destacado**. Cambiar de posición suena (igual al ganar que al perder el lugar).
+4. Al cruzar TU meta: **podio con el top 3** (ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista y dificultad con parrilla nueva.
 
-### Arquitectura (una línea)
+### Rivales con criterio (no autos sobre rieles)
 
-**P2P sin servidor** (Trystero sobre WebRTC, señalización BitTorrent — `@trystero-p2p/torrent`): pista **determinista por seed de sala + reloj virtual** de generación (misma distancia ⇒ mismas oleadas en todos), rivales como **autos fantasma interpolados** (estado propio a 10 Hz, render a t−100 ms, semitransparentes y atravesables) y **stats congeladas** al crash/fin, de modo que cada cliente computa el MISMO leaderboard sin negociar nada por la red.
+- **Línea de carrera real**: cada rival sigue la trazada ideal de la pista (con apex) y frena por la curvatura venidera con un punto de mira propio.
+- **Personalidad**: los 7 rivales (ALONSITO, MAXVELOZ, SCHUMIKA, LECLERVO, NORRITO, PIASTRINO, SARGUINI) tienen velocidad, trazada y agresividad propias, **deterministas por seed**: la misma carrera es reproducible de punta a punta.
+- **Errores humanos**: de vez en cuando frenan tarde o se desvían de su trazada — más seguido en FÁCIL que en DIFÍCIL — y el fallo dura un instante, no los saca de carrera.
+- **Adelantamientos**: ven a los autos alrededor, cierran el hueco y desvían SU línea para intentar la maniobra; la agresividad de cada uno decide cuánto se arriesga.
+- **Goma declarada y acotada**: si un rival queda muy lejos del jugador, su ritmo se ajusta una fracción MUY chica para que la pelea no se rompa — tope pequeño por dificultad (el mayor en FÁCIL, casi rígido en DIFÍCIL) y NUNCA por encima del techo físico del auto.
+- **Dificultad**: los presets ajustan ritmo en recta, calidad de trazada, frecuencia de errores, agresividad y goma; el orden fácil < normal < difícil está garantizado por tests.
 
-### Configuración — `VITE_TRYSTERO_APP_ID`
+### Récords
 
-| Dónde | Cómo |
-| --- | --- |
-| Desarrollo local | `cp .env.example .env.local` y ajustá el valor (`.env.local` está gitignored) |
-| Producción (Pages) | Variable de repo `VITE_TRYSTERO_APP_ID` en **Settings → Secrets and variables → Actions → Variables** (la lee el workflow de deploy al buildtear) |
+- Por **cada pista × dificultad** el juego recuerda tu **mejor posición** y tu **mejor vuelta** en `localStorage` (clave versionada `formulita.gp.v1`, con fallback en memoria para modo privado).
+- Superar cualquiera de las dos dispara **¡NUEVO RÉCORD!** en los resultados; repetir el mejor puesto o girar más lento no toca nada. Las marcas de un modo no se mezclan con las de otro.
 
-- **Qué es**: el namespace de matchmaking de Trystero — un string público que agrupa las salas de ESTA aplicación dentro de los trackers de señalización. **NO es un secreto ni una API key**: queda visible en el bundle, y dos navegadores solo se encuentran si usan el mismo appId + la misma palabra de sala.
-- **Si falta**: el build funciona igual (el requisito es de RUNTIME, no de build); al abrir el multijugador el lobby **falla rápido** con el error visible "falta VITE_TRYSTERO_APP_ID" en vez de conectar en silencio.
+> El antiguo **practice** (circuito en solitario) vive como rama interna del modo carrera: el botón del menú ahora lanza el GRAN PREMIO, y REINTENTAR desde resultados corre en solitario contra el cronómetro.
 
-### Probar el multijugador local
+---
 
-1. `npm run dev` y abrí **dos pestañas** de la misma URL (o dos dispositivos de la red por la IP LAN — ver [Probar desde el celular](#probar-desde-el-celular-lan)).
+## Multijugador (P2P, sin servidor)
+
+Ambos modos multijugador corren sobre **Trystero sobre WebRTC** (señalización BitTorrent — `@trystero-p2p/torrent`): no hay servidor propio. La **palabra de sala** (5–9 letras, pronunciable por teléfono) es la clave que define la pista: todos los clientes de una sala generan exactamente el mismo contenido sin negociar nada por la red.
+
+**Cómo entrar**: Menú → **MULTIJUGADOR** → crear sala (el juego te da la palabra) o unirse con la palabra del anfitrión. Poné tu nombre (máx. 12 caracteres); el color del auto se asigna en función del roster (determinista e idéntico para todos). Con 2 o más en sala, el **anfitrión** elige modo (**BATALLA** o **CARRERA**) y, en carrera, la pista (con miniatura); aprieta **INICIAR** y el countdown arranca sincronizado en todos.
+
+### Batalla (battle royale por monedas)
+
+Todos corren la MISMA pista infinita y gana el que **más monedas juntó** al cierre: sobrevivir solo da más tiempo para juntar, no la corona (desempate por kilómetros y luego por puntaje).
+
+- Si tu chasis llega a 0 quedás **eliminado como espectador**: seguís viendo la carrera de los demás (con botón CHAT) hasta que queda un solo vivo.
+- Leaderboard final: **monedas DESC → km DESC → puntaje DESC**, idéntico en todos los dispositivos (mismo orden y mismo ganador).
+
+### Carrera (circuito, 2–10 jugadores)
+
+Vueltas por un circuito cerrado, como la F1 de verdad: parrilla de salida detrás de la meta, **3 vueltas (~2 min)** y cronometraje completo (tiempo total, vuelta en curso y **mejor vuelta**).
+
+- Ranking en vivo (**P3/8** en el HUD) y al terminar cada uno difunde su tiempo exacto.
+- **Fin de carrera**: el primero en completar las 3 vueltas gana; la partida cierra cuando terminan todos o a los 30 s del primer finish (los que no llegaron clasifican por su último progreso). Podio final con nombres, colores y tiempos, **VUELTA RÁPIDA** destacada en oro y **confeti** al cruzar tu meta.
+- **Anti-corte**: cortar por el pasto salta sectores de la vuelta y **la vuelta no cuenta** (checkpoints).
+- Quien termina pasa a **espectador** siguiendo al líder (con botón CHAT).
+
+### Cómo funciona por dentro
+
+Pista **determinista por seed de sala + reloj virtual** de generación (misma distancia ⇒ mismas oleadas en todos), rivales como **autos fantasma interpolados** (estado propio a 10 Hz, render a t−100 ms, semitransparentes y atravesables) y **stats congeladas** al crash/fin, de modo que cada cliente computa el MISMO leaderboard/podio sin negociar nada por la red. En carrera, cada cliente aplica además un **filtro de plausibilidad local** (un avance físicamente imposible se ignora) — no hay servidor árbitro.
+
+### Límites de la v1
+
+- **Sin reconexión**: te caés, recargás o cerrás = eliminado/ABANDONÓ, con las stats hasta ese momento.
+- **Autos fantasma sin colisión entre sí** (y atravesables respecto del propio): solo tu pista local te elimina.
+- **Sin árbitro ni anti-cheat**: cada cliente reporta sus propias stats (confianza P2P + filtro de plausibilidad).
+- **Background del navegador elimina** por staleness (>20 s sin difundir estado).
+- **Monedas por instancia local**: dos jugadores pueden tomar la misma moneda (cada uno la ve en su propia pista).
+- **NAT/4G restrictivos pueden fallar**: WebRTC directo sin TURN propio; si el handshake no cruza, la sala no conecta (error visible en el lobby).
+- **Los récords de un modo no se mezclan** con los de otro.
+
+### Probarlo local
+
+1. `npm run dev` y abrí **dos pestañas** de la misma URL (o dos dispositivos de la red por la IP LAN — ver [Empezar](#empezar)).
 2. Pestaña 1: MULTIJUGADOR → crear sala, anotá la palabra.
 3. Pestaña 2 (o el celular): MULTIJUGADOR → unirse con esa palabra.
 4. **INICIAR** desde la pestaña del anfitrión.
 
+---
+
+## Chat social (sala + directos, opt-in)
+
+Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** de partida (en el lobby y, si te eliminan, en modo espectador — el que sigue corriendo no tiene chat: conducir sin distracciones); **(2)** sala pública de presencia **opt-in** con **mensajes directos (DM)**; **(3)** **invitaciones a partida** por DM.
+
+**Privacy by default**: NADIE aparece en la lista pública hasta habilitar **MOSTRARME DISPONIBLE** (default **NO**, persistido). Deshabilitarlo es una **desconexión real** (leave de la sala pública, sin tráfico residual). Mientras estás disponible tu IP es visible a los peers de esa sala (WebRTC directo) — por eso el default es escondido.
+
+### Cómo se usa
+
+1. Botón **CHAT**: en el menú (con badge de no leídos `CHAT · N`) y en el lobby. Abre el overlay con dos tabs.
+2. Tab **SALA**: el hilo de la partida actual (solo existe dentro de una partida; desde el menú aparece deshabilitado con aviso).
+3. Tab **PÚBLICO**: toggle **MOSTRARME DISPONIBLE** (SÍ/NO) + lista en vivo de quienes se mostraron. Tocar una fila abre el **hilo de DM** (VOLVER · BLOQUEAR/DESBLOQUEAR · INVITAR).
+4. **INVITAR A PARTIDA** (solo si estás en un lobby): manda tu palabra de sala por DM; el otro ve el banner «N TE INVITÓ A "PALABRA"» con **UNIRSE** (pre-carga la palabra) / **IGNORAR**.
+
+### Reglas
+
+- Mensajes de **máx. 200 caracteres** (sanitizados igual en emisor y receptor: trim, espacios colapsados, recorte).
+- **1 mensaje cada 1,5 s POR HILO**: la sala y cada DM enfrían por separado.
+- **Efímero**: NADA persiste al cerrar la pestaña (ni mensajes, ni hilos, ni bloqueos; solo el toggle de disponibilidad queda en `localStorage`).
+- **Bloqueo por sesión** (BLOQUEAR): corta la conversación en AMBOS sentidos y no se persiste (los peerId cambian en cada conexión).
+- **DM requiere ambos disponibles**: si el otro se esconde (o cae por staleness, >20 s sin heartbeat de 5 s), su hilo pasa a **DESCONECTADO** con el input bloqueado; el historial queda.
+- Sin identidad persistente: los nombres NO son únicos (dos "PILOTO" pueden coexistir).
+
+**Límites de la v1**: sin historial ni offline ni notificaciones (nada llega con la pestaña cerrada), sin moderación central (la defensa es client-side: sanitize + throttle + bloqueo), malla pública cómoda hasta ~30–50 presentes por sala.
+
+**Probarlo**: igual que el multijugador — 2–3 pestañas/dispositivos, CHAT → tab PÚBLICO → MOSTRARME DISPONIBLE. Requiere `VITE_TRYSTERO_APP_ID` (ver [Configuración](#configuración-y-publicación)).
+
+---
+
+## Configuración y publicación
+
+### `VITE_TRYSTERO_APP_ID`
+
+| Dónde | Cómo |
+| --- | --- |
+| Desarrollo local | `cp .env.example .env.local` y ajustá el valor (`.env.local` está gitignored) |
+| Producción (Pages) | Variable de repo `VITE_TRYSTERO_APP_ID` en **Settings → Secrets and variables → Actions → Variables** (la lee el workflow de deploy al buildear) |
+
+- **Qué es**: el namespace de matchmaking de Trystero — un string público que agrupa las salas de ESTA aplicación dentro de los trackers de señalización. **NO es un secreto ni una API key**: queda visible en el bundle, y dos navegadores solo se encuentran si usan el mismo appId + la misma palabra de sala.
+- **Si falta**: el build funciona igual (el requisito es de RUNTIME, no de build); al abrir el multijugador o el chat el lobby **falla rápido** con el error visible "falta VITE_TRYSTERO_APP_ID" en vez de conectar en silencio.
+
 ### Publicación (GitHub Pages)
 
-Al pushear a `main`, el workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) corre la suite completa, buildtea con `--base=/formulita/` (Pages sirve los sitios de proyecto bajo subpath) y publica en:
-
-**<https://juliangt.github.io/formulita/>**
+Al pushear a `main`, el workflow [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) corre la suite completa, buildea con `--base=/formulita/` (Pages sirve los sitios de proyecto bajo subpath) y publica en **<https://juliangt.github.io/formulita/>**.
 
 Los PRs a `main` corren CI (tests + build, sin deploy) en [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
@@ -134,121 +237,6 @@ Requisitos (una sola vez, quien administra el repo):
 
 > Sin la variable el sitio se publica igual (el appId es runtime, no build-time), pero el multijugador mostrará el error de configuración faltante al entrar al lobby.
 
-### Límites de la v1 multijugador
-
-- **Sin reconexión**: te caés, recargás o cerrás = eliminado, con las stats hasta ese momento.
-- **Autos fantasma sin colisión entre sí** (y atravesables respecto del propio): solo tu pista local te elimina.
-- **Sin anti-cheat**: cada cliente reporta sus propias stats (confianza P2P).
-- **Background del navegador te elimina** por staleness (>20 s sin difundir estado).
-- **Monedas por instancia local**: dos jugadores pueden tomar la misma moneda (cada uno la ve en su propia pista).
-- **NAT/4G restrictivos pueden fallar**: WebRTC directo sin TURN propio; si el handshake no cruza, la sala no conecta (error visible en el lobby).
-- **Los récords del modo solo NO se mezclan** con las partidas multi.
-
----
-
-## Carrera en circuito (GRAN PREMIO / CARRERA)
-
-**Vueltas por un circuito cerrado, como la F1 de verdad.** 5 pistas con identidad propia (**MÓNACO, MONZA, SILVERSTONE, SPA, SUZUKA**), parrilla de salida detrás de la meta, **3 vueltas (~2 min de carrera)** y cronometraje completo: tiempo total, vuelta en curso y **mejor vuelta**. El auto es **auto-acelerado**: el acelerador va pisado, frenar y doblar son las acciones (◀ ▶ + FRENO táctil, ←→/A·D + ↓/S/Espacio en teclado). El modo es **P2P sin servidor**: la pista es idéntica en todos los dispositivos (mismo trazado dibujado proceduralmente) y la parrilla es **aleatoria pero determinista** — la seed de la sala produce la misma grilla en cada cliente, sin negociar nada.
-
-### Cómo se juega
-
-- **Practice (un solo corredor)**: la variante solitaria de la carrera. Con el GRAN PREMIO (#14) quedó como rama interna de la RaceScene (fallback del init y REINTENTAR desde resultados): el botón local del menú pasó a lanzar el **GRAN PREMIO**. Mismas 3 vueltas contra el cronómetro, con pausa real (botón II, tecla P o pérdida de foco) y resultados con tu tiempo total y mejor vuelta.
-- **CARRERA (multi, 2–10 jugadores)**: Menú → **MULTIJUGADOR** → crear/unirse a sala. El **anfitrión** elige el modo **CARRERA** y la pista (con miniatura); los invitados la conocen al arrancar. Countdown 3-2-1-GO! sincronizado, ranking en vivo (**P3/8** en el HUD) y al terminar cada uno difunde su `rfin` con sus tiempos exactos.
-- **Fin de carrera**: el primero en completar las 3 vueltas gana; la partida cierra cuando terminan todos o a los 30 s del primer finish (los que no llegaron clasifican por su último progreso). Podio final con nombres, colores y tiempos, **VUELTA RÁPIDA de la carrera** destacada en oro, y **confeti** al cruzar tu meta final. En multi, quien termina pasa a **espectador** siguiendo al líder (con botón CHAT, igual que la BATALLA).
-- **Sonido**: el dron del motor sube de tono con la velocidad (mismo sintetizador del modo solo, con perfil móvil), arranca con el GO! y se apaga en pausa, al terminar o al salir.
-
-### Límites de la v1 de la carrera (WebRTC)
-
-- **Los rivales se atraviesan**: cada cliente simula su auto y renderiza a los demás como autos "fantasma" semitransparentes — no hay colisiones entre jugadores (sin física compartida en P2P).
-- **Render 100 ms en el pasado**: cada rival se dibuja interpolado en `t − 100 ms` sobre su stream a 10 Hz (nunca teletransporta, pero va siempre un poco atrasado).
-- **Sin árbitro**: no hay servidor que valide — cada cliente aplica un **filtro de plausibilidad local** (un avance físicamente imposible según el tope de velocidad se ignora) y confía el resto.
-- **Peers mudos clasifican por último progreso**: quien deja de mandar estado (pestaña en background, red caída sin aviso) sale del mundo a los ~20 s y entra a la clasificación como ABANDONÓ con su último avance conocido.
-- **Sin reconexión**: recargar a mitad de carrera = abandonó, igual que la BATALLA.
-- **El pasto corta**: cortar por afuera salta sectores de la vuelta y **la vuelta no cuenta** (anti-corte por checkpoints); los récords del modo solo y de la BATALLA no se mezclan con esta pantalla.
-
-### QA del issue #9 (verificación manual, además de la suite)
-
-- [ ] Carrera local (GRAN PREMIO, y practice como rama interna): countdown, 3 vueltas, cartel pop **¡VUELTA 2/3!** al completar cada vuelta que no sea la final, cartel ¡BANDERA A CUADROS! + **confeti** en la última, resultados con tiempo total y mejor vuelta.
-- [ ] El dron del motor sube de tono al acelerar y baja al frenar; se calla en pausa, al cruzar la meta y al salir por MENÚ (sin sonido colgado).
-- [ ] CARRERA: parrilla idéntica en todos los dispositivos, badge Pn/N en vivo, `rfin` propio → espectador con cartel + botón CHAT, cierre de la carrera (todos terminan o gracia de 30 s) y **podio final idéntico** con la línea **VUELTA RÁPIDA: NOMBRE (M:SS.mmm)** en oro.
-- [ ] Un peer en background >20 s desaparece del mundo/minimapa y figura como ABANDONÓ en el podio; la carrera concluye igual.
-- [ ] Escalado móvil 720×1280 (Scale.FIT): HUD (vueltas/tiempos/Pn-N), minimapa, botón de mute y botones táctiles ◀ ▶ FRENO se ven y alcanzan bien en un teléfono chico — todo el HUD se dibuja en coordenadas del lienzo base y el canvas escala completo sin distorsión.
-- [ ] Regresión: el modo solo (JUGAR) y la BATALLA multi (leaderboard, espectador, chat) funcionan exactamente igual que antes.
-
----
-
-## Gran Premio (contra la CPU)
-
-**Una carrera de F1 de verdad contra 7 rivales con IA, 100% local y offline.** Elegís pista y dificultad, arrancás desde una parrilla de 8 autos y corré **3 vueltas (~2 min)** por cualquiera de las **5 pistas** de F1. No necesita red — ni matchmaking ni sincronización: los rivales se simulan en tu dispositivo, con la MISMA física del circuito que el resto de los modos (el auto de cada rival decide su manejo, no hace trampas de velocidad).
-
-### Cómo se juega
-
-1. Menú → **GRAN PREMIO** → elegí pista y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
-2. Countdown 3-2-1-GO! y largada: **mismos controles que la carrera en circuito** (auto-acelerado: ◀ ▶ + FRENO táctil, ←→/A·D + ↓/S/Espacio en teclado — ver [Controles](#controles)).
-3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD** y minimapa con **tu punto destacado**. Cambiar de posición suena (igual al ganar que al perder el lugar).
-4. Al cruzar TU meta: **podio con el top 3** (nombres de los rivales, ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista y dificultad con parrilla nueva.
-
-### Rivales con criterio (no autos sobre rieles)
-
-- **Línea de carrera real**: cada rival sigue la trazada ideal de la pista (con apex) y frena por la curvatura venidera con un punto de mira propio — no por triggers de curva.
-- **Personalidad**: los 7 rivales (ALONSITO, MAXVELOZ, SCHUMIKA, LECLERVO, NORRITO, PIASTRINO, SARGUINI) tienen velocidad, trazada y agresividad propias, **deterministas por seed**: la misma carrera es reproducible de punta a punta.
-- **Errores humanos**: de vez en cuando frenan tarde o se desvían de su trazada — más seguido en FÁCIL que en DIFÍCIL — y el fallo dura un instante, no los saca de carrera.
-- **Adelantamientos**: ven a los autos alrededor, cierran el hueco y desvían SU línea para intentar la maniobra; la agresividad de cada uno decide cuánto se arriesga.
-- **Goma declarada y acotada**: si un rival queda muy lejos del jugador, su ritmo se ajusta una fracción MUY chica para que la pelea no se rompa en ningún sentido — tope pequeño por dificultad (el mayor en FÁCIL, casi rígido en DIFÍCIL) y NUNCA por encima del techo físico del auto.
-- **Dificultad**: los presets ajustan ritmo en recta, calidad de trazada, frecuencia de errores, agresividad y goma; el orden fácil < normal < difícil está garantizado por tests.
-
-### Récords
-
-- Por **cada pista × dificultad** el juego recuerda tu **mejor posición** y tu **mejor vuelta** en `localStorage` (clave versionada `formulita.gp.v1`, con fallback en memoria para modo privado — igual que el mute o el progreso del modo solo).
-- Superar cualquiera de las dos dispara **¡NUEVO RÉCORD!** en los resultados; repetir el mejor puesto o girar más lento no toca nada. Las marcas de un modo no se mezclan con las de otro.
-
-### QA del issue #14 (verificación manual, además de la suite)
-
-- [ ] Flujo completo: menú → GRAN PREMIO → pista + dificultad → carrera de 8 autos → podio → récord → REINTENTAR conserva pista y dificultad; MENÚ vuelve limpio.
-- [ ] Las 3 dificultades se notan: FÁCIL perdona (errores rivales visibles), DIFÍCIL exige; el chip del HUD y el subtítulo de resultados muestran siempre la elegida.
-- [ ] HUD vivo: badge Pn/8, gap +/- en segundos con los vecinos, minimapa con tu punto, cartel ¡VUELTA n/3!, SFX de largada y de adelantamiento (suena al ganar Y al perder posiciones, con enfriamiento).
-- [ ] Podio correcto: top 3 con nombres y ganador en oro; terminar 4º o peor muestra tu fila destacada debajo; ¡NUEVO RÉCORD! parpadea solo cuando superaste una marca (posición o vuelta).
-- [ ] Récords por pista × dificultad aislados: una marca en MÓNACO FÁCIL no aparece ni en MONZA ni en DIFÍCIL, y persiste tras recargar la página (F5).
-- [ ] Sin red: en modo avión / offline el GRAN PREMIO arranca y corre completo (el modo nunca toca la red).
-- [ ] Regresión: CARRERA multi, la BATALLA y el modo solo funcionan exactamente igual que antes (el practice de #9 queda como rama interna de la RaceScene, sin cambios de comportamiento).
-
----
-
-## Chat social (sala + directos, opt-in)
-
-**Chat de tres piezas: (1) chat de SALA de partida** — en el lobby y, si te eliminan, en modo espectador; el que sigue corriendo no tiene chat (decisión cerrada del issue: conducir sin distracciones) —; **(2) sala pública de presencia OPT-IN con mensajes directos (DM)**; **(3) invitaciones a partida** por DM. Todo P2P sobre la misma red de Trystero, sin servidor.
-
-**Presencia opt-in privacy-by-default**: NADIE aparece en la lista pública hasta habilitar **MOSTRARME DISPONIBLE** (default **NO**, persistido por pestaña). Deshabilitarlo es una **desconexión real** (leave de la sala pública, sin tráfico residual). Mientras estás disponible tu IP es visible a los peers de esa sala (WebRTC directo, como en cualquier partida) — por eso el default es escondido.
-
-### Cómo se usa
-
-1. Botón **CHAT**: en el menú (con badge de no leídos `CHAT · N`) y en el lobby. Abre el overlay con dos tabs.
-2. Tab **SALA**: el hilo de la partida actual (solo existe dentro de una partida; desde el menú aparece deshabilitada con aviso).
-3. Tab **PÚBLICO**: toggle grande **MOSTRARME DISPONIBLE** (SÍ/NO) + lista en vivo de quienes se mostraron. Tocar una fila abre el **hilo de DM** con ese jugador (VOLVER · BLOQUEAR/DESBLOQUEAR · INVITAR).
-4. **INVITAR A PARTIDA** (solo si estás en un lobby): manda tu palabra de sala por DM; el otro ve el banner «N TE INVITÓ A "PALABRA"» con **UNIRSE** (pre-carga la palabra en el flujo de unirse) / **IGNORAR**.
-5. El eliminado de una partida multi tiene botón **CHAT** en su overlay de espectador (escribe en el hilo de sala); el vivo no lo ve nunca.
-
-### Reglas
-
-- Mensajes de **máx. 200 caracteres** (sanitizados igual en emisor y receptor: trim, espacios colapsados, recorte — un cliente "rogue" no elude el límite).
-- **1 mensaje cada 1,5 s POR HILO**: la sala y cada DM enfrían por separado; los intentos rechazados no re-armar el reloj.
-- **Efímero**: NADA persiste al cerrar la pestaña (ni mensajes, ni hilos, ni bloqueos; solo el toggle de disponibilidad queda guardado en `localStorage`).
-- **Bloqueo por sesión** (BLOQUEAR): corta la conversación en AMBOS sentidos — sus mensajes no entran, los míos no salen — y no se persiste (los peerId cambian en cada conexión).
-- **DM requiere ambos disponibles**: si el otro se esconde (o cae por staleness, >20 s sin heartbeat de 5 s), su hilo pasa a **DESCONECTADO** con el input bloqueado; el historial queda.
-- Sin identidad persistente: los nombres NO son únicos (dos "PILOTO" pueden coexistir).
-
-### Límites de la v1 del chat (issue #2 §9)
-
-- **Sin identidad persistente**: nombres no únicos, bloqueo solo por sesión (al reconectar, peerId nuevo).
-- **Sin historial ni offline ni notificaciones**: no hay mensajes pendientes esperándote; nada llega con la pestaña cerrada.
-- **Sin moderación central**: la defensa es distributed-by-client — sanitize (200) + throttle (1,5 s/hilo) + bloqueo por sesión.
-- **Malla pública cómoda hasta ~30–50 presentes** por sala `appId-social`; más que eso exigiría sharding de vestíbulos (futuro).
-- **Privacidad WebRTC**: mientras estás disponible, tu IP es visible a los peers de la sala pública (conexión directa, sin relay) — el default escondido minimiza la exposición.
-
-### Probarlo
-
-Igual que el multijugador: 2–3 pestañas/dispositivos (`npm run dev` por LAN). En cada una: CHAT → tab PÚBLICO → MOSTRARME DISPONIBLE. La lista se llena sola al momento del descubrimiento de malla (~1,5 s), y los hilos de DM abren tocando las filas. Requiere `VITE_TRYSTERO_APP_ID` (misma configuración que el multijugador).
-
 ---
 
 ## Arquitectura (por capas)
@@ -257,12 +245,13 @@ Principios SOLID: escenas que solo orquestan, lógica pura testeable, input/audi
 
 ```
 src/
-├── main.ts               # bootstrap + guards de gestos móviles (Fase 7)
+├── main.ts               # bootstrap + guards de gestos móviles
 ├── config/
 │   ├── gameConfig.ts     # Scale.FIT, pixelArt, Arcade Physics, 720×1280, escenas
 │   └── balance.ts        # TODOS los números de gameplay (ajustables sin tocar lógica)
 ├── core/EventBus.ts      # emitter tipado que desacopla sistemas ↔ HUD ↔ audio
-├── scenes/               # Boot → Preload → Menu → Game → GameOver (+ Pause overlay)
+├── scenes/               # Boot → Preload → Menu → Game → GameOver, Race (circuito),
+│                         #   Lobby (multi), Chat (overlay) y Pause (overlay)
 ├── systems/              # lógica pura: Speed, Turbo, Drs, Countdown, Pause,
 │                         #   Spawn (scheduler + ObjectPool), Difficulty, Score,
 │                         #   Input (Keyboard/Touch), TextureFactory (pixel art),
@@ -272,13 +261,13 @@ src/
 │                         #   lobby (roster/colores/anfitrión), roomRng (seed por sala),
 │                         #   interpolación de fantasmas, handoff lobby → carrera,
 │                         #   ChatClient + TrysteroChatClient (sala pública social)
-├── race/                 # carrera en circuito (issue #9): núcleo puro — TrackPath,
+├── race/                 # carrera en circuito: núcleo puro — TrackPath,
 │                         #   CircuitPhysics, LapTracker (vueltas/sectores), parrilla,
 │                         #   ranking/clasificación, plausibilidad, staleness,
 │                         #   interpolación de rivales, controles y 5 pistas validadas;
-│                         #   GRAN PREMIO (issue #14): rivales IA (racing line con apex,
+│                         #   GRAN PREMIO: rivales IA (racing line con apex,
 │                         #   errores humanos, goma) y récords por pista × dificultad
-├── chat/                 # chat social (issue #2): ChatStore puro (sanitize 200 /
+├── chat/                 # chat social: ChatStore puro (sanitize 200 /
 │                         #   throttle 1,5 s por hilo / no leídos / bloqueo sesión),
 │                         #   adaptadores roomChat/dmChat, sesión social
 │                         #   (socialChatSession), vistas puras presenceView/dmView
@@ -288,7 +277,7 @@ src/
 ├── audio/                # AudioManager (ISfxEngine): SFX sintéticos Web Audio + dron
 │                         #   del motor; mute persistido, desbloqueo por primer gesto
 └── data/                 # ISaveRepository → LocalStorageSaveRepository (fallback en
-                          #   memoria); punto de extensión para scoreboard HTTP
+                          memoria); punto de extensión para scoreboard HTTP
 ```
 
 Decisiones clave:
@@ -304,103 +293,21 @@ Decisiones clave:
 ## Tests
 
 - 92 archivos / 1313 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
-- Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), steering del derrape (`slipSteer`), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
-- Tests de integración sin runtime de Phaser: input → steering (fusión consumida por el auto, con derrape), SpawnScheduler × DifficultySystem (ritmo, patrones y cierre conjuntos), colisiones → economía (monedas/pickups → Score/Turbo/DRS/bus) y carrera → guardado → recarga.
-- Multijugador: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`, misma semántica que Trystero) — roster/colores/anfitrión, pista determinista por seed con perfiles de velocidad distintos, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes (lobby → start → carrera con perfiles distintos → 2 choques → match-over) que exige el MISMO ranking en los tres, con el de más monedas de ganador aunque otro haya sobrevivido más.
-- Chat social: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo entrada+salida), TrysteroChatClient contra rooms/hub fake (presencia opt-in, heartbeat, stale, DM/invite dirigidos), sesión social (DM con el overlay cerrado) — y el flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`: chat de sala + presencia opt-in con privacy-by-default verificada + 2 DM simultáneos con throttles independientes + escondite→DESCONECTADO + invitación con UNIRSE + badges por cliente), 100% determinista con reloj/timers inyectados.
-- Carrera en circuito (issue #9): pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación final, plausibilidad y staleness, reconstrucción de rivales, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi (`race/` + `raceMultiFullFlow`). V4: mapeo velocidad del circuito → dron del motor (`race/raceAudio`) y vuelta rápida del podio (`fastestRaceLap` + su viaje en el payload de resultados).
-- Gran Premio vs CPU (issue #14): roster de 7 rivales determinista por seed, presets de dificultad en orden estricto (fácil < normal < difícil, con errores Poisson y goma acotada probados sobre simulación headless a 60 Hz), línea de carrera, payload de resultados (posición/podio) con parseo defensivo y récords por pista × dificultad (`gpRecords`: round-trip, récord estricto menor-es-mejor, JSON corrupto, storage roto → memoria, claves aisladas).
+- **Modo solo**: lógica pura de todos los sistemas (velocidad, turbo, DRS, spawn con pasabilidad + pool, dificultad, puntaje, countdown, pausa, input con multi-touch, derrape, persistencia, audio con fakes de Web Audio) + tests de integración sin runtime de Phaser (input → steering, SpawnScheduler × Difficulty, colisiones → economía, carrera → guardado → recarga).
+- **Multijugador**: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`) — roster/colores/anfitrión, pista determinista por seed, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes que exige el MISMO ranking en los tres.
+- **Chat social**: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo), TrysteroChatClient contra hub fake (presencia opt-in, heartbeat, stale, DM/invite) y flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`), 100% determinista con reloj/timers inyectados.
+- **Carrera en circuito**: pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación, plausibilidad y staleness, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi.
+- **Gran Premio**: roster de 7 rivales determinista por seed, presets de dificultad en orden estricto (fácil < normal < difícil, probados sobre simulación headless a 60 Hz), línea de carrera, payload de resultados con parseo defensivo y récords por pista × dificultad (round-trip, JSON corrupto, storage roto → memoria, claves aisladas).
 
 ---
 
-## QA checklist (verificación manual)
+## QA manual
 
-Criterio de aceptación global: **sesión de 10 minutos sin errores de consola** y `npm run build` exitoso.
-
-### Desktop (teclado)
-
-- [ ] `npm run dev` abre el juego con letterbox negro centrado, sin scroll ni zoom.
-- [ ] El flujo Boot (barra de progreso de texturas) → Menú → carrera → Game Over funciona completo y en loop (REINTENTAR / MENÚ).
-- [ ] El auto obedece ← → / A·D con aceleración lateral suave y clamp en los kerbs.
-- [ ] Espacio/Z acelera y frena de forma perceptible; sin soltar nada, la velocidad vuelve sola a la base.
-- [ ] Shift activa turbo solo con medidor: llamas de escape, líneas de velocidad, viñeta en los bordes y whoosh; se corta solo al vaciarse y no reactiva hasta soltar (latch).
-- [ ] X activa DRS solo por encima del 75% de velocidad; dura 3 s; el chip pasa a cooldown con cuenta regresiva; a los 8 s vuelve a "LISTO" parpadeante.
-- [ ] Countdown 3-2-1-GO! visible al arrancar cada carrera; la pista no scrollea ni aparecen rivales hasta el GO!.
-- [ ] Tecla P (o botón II) pausa: overlay con REANUDAR/MENÚ, y al reanudar no quedó ninguna tecla "pegada".
-- [ ] Perder el foco de la ventana (click afuera, cambiar de pestaña) pausa solo con overlay de PAUSA AUTOMÁTICA; al volver, la carrera sigue exactamente donde estaba.
-- [ ] MENÚ desde la pausa corta el motor y vuelve al menú sin errores ni sonido colgado.
-- [ ] Choque: explosión, flash rojo, screen shake y Game Over con puntaje/distancia/monedas; ¡NUEVO RÉCORD! parpadea si corresponde.
-- [ ] Salud del vehículo (issue #10): un choque NO mata al instante — la barra CHASIS baja, hay flash/shake más chicos que el de muerte y el auto parpadea ~0,6 s (i-frames, el golpe repetido inmediato no vuelve a doler).
-- [ ] Roce con pared: chispas en el borde del auto, la CHASIS drena continuamente (la pared no respeta i-frames) y sostener el roce llega a muerte.
-- [ ] Estado crítico (≤ 25%): el auto echa humo gris continuo y la barra CHASIS parpadea; el botiquín (+35) la recompone y humo/parpadeo de barra se apagan.
-- [ ] Aceite: derrape breve con control invertido, sin muerte; el auto no pierde vida por eso.
-- [ ] Récord y monedas persisten tras recargar la página (F5); el mute también persiste.
-- [ ] Botón PANTALLA COMPLETA (y tecla F) del menú: entra/sale y la etiqueta cambia a VENTANA; el canvas sigue nítido (pixel art sin blur).
-- [ ] Click derecho sobre el canvas no abre menú contextual; doble click no hace zoom.
-- [ ] 10 minutos de carrera seguida: sin errores/warnings de consola, sin degradación de FPS perceptible.
-
-### Mobile (táctil, vía LAN)
-
-- [ ] La URL de red abre el juego en vertical sin scroll, sin zoom y sin tap-highlight.
-- [ ] Con notch: la UI no queda tapada por la muesca (safe-area insets) y el canvas escala completo sin distorsión.
-- [ ] Multi-touch real: doblar con ◀ ▶ mientras se mantiene GAS; soltar un dedo no suelta el otro botón.
-- [ ] Los 6 botones del HUD (◀ ▶ GAS BRK TURBO DRS) presionan y sueltan limpio, con feedback visual de presión; ninguno "queda pegado" tras una pausa.
-- [ ] Botón II pausa; REANUDAR/MENÚ responden al primer toque.
-- [ ] Cambiar de app / bloquear la pantalla: al volver hay overlay de PAUSA AUTOMÁTICA y el progreso (monedas bancadas) quedó guardado.
-- [ ] El audio suena desde el primer toque (desbloqueo de autoplay) y el mute persiste entre sesiones; el motor sube de tono con la velocidad y se calla en pausa.
-- [ ] Long-press sobre la pantalla no abre menú contextual ni selecciona texto; double-tap no hace zoom.
-- [ ] Sesión de 10 minutos: sin errores de consola, sin fugas evidentes (el pool recicla: la densidad de entidades no crece con el tiempo).
-
-### Multijugador (multi-dispositivo: Wi-Fi + 4G mezclados)
-
-Criterio de aceptación del issue #1 (M3): partida de ~10 minutos con dispositivos REALES en redes mezcladas (uno en Wi-Fi, otro en 4G) sin errores de consola, mismo trazado en todos y leaderboard idéntico. Se prueba contra la versión publicada (<https://juliangt.github.io/formulita/>) o con `npm run dev`/`npm run serve` en la LAN.
-
-- [ ] Dos o más dispositivos crean/unen por palabra y ven el MISMO roster (nombres, colores, contador n/10) en todas las pantallas.
-- [ ] INICIAR (anfitrión) arranca el countdown en todos casi a la vez; nadie ve la pista moverse antes del GO!.
-- [ ] **Mismo trazado en todos**: a la misma distancia, las mismas oleadas/monedas/rivales en cada dispositivo (pista determinista por seed de sala).
-- [ ] El auto fantasma de cada rival se mueve suave (interpolado, sin teletransportes), es semitransparente y NO colisiona con el propio.
-- [ ] Choque en un dispositivo: ese jugador pasa a espectador (cartel ELIMINADO — PUESTO N) y los demás ven VIVOS bajar de inmediato.
-- [ ] **Eliminaciones en orden correcto**: el PUESTO N de cada cartel coincide con el orden real de los choques.
-- [ ] Al quedar 1 vivo: **leaderboard final en TODOS los dispositivos — idéntico** (mismo orden, mismas stats fila por fila, mismo ganador marcado).
-- [ ] El ganador es el de **más monedas**, aunque otro jugador haya sobrevivido más tiempo (y kilómetros).
-- [ ] Redes mezcladas (Wi-Fi + 4G): la partida se completa; si un jugador pierde conexión, los demás lo ven eliminado (desconexión inmediata o stale a los ~20 s) y la partida concluye bien.
-- [ ] Mandar un dispositivo al background/bloquear pantalla: ese jugador queda eliminado por stale (>20 s sin estado) y el resto sigue sin errores.
-- [ ] Partida de ~10 min con 2–10 jugadores sin errores de consola ni degradación de FPS en ningún dispositivo.
-- [ ] **Reconexión NO soportada (límite v1)**: recargar (F5) a mitad de partida elimina al que recargó (puede crear/unirse a otra sala); los demás concluyen la partida en curso sin romperse.
-- [ ] Los récords/monedas del modo solo no cambian por jugar partidas multi.
-
-### Chat social (multi-dispositivo: iOS + Android mezclados)
-
-Criterio de aceptación del issue #2 (C4): el flujo social completo con 3 dispositivos REALES sin errores de consola. La parte física (teclado virtual en pantalla, foco real, overlays del SO) no es automatizable — esta checklist es el QA manual que la suite no cubre.
-
-Teclado virtual y foco (en CADA dispositivo móvil):
-
-- [ ] Tocar el input de chat lo enfoca y el **teclado NO tapa el input**: en Android la ventana se redimensiona y todo el lienzo (input + ENVIAR) queda visible sobre el teclado; en iOS Safari verificar que el input enfocado queda alcanzable (el layout ancla el input abajo, con ENVIAR/CERRAR debajo).
-- [ ] La tecla Enter del teclado virtual se etiqueta **"enviar"** (`enterkeyhint`) y envía el mensaje; en el input de palabra de sala se etiqueta "ir" y en el de nombre "listo".
-- [ ] Enfocar el input **NO hace zoom** la página en iOS (la fuente efectiva queda ≥16 px CSS).
-- [ ] El teclado NO sugiere autocorrección ni autocompletado en ningún input del juego (y la palabra de sala fuerza MAYÚSCULAS).
-- [ ] Escribir **"P" en el input de chat NO pausa nada** (ni ESPACIO acelera, ni las flechas mueven): el input está aislado del teclado del juego; al cerrar el chat, P vuelve a pausar.
-- [ ] El tope de 200 caracteres se corta al tipear (el input no admite más).
-
-Lista de mensajes:
-
-- [ ] La lista muestra siempre los **últimos** mensajes (anclada abajo) y los propios alineados a la derecha en amarillo "VOS" (decisión v1: sin scroll táctil — sobran los últimos N visibles).
-- [ ] Con el panel lleno, los mensajes más viejos salen por arriba sin deformar el layout.
-
-Flujo social con 3 dispositivos (uno iOS, uno Android, uno desktop):
-
-- [ ] Sala compartida: A crea, B y C se unen; el chat de SALA muestra nombre y color del remitente en todos, con el throttle de 1,5 s visible ("ESPERÁ…").
-- [ ] **Privacy by default**: nadie aparece en la tab PÚBLICO hasta tocar MOSTRARME DISPONIBLE; quien no lo tocó no figura en la lista de nadie.
-- [ ] **2 DM simultáneos** al chat de sala (p. ej. A↔C mientras B escribe en sala): los mensajes no se cruzan de hilo y el throttle de cada hilo es independiente.
-- [ ] Tocar MOSTRARME DISPONIBLE: NO → SÍ aparece en las listas de los demás en ~1,5 s; SÍ → NO desaparece y su hilo de DM pasa a DESCONECTADO con el input bloqueado.
-- [ ] **INVITAR A PARTIDA** (desde un lobby): el invitado ve el banner «N TE INVITÓ A "PALABRA"», UNIRSE lo lleva al lobby con la palabra pre-cargada y IGNORAR lo descarta.
-- [ ] El badge del botón CHAT del menú cuenta los no leídos de sala + DMs y se limpia al abrir cada hilo.
-- [ ] Sesión de ~10 minutos de chat (sala + DMs + bloqueos) sin errores ni warnings de consola en ningún dispositivo.
-- [ ] Cerrar la pestaña y volver: no queda rastro de mensajes ni hilos (efímero); solo el toggle de disponibilidad se recuerda.
+Los checklists de verificación manual (desktop, mobile, multijugador, carrera, gran premio y chat con dispositivos reales) viven en [`docs/QA.md`](./docs/QA.md) — es el QA que la suite no puede cubrir: teclado virtual, foco, overlays del SO y sesiones largas multi-dispositivo.
 
 ---
 
-## Roadmap (fuera de este MVP)
+## Roadmap (fuera del MVP)
 
 - **Tienda básica**: skins de color del auto y mejoras menores (capacidad de turbo, duración de DRS) compradas con las monedas acumuladas.
 - **Scoreboard en servidor externo**: implementando la interfaz de persistencia ya prevista (`ISaveRepository` / cliente HTTP) sin refactor del juego.
@@ -409,4 +316,4 @@ Flujo social con 3 dispositivos (uno iOS, uno Android, uno desktop):
 
 ## Notas
 
-- Todos los números de balance (velocidades, turbo, DRS, spawns, layout de HUD) viven en `src/config/balance.ts` con comentarios de intención: ajustables sin tocar lógica.
+- Todos los números de balance (velocidades, turbo, DRS, spawns, layout de HUD, daño) viven en `src/config/balance.ts` con comentarios de intención: ajustables sin tocar lógica.
