@@ -188,6 +188,11 @@ export const RACE_HUD = {
  * M1 — multijugador: se agregó el botón MULTIJUGADOR debajo de JUGAR y el
  * bloque se reacomodó (título/auto/estadísticas más arriba) para que ambos
  * botones + la ayuda quepan sin tocarse.
+ *
+ * V1 (issue #9): se agregó el botón ENTRENAR (RaceScene local) entre JUGAR y
+ * MULTIJUGADOR y el bloque inferior volvió a reacomodarse: los tres botones
+ * grandes bajaron de 118 a 96/88 px de alto y la ayuda compactó su interlineado
+ * para que todo siga quepa en el lienzo sin tocarse.
  */
 export const MENU = {
   /** Velocidad de scroll de la pista de fondo (px/s). */
@@ -206,34 +211,43 @@ export const MENU = {
   /** Y de la línea de monedas (centro). */
   coinsY: 714,
   /** Botón JUGAR: centro Y, tamaño y fuente de la etiqueta. */
-  playY: 848,
+  playY: 840,
   playWidth: 400,
-  playHeight: 118,
+  playHeight: 104,
   playFontSize: 52,
-  /* M1 — botón MULTIJUGADOR: debajo de JUGAR, mismo ancho, etiqueta más
-   * chica (13 caracteres de monospace tienen que entrar en 400 px). */
+  /* V1 (issue #9) — botón ENTRENAR: debajo de JUGAR, mismo ancho, abre el
+   * selector de pistas (overlay) y lanza RaceScene en modo práctica. */
+  /** Centro Y del botón ENTRENAR. */
+  trainY: 948,
+  /** Ancho/alto del botón ENTRENAR (mismo ancho que JUGAR). */
+  trainWidth: 400,
+  trainHeight: 88,
+  /** Tamaño de fuente de la etiqueta ENTRENAR (px). */
+  trainFontSize: 40,
+  /* M1 — botón MULTIJUGADOR: debajo de ENTRENAR, mismo ancho (13 caracteres
+   * de monospace tienen que entrar en 400 px). */
   /** Centro Y del botón MULTIJUGADOR. */
-  multiY: 988,
-  /** Ancho/alto del botón MULTIJUGADOR (mismo ancho que JUGAR). */
+  multiY: 1056,
+  /** Ancho/alto del botón MULTIJUGADOR (mismo ancho que JUGAR/ENTRENAR). */
   multiWidth: 400,
-  multiHeight: 118,
+  multiHeight: 88,
   /** Tamaño de fuente de la etiqueta MULTIJUGADOR (px). */
   multiFontSize: 40,
   /* C2 (issue #2) — botón CHAT: debajo de MULTIJUGADOR, mismo ancho; abre el
    * overlay con la tab PÚBLICO (el chat social vive también en el menú). El
-   * bloque de ayuda baja para hacerle sitio (helpY 1150 → 1204): quedan 9 px
-   * de aire a cada lado del botón y 13 px de margen inferior. */
+   * bloque de ayuda compactó su interlineado para hacerle sitio (helpY
+   * 1204 → 1220, helpLineHeight 34 → 30). */
   /** Centro Y del botón CHAT del menú. */
-  chatY: 1096,
-  /** Ancho/alto del botón CHAT (mismo ancho que JUGAR/MULTIJUGADOR). */
+  chatY: 1136,
+  /** Ancho/alto del botón CHAT (mismo ancho que JUGAR/ENTRENAR/MULTIJUGADOR). */
   chatWidth: 400,
   chatHeight: 64,
   /** Tamaño de fuente de la etiqueta CHAT (px). */
   chatFontSize: 34,
   /** Y del centro del bloque de ayuda de controles. */
-  helpY: 1204,
+  helpY: 1220,
   /** Separación vertical entre líneas de ayuda (px). */
-  helpLineHeight: 34,
+  helpLineHeight: 30,
   /** Tamaño de fuente de las líneas de récord/monedas (px). */
   statFontSize: 34,
   /* Botón FULLSCREEN (Fase 7, solo desktop): esquina superior izquierda,
@@ -249,7 +263,14 @@ export const MENU = {
   fullscreenFontSize: 22,
 } as const;
 
-/** Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
+/**
+ * Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo).
+ *
+ * V1 (issue #9): la rama de resultados de carrera (ENTRENAR) reutiliza las
+ * mismas posiciones: el título pasa a RESULTADOS, la línea del cartel muestra
+ * la pista y las tres líneas de estadísticas muestran tiempo total, mejor
+ * vuelta y vueltas completadas.
+ */
 export const GAME_OVER = {
   /** Y del título GAME OVER (centro). */
   titleY: 210,
@@ -410,6 +431,210 @@ export const DIFFICULTY = {
   /** Cantidad de niveles de variedad de patrones. */
   maxPatternLevel: 3,
 } as const;
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito (issue #9, V0 — núcleo puro)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Física arcade de conducción sobre circuito cerrado (issue #9). Consume
+ * `race/circuitPhysics.ts`; las pistas de `race/tracks.ts` se validan contra
+ * `referenceSpeed`/`turnRate*` (radio de curvatura mínimo alcanzable) y contra
+ * la banda de duración de vuelta.
+ *
+ * Convención del input (auto-acelerado): el acelerador viene PISADO por
+ * defecto (ver `defaultCircuitInput`); frenar y girar son acciones explícitas.
+ * El giro se mide en rad/s y decae con la velocidad: `turnRateAtSpeed`
+ * interpola de `turnRateBase` (parado) a `turnRateAtMaxSpeed` (a punta).
+ */
+export const CIRCUIT = {
+  /** Velocidad máxima en asfalto (px/s). */
+  maxSpeed: 300,
+  /** Aceleración con el acelerador (px/s²): 0 → maxSpeed en ≈ 1.25 s. */
+  acceleration: 240,
+  /** Frenada a fondo (px/s²): maxSpeed → 0 en ≈ 0.47 s. */
+  brakeDeceleration: 640,
+  /** Roce al soltar todo (px/s²): la velocidad decae hacia 0. */
+  coastDrag: 130,
+  /** Tasa de giro a velocidad 0 (rad/s). */
+  turnRateBase: 3.4,
+  /** Tasa de giro a velocidad máxima (rad/s): a más velocidad, menos giro. */
+  turnRateAtMaxSpeed: 1.2,
+  /** Techo de velocidad en pasto, como fracción de `maxSpeed`. */
+  grassMaxSpeedFactor: 0.45,
+  /**
+   * Velocidad de referencia para validar pistas (px/s), ≈ 60% de `maxSpeed`.
+   * Es el ritmo medio de vuelta esperado (las curvas y el pasto impiden
+   * sostener la punta). Con ella se valida: (a) el radio de curvatura de
+   * cada punto de las 5 pistas — debe permitir sostener la curva a esta
+   * velocidad con la tasa de giro disponible — y (b) la longitud de vuelta
+   * contra la banda 36–44 s (objetivo 40 s ⇒ pista de ~7200 px).
+   */
+  referenceSpeed: 180,
+  /** Ventanas de sector por vuelta (checkpoints anti-corte). */
+  sectorCount: 8,
+  /** Vueltas por carrera. */
+  totalLaps: 3,
+  /** Banda de validación de duración de vuelta (s) a `referenceSpeed`. */
+  lapMinSeconds: 36,
+  lapMaxSeconds: 44,
+  /* Parrilla de salida: 2 columnas escalonadas detrás de la meta. */
+  /** Separación en s entre filas consecutivas (px de arco). */
+  gridRowStepPx: 70,
+  /** Lateral de cada columna respecto del eje (px; ±este valor). */
+  gridLateralOffsetPx: 35,
+  /** Distancia de la primera fila (pole) detrás de la meta (px de arco). */
+  gridStartOffsetPx: 140,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito (issue #9, V1 — RaceScene local / ENTRENAR)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Presentación de la RaceScene (V1): cámara, HUD de carrera y minimapa sobre
+ * el lienzo 720×1280. El gameplay vive en `CIRCUIT`; acá sólo hay layout y
+ * feeling de cámara. V2 (multi) reutiliza el mismo bloque.
+ */
+export const RACE = {
+  /* Cámara: sigue al auto con lerp (norte arriba, sin rotación), zoom fijo
+   * y clampada al mundo de la pista. El zoom < 1 muestra más contexto del
+   * circuito: a 300 px/s la punta cruza la pantalla en ~3 s a zoom 1, y con
+   * 0.8 se ve lo suficiente para planificar la curva siguiente. */
+  /** Zoom fijo de la cámara (1 = px de mundo 1:1). */
+  cameraZoom: 0.8,
+  /** Lerp de seguimiento (por frame, interpolación exponencial de Phaser). */
+  cameraLerp: 0.14,
+  /* HUD de carrera (RaceHud): columna del borde superior izquierdo. El
+   * minimapa ocupa la esquina superior derecha, así que el centro queda
+   * despejado para ver la pista adelante. */
+  /** X del borde izquierdo de los textos del HUD (origen 0). */
+  hudX: 24,
+  /** Y del badge VUELTA n/N (centro). */
+  lapBadgeY: 56,
+  /** Y del tiempo de vuelta en curso (centro). */
+  lapTimeY: 104,
+  /** Y del tiempo total (centro). */
+  totalTimeY: 142,
+  /** Tamaños de fuente del HUD de carrera (px). */
+  lapBadgeFontSize: 34,
+  lapTimeFontSize: 30,
+  totalTimeFontSize: 22,
+  /* Minimapa (MiniMap): cuadrado en la esquina superior derecha. */
+  /** Lado del minimapa (px). */
+  miniMapSize: 180,
+  /** Margen del minimapa desde los bordes superior/derecho (px). */
+  miniMapMargin: 20,
+  /** Padding interno entre el borde del panel y el contorno (px). */
+  miniMapPadding: 12,
+  /* Botón de pausa: centrado bajo el minimapa (misma columna), mismo tamaño
+   * que el de GameScene (RACE_HUD.pauseButtonSize). */
+  /** X del centro del botón de pausa. */
+  pauseX: 610,
+  /** Y del centro del botón de pausa. */
+  pauseY: 268,
+  /* V2 (issue #9) — badge de posición en vivo "P3/8": bajo el tiempo total
+   * de la columna izquierda del HUD (totalTimeY 142). Sólo visible en modo
+   * multi (la práctica nunca lo llama). */
+  /** Y del badge de posición (centro). */
+  positionBadgeY: 184,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito multijugador (issue #9, V2)                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Gracia de cierre de la carrera multi (ms): el primer auto en completar las
+ * `CIRCUIT.totalLaps` vueltas dispara la condición de ganador (su `rfin` es
+ * el primero); la partida termina para TODOS cuando terminaron todos O pasa
+ * esta ventana desde ese primer `rfin` — los que no llegaron se clasifican
+ * por su último progreso conocido (ver `race/raceRanking.finalClassification`).
+ */
+export const RACE_FINISH_GRACE_MS = 30000;
+
+/**
+ * Presentación y ritmo del modo multi de RaceScene (V2). El netcode comparte
+ * STATE_HZ / GHOST_INTERPOLATION_MS / SNAPSHOT_BUFFER_SIZE con la BATALLA.
+ */
+export const RACE_MULTI = {
+  /**
+   * Intervalo del ranking vivo (ms): `rankCars` corre cada este tiempo (no
+   * por frame — el orden no cambia tan rápido y el badge repinta sólo si
+   * cambió el texto). También gobierna el seguimiento de cámara del
+   * espectador (quien terminó sigue al líder).
+   */
+  rankIntervalMs: 250,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito — pulido V4 (issue #9)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cartel pop "¡VUELTA 2/3!" al completar una vuelta válida (la última no:
+ * esa ya muestra el cartel de BANDERA A CUADROS). Mismo lenguaje del
+ * countdown: texto gigante centrado en pantalla fija con pop de escala y
+ * fade de salida.
+ */
+export const RACE_LAP_BANNER = {
+  /** Tamaño de fuente del cartel (px). */
+  fontSize: 72,
+  /** Escala inicial del pop (idem countdown). */
+  popScale: 1.45,
+  /** Duración del pop de escala (ms). */
+  popMs: 240,
+  /** Tiempo visible a escala 1 antes del fade (ms). */
+  holdMs: 700,
+  /** Duración del fade de salida (ms). */
+  fadeMs: 260,
+} as const;
+
+/**
+ * Confeti del cruce de la meta FINAL (practice y multi): burst one-shot
+ * multicolor sobre el auto (posición del mundo, la cámara lo está siguiendo).
+ * Los tintos salen de la paleta de la sala (`MULTIPLAYER.palette`): cero
+ * colores mágicos nuevos.
+ */
+export const RACE_CONFETTI = {
+  /** Partículas por burst. */
+  burstCount: 90,
+  /** Vida de cada partícula (ms). */
+  lifespanMs: 950,
+  /** Velocidad de eyección (px/s). */
+  speedMin: 120,
+  speedMax: 430,
+  /** Abanico de eyección hacia arriba (grados Phaser: 270 = −Y). */
+  angleMin: 190,
+  angleMax: 350,
+  /** Escala inicial de partícula (la textura `particle` mide 4 px). */
+  scaleStart: 2.2,
+  /** Profundidad: sobre el mundo y el auto, bajo el HUD. */
+  depth: 30,
+} as const;
+
+/**
+ * Línea "VUELTA RÁPIDA: NOMBRE (M:SS.mmm)" del podio de la carrera multi
+ * (GameOverScene, rama race-multi). Va entre el subtítulo de pista
+ * (`LEADERBOARD.headerY` 384) y la primera fila del podio (448): el hueco de
+ * 64 px las separa sin tocarse (fuente 24 px centrada).
+ */
+export const RACE_FAST_LAP = {
+  /** Y del centro de la línea. */
+  y: 414,
+  /** Tamaño de fuente (px). */
+  fontSize: 24,
+} as const;
+
+/**
+ * Sonido de motor de la carrera en circuito (V4): el dron del AudioManager
+ * mapea velocidad → frecuencia sobre el dominio de la BATALLA
+ * ([MIN_SPEED, MAX_SPEED] px/s). La velocidad del circuito vive en
+ * [0, CIRCUIT.maxSpeed] px/s — un rango distinto — y se NORMALIZA a ese
+ * dominio para que el dron barra toda su banda: la fracción
+ * speed/maxSpeed del circuito entra como la misma fracción del dominio
+ * (`race/raceAudio.raceEngineSpeed`, pura y testeada).
+ */
 
 /** X del centro de un carril del asfalto (índice 0 = izquierda). */
 export function laneCenterX(index: number, laneCount: number = SPAWN.laneCount): number {
@@ -615,6 +840,46 @@ export const LOBBY = {
   chatButtonHeight: 64,
   /** Tamaño de fuente de la etiqueta CHAT (px). */
   chatButtonFontSize: 30,
+  /* V2 (issue #9) — fila de MODO del anfitrión (BATALLA / CARRERA + pista),
+   * entre la palabra de sala (wordY 380) y el rótulo del roster (495). La
+   * fila completa es visible SOLO para el anfitrión; los invitados conocen
+   * el modo al recibir el `start` (el lobby no difunde estado, igual que #1). */
+  /** Y del centro de la fila de modo (centros de los botones). */
+  modeRowY: 444,
+  /** Ancho/alto de los chips BATALLA / CARRERA y su fuente. */
+  modeChipWidth: 170,
+  modeChipHeight: 56,
+  modeChipFontSize: 24,
+  /** Centros X de los chips (BATALLA a la izquierda, CARRERA al medio). */
+  battleChipX: 105,
+  raceChipX: 300,
+  /** Botón de pista (sólo con CARRERA): centro X, ancho/alto y fuente. */
+  trackButtonX: 550,
+  trackButtonWidth: 280,
+  trackButtonHeight: 56,
+  trackButtonFontSize: 22,
+  /* Overlay del picker de pistas del lobby (miniaturas TrackThumb), mismo
+   * patrón del selector de ENTRENAR del menú. */
+  /** Centro Y y tamaño del panel. */
+  trackPanelY: 660,
+  trackPanelWidth: 620,
+  trackPanelHeight: 820,
+  /** Y del título y del botón CERRAR. */
+  trackTitleY: 320,
+  trackCloseY: 1010,
+  trackCloseWidth: 300,
+  trackCloseHeight: 88,
+  /** Filas: centro Y de la primera y paso entre filas. */
+  trackRowStartY: 430,
+  trackRowStep: 118,
+  /** Lado de la miniatura de cada fila (TrackThumb) y su centro X. */
+  trackThumbSize: 88,
+  trackThumbX: 155,
+  /** Botón con el nombre de la pista: centro X, ancho/alto y fuente. */
+  trackRowButtonX: 435,
+  trackRowButtonWidth: 340,
+  trackRowButtonHeight: 84,
+  trackRowButtonFontSize: 34,
 } as const;
 
 /* ------------------------------------------------------------------ */

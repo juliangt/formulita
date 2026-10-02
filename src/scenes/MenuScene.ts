@@ -5,6 +5,7 @@ import { prefersTouchControls } from '../core/device';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
+import { TRACKS, type TrackId } from '../race/tracks';
 import { chatMenuButtonLabel } from '../chat/dmView';
 import { getSocialChatSession } from '../chat/socialChatSession';
 import { sanitizePlayerName } from '../net/protocol';
@@ -13,6 +14,7 @@ import { applyMobileInputAttributes } from '../ui/ChatPanel';
 import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
 import { LobbyScene } from './LobbyScene';
+import { RaceScene } from './RaceScene';
 import { MenuButton } from '../ui/MenuButton';
 import { MuteButton } from '../ui/MuteButton';
 
@@ -44,6 +46,36 @@ const HELP_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
 /** Etiqueta del botón fullscreen según el estado (Fase 7). */
 const FS_LABEL_WINDOWED = 'PANTALLA COMPLETA';
 const FS_LABEL_FULLSCREEN = 'VENTANA';
+
+/**
+ * Layout del overlay selector de pistas (V1, issue #9): panel centrado con
+ * título, una fila por pista (botón con el nombre + hint del circuito real
+ * que lo inspira) y CERRAR. Mismo patrón del overlay multijugador.
+ */
+const TRACK_PICKER = {
+  /** Opacidad del velo oscuro sobre el menú (0–1). */
+  dimAlpha: 0.86,
+  /** Centro Y y tamaño del panel. */
+  panelY: 700,
+  panelWidth: 620,
+  panelHeight: 950,
+  /** Y del título ENTRENAR y del subtítulo (centros). */
+  titleY: 300,
+  subtitleY: 368,
+  /** Filas de pistas: centro Y de la primera y paso entre filas. */
+  rowStartY: 470,
+  rowStep: 120,
+  /** Tamaño del botón de cada fila. */
+  rowWidth: 540,
+  rowHeight: 84,
+  /** Hint del circuito inspirador: hueco bajo el botón y fuente. */
+  hintGap: 12,
+  hintFontSize: 16,
+  /** Botón CERRAR. */
+  closeY: 1090,
+  closeWidth: 300,
+  closeHeight: 88,
+} as const;
 
 /** Input DOM del nombre multijugador (overlay simple sobre el menú). */
 const NAME_INPUT_CSS = {
@@ -91,6 +123,9 @@ export class MenuScene extends Phaser.Scene {
   /* M1 — overlay multijugador (nombre + crear/unirse), null si cerrado. */
   private multiOverlay: Phaser.GameObjects.Container | null = null;
   private multiNameInput: Phaser.GameObjects.DOMElement | null = null;
+
+  /* V1 (issue #9) — overlay del selector de pistas de ENTRENAR. */
+  private trackOverlay: Phaser.GameObjects.Container | null = null;
 
   constructor() {
     super(MenuScene.KEY);
@@ -174,6 +209,20 @@ export class MenuScene extends Phaser.Scene {
       fontSize: MENU.multiFontSize,
       bus,
       onPress: this.openMultiplayerOverlay,
+    });
+
+    // V1 (issue #9) — ENTRENAR: abre el selector de pistas y lanza la
+    // RaceScene en modo práctica local (una persona, 3 vueltas, sin red).
+    new MenuButton(this, {
+      x: centerX,
+      y: MENU.trainY,
+      width: MENU.trainWidth,
+      height: MENU.trainHeight,
+      label: 'ENTRENAR',
+      tint: 0x3c6cd6,
+      fontSize: MENU.trainFontSize,
+      bus,
+      onPress: this.openTrackPicker,
     });
 
     // C2 (issue #2) — CHAT: abre el overlay social con la tab PÚBLICO por
@@ -270,9 +319,10 @@ export class MenuScene extends Phaser.Scene {
   }
 
   private readonly startGame = (): void => {
-    // Con el overlay multijugador abierto, Enter/Espacio son del input de
-    // nombre: no arrancan una carrera solo atravesada.
-    if (this.multiOverlay) {
+    // Con un overlay abierto (multijugador o selector de pistas), Enter/
+    // Espacio son del input de ese overlay: no arrancan una carrera sola
+    // atravesada.
+    if (this.multiOverlay || this.trackOverlay) {
       return;
     }
     this.scene.start(GameScene.KEY);
@@ -391,6 +441,123 @@ export class MenuScene extends Phaser.Scene {
     this.multiNameInput = null;
     this.multiOverlay?.destroy();
     this.multiOverlay = null;
+  };
+
+  /* ---------------------------------------------------------------- */
+  /* V1 (issue #9) — selector de pistas de ENTRENAR                     */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Overlay simple de selección de pista (patrón del overlay multijugador):
+   * las 5 pistas del registro por nombre + CERRAR. V1 NO usa miniaturas
+   * (`TrackThumb` llega con el lobby de V2): para entrenar, el nombre de la
+   * pista alcanza. La elección lanza RaceScene en modo práctica local.
+   */
+  private readonly openTrackPicker = (): void => {
+    if (this.trackOverlay || this.multiOverlay) {
+      return;
+    }
+    const centerX = this.scale.width / 2;
+    const bus = getSessionEventBus(this.registry);
+
+    const overlay = this.add.container(0, 0).setDepth(100);
+    const dim = this.add
+      .rectangle(centerX, this.scale.height / 2, this.scale.width, this.scale.height, 0x000000, TRACK_PICKER.dimAlpha)
+      .setInteractive();
+    dim.on('pointerdown', (_pointer: Phaser.Input.Pointer, _x: number, _y: number, event: Phaser.Types.Input.EventData) => {
+      event.stopPropagation();
+    });
+    const panel = this.add
+      .rectangle(centerX, TRACK_PICKER.panelY, TRACK_PICKER.panelWidth, TRACK_PICKER.panelHeight, 0x14141c)
+      .setStrokeStyle(6, 0x3a3a44);
+    overlay.add([dim, panel]);
+
+    overlay.add(
+      this.add
+        .text(centerX, TRACK_PICKER.titleY, 'ENTRENAR', {
+          fontFamily: 'monospace',
+          fontSize: '56px',
+          color: '#f2f2f2',
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 8),
+    );
+    overlay.add(
+      this.add
+        .text(centerX, TRACK_PICKER.subtitleY, 'ELEGÍ PISTA — 3 VUELTAS', SUBTITLE_STYLE)
+        .setOrigin(0.5),
+    );
+
+    // Una fila por pista: nombre grande, circuito que la inspira como hint.
+    TRACKS.forEach((track, index) => {
+      const y = TRACK_PICKER.rowStartY + index * TRACK_PICKER.rowStep;
+      overlay.add(this.trackRow(centerX, y, track.name, track.inspiration, track.id));
+    });
+
+    overlay.add(
+      new MenuButton(this, {
+        x: centerX,
+        y: TRACK_PICKER.closeY,
+        width: TRACK_PICKER.closeWidth,
+        height: TRACK_PICKER.closeHeight,
+        label: 'CERRAR',
+        tint: 0x525868,
+        fontSize: 34,
+        bus,
+        onPress: this.closeTrackPicker,
+      }).container,
+    );
+
+    this.trackOverlay = overlay;
+  };
+
+  /** Fila de pista: botón con el nombre + hint del circuito real debajo. */
+  private trackRow(
+    centerX: number,
+    y: number,
+    name: string,
+    inspiration: string,
+    trackId: TrackId,
+  ): Phaser.GameObjects.Container {
+    const row = this.add.container(0, 0);
+    row.add(
+      new MenuButton(this, {
+        x: centerX,
+        y,
+        width: TRACK_PICKER.rowWidth,
+        height: TRACK_PICKER.rowHeight,
+        label: name,
+        tint: 0x3c6cd6,
+        fontSize: 40,
+        bus: getSessionEventBus(this.registry),
+        onPress: () => this.startPractice(trackId),
+      }).container,
+    );
+    row.add(
+      this.add
+        .text(
+          centerX,
+          y + TRACK_PICKER.rowHeight / 2 + TRACK_PICKER.hintGap,
+          inspiration.split(' (')[0].toUpperCase(),
+          {
+            fontFamily: 'monospace',
+            fontSize: `${TRACK_PICKER.hintFontSize}px`,
+            color: '#9aa0a8',
+          },
+        )
+        .setOrigin(0.5, 0),
+    );
+    return row;
+  }
+
+  private readonly startPractice = (trackId: TrackId): void => {
+    this.closeTrackPicker();
+    this.scene.start(RaceScene.KEY, { trackId, mode: 'practice' });
+  };
+
+  private readonly closeTrackPicker = (): void => {
+    this.trackOverlay?.destroy();
+    this.trackOverlay = null;
   };
 
   /**

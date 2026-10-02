@@ -1,0 +1,1616 @@
+import Phaser from 'phaser';
+import { getAudioEngine } from '../audio/AudioManager';
+import {
+  CIRCUIT,
+  COUNTDOWN,
+  GAMEOVER_TRANSITION_MS,
+  GHOST_INTERPOLATION_MS,
+  MUTE_BUTTON,
+  MULTIPLAYER,
+  RACE,
+  RACE_CONFETTI,
+  RACE_FINISH_GRACE_MS,
+  RACE_HUD,
+  RACE_LAP_BANNER,
+  RACE_MULTI,
+  SPECTATOR_OVERLAY,
+  STATE_HZ,
+  TOUCH_HUD,
+} from '../config/balance';
+import { isRaceSpectatorChatVisible } from '../chat/spectatorChat';
+import { getSessionChatStore } from '../chat/chatSession';
+import { receiveRoomChat } from '../chat/roomChat';
+import { ROOM_THREAD_ID } from '../chat/ChatStore';
+import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
+import {
+  circuitInputFromState,
+  computeRaceTouchLayout,
+  RaceKeyboardSource,
+  RACE_TOUCH_ACTIONS,
+  type RaceTouchAction,
+} from '../race/raceControls';
+import { assignGridOrder, type GridSlot } from '../race/gridOrder';
+import { CircuitPhysics, type CarState } from '../race/circuitPhysics';
+import { LapTracker } from '../race/lapTracker';
+import {
+  finalClassification,
+  rankCars,
+  type FinalCar,
+  type FinalStanding as RaceFinalStanding,
+  type RankedCar,
+} from '../race/raceRanking';
+import {
+  fastestRaceLap,
+  parseRaceSceneInit,
+  raceMultiResultsPayload,
+  racePracticeResultsPayload,
+  type RaceSceneInit,
+} from '../race/results';
+import { raceEngineSpeed } from '../race/raceAudio';
+import {
+  sampleFromProgress,
+  unrollProgress,
+  type RaceRemoteSample,
+} from '../race/raceRemote';
+import { RacePlausibility } from '../race/racePlausibility';
+import { RaceStaleTracker } from '../race/raceStale';
+import {
+  parseRaceFinishPayload,
+  parseRaceOverPayload,
+  roundRaceFinishPayload,
+  roundRaceStatePayload,
+  type PlayerInfo,
+} from '../net/protocol';
+import { takeSessionNetClient } from '../net/netClientSession';
+import type { NetClient } from '../net/NetClient';
+import { SnapshotBuffer } from '../net/interpolation';
+import { buildTrackPath, getTrackById, TRACKS, type TrackDefinition } from '../race/tracks';
+import type { TrackPath, TrackProjection } from '../race/trackPath';
+import { CountdownSystem, type CountdownLabel } from '../systems/CountdownSystem';
+import { PauseSystem } from '../systems/PauseSystem';
+import { TouchButton } from '../systems/TouchButton';
+import type { PointerEventEmitter } from '../systems/TouchSource';
+import { InputSystem, type IInputSource, type IInputState } from '../systems/InputSystem';
+import { RemoteCar } from '../entities/RemoteCar';
+import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { formatLapBadge } from '../ui/format';
+import { MiniMap } from '../ui/MiniMap';
+import { MenuButton } from '../ui/MenuButton';
+import { MuteButton } from '../ui/MuteButton';
+import { PixelButton, type PixelButtonStyle } from '../ui/PixelButton';
+import { RaceHud } from '../ui/RaceHud';
+import { ChatScene } from './ChatScene';
+import { GameOverScene } from './GameOverScene';
+import { PauseScene } from './PauseScene';
+
+/* ------------------------------------------------------------------ */
+/* Constantes visuales del circuito (presentación, no gameplay)         */
+/* ------------------------------------------------------------------ */
+
+/** Prefijo de la textura pre-horneada por pista (`race-track-<id>`). */
+const TRACK_TEXTURE_PREFIX = 'race-track-';
+
+/**
+ * Offset de rotación del sprite: la textura del auto apunta hacia ARRIBA
+ * (−Y) mientras el heading de la física es atan2-style (0 = +X).
+ */
+const CAR_SPRITE_ANGLE_OFFSET = Math.PI / 2;
+
+/** Ancho de las franjas de corte del pasto (px, alternadas con grassAlt). */
+const GRASS_STRIPE_PX = 200;
+
+/** Largo de cada bloque de kerb a lo largo del arco (px). */
+const KERB_BLOCK_PX = 64;
+/** Cuánto sobresale el kerb más allá del borde del asfalto (px). */
+const KERB_EXTRA_WIDTH_PX = 18;
+/** Curvatura mínima (1/px) que merece kerbs: radio < ~333 px. */
+const KERB_CURVATURE_THRESHOLD = 0.003;
+
+/** Grosor de las líneas blancas del borde del asfalto (px). */
+const EDGE_LINE_WIDTH_PX = 4;
+/** Color de las líneas del borde (blanco hueso de la paleta kerbAlt-ish). */
+const EDGE_LINE_COLOR = 0xe8e6e0;
+
+/** Banda de goma ("groove") sobre el asfalto, como fracción del ancho. */
+const GROOVE_WIDTH_RATIO = 0.62;
+
+/** Meta a cuadros: filas × columnas de cuadraditos sobre el ancho. */
+const START_LINE_ROWS = 2;
+const START_LINE_SQUARES = 8;
+
+/** Marcas de sector: línea fina translúcida cruzando el asfalto. */
+const SECTOR_MARK_ALPHA = 0.28;
+const SECTOR_MARK_WIDTH_PX = 6;
+
+/** Cartel de fin de carrera (bandera a cuadros). */
+const FINISH_LABEL = '¡BANDERA A CUADROS!';
+const FINISH_LABEL_FONT_SIZE = 56;
+/** Altura del cartel de fin sobre el centro de la pantalla (px). */
+const FINISH_LABEL_OFFSET_Y = 160;
+
+/**
+ * Seed de la parrilla en práctica: un solo corredor, siempre en la pole.
+ * Determinista para que la salida sea idéntica en cada sesión.
+ */
+const PRACTICE_GRID_SEED = 0;
+
+/** Color del tinte del punto del jugador en el minimapa (rojo F1 propio). */
+const PLAYER_MINIMAP_TINT = 0xd63c3c;
+
+/** Subtítulo del espectador tras terminar la propia carrera (V2 multi). */
+const SPECTATOR_SUBTITLE = 'MODO ESPECTADOR — SIGUIENDO AL LÍDER';
+const SPECTATOR_SUBTITLE_FONT_SIZE = 30;
+/** Altura del subtítulo de espectador bajo el cartel de fin (px). */
+const SPECTATOR_SUBTITLE_OFFSET_Y = 70;
+
+/**
+ * V3 — botón CHAT del espectador de carrera: centrado bajo el subtítulo del
+ * cartel de fin, con el MISMO ritmo que el overlay de espectador de la
+ * BATALLA (SPECTATOR_OVERLAY: cartel → subtítulo → botón a +88 px).
+ */
+const SPECTATOR_CHAT_BUTTON_GAP_PX = 88;
+/** Tinte del botón CHAT (idem overlay de espectador de GameScene). */
+const SPECTATOR_CHAT_TINT = 0xb04ee0;
+
+/**
+ * Período del barrido de staleness (s, patrón sweepStaleTick de GameScene):
+ * el umbral REAL es PLAYER_STALE_MS (RaceStaleTracker); esto sólo fija cada
+ * cuánto se pregunta — no hace falta por frame.
+ */
+const STALE_SWEEP_INTERVAL_S = 1;
+
+/** Normaliza un ángulo a (−π, π] (la tangente de TrackPath vive ahí). */
+function normalizeAngle(angle: number): number {
+  let a = angle;
+  while (a > Math.PI) {
+    a -= Math.PI * 2;
+  }
+  while (a < -Math.PI) {
+    a += Math.PI * 2;
+  }
+  return a;
+}
+
+/**
+ * Fuente táctil de la carrera (implementa `IInputSource`): reutiliza la
+ * lógica de `TouchButton` (tracking multi-touch por pointerId, hit-test
+ * manual que no roba eventos al juego) y la presentación `PixelButton`, con
+ * el layout propio del circuito (◀ ▶ + FRENO) de `raceControls`. Es la
+ * hermana chica de `TouchSource` (GameScene) sin GAS/TURBO/DRS: el circuito
+ * es auto-acelerado.
+ */
+class RaceTouchControls implements IInputSource {
+  readonly name = 'race-touch';
+
+  private readonly buttons: readonly TouchButton[];
+  private readonly emitter: PointerEventEmitter | null;
+  private attached = false;
+
+  constructor(scene: Phaser.Scene) {
+    const { width, height } = scene.scale;
+    const layout = computeRaceTouchLayout(width, height);
+    const styles: Record<RaceTouchAction, PixelButtonStyle> = {
+      left: { icon: TEXTURE_KEYS.hudArrowLeft, tint: 0x3c6cd6 },
+      right: { icon: TEXTURE_KEYS.hudArrowRight, tint: 0x3c6cd6 },
+      brake: { label: 'FRENO', tint: 0xd63c3c },
+    };
+
+    this.buttons = RACE_TOUCH_ACTIONS.map((action) => {
+      const rect = layout[action];
+      const visual = new PixelButton(scene, rect, styles[action]);
+      // La cámara de la escena scrollea: el HUD táctil vive en pantalla.
+      visual.container.setScrollFactor(0);
+      return new TouchButton({
+        action,
+        rect,
+        visual,
+        hitPadding: TOUCH_HUD.hitPadding,
+      });
+    });
+
+    this.emitter = scene.input;
+  }
+
+  attach(): void {
+    if (this.attached || !this.emitter) {
+      return;
+    }
+    this.attached = true;
+    this.emitter.on('pointerdown', this.onPointerDown);
+    this.emitter.on('pointerup', this.onPointerUp);
+    this.emitter.on('pointerupoutside', this.onPointerUp);
+  }
+
+  detach(): void {
+    if (!this.attached) {
+      return;
+    }
+    this.attached = false;
+    this.emitter?.off('pointerdown', this.onPointerDown);
+    this.emitter?.off('pointerup', this.onPointerUp);
+    this.emitter?.off('pointerupoutside', this.onPointerUp);
+    for (const button of this.buttons) {
+      button.forceRelease();
+    }
+  }
+
+  destroy(): void {
+    this.detach();
+    for (const button of this.buttons) {
+      button.destroy();
+    }
+  }
+
+  /** Porción de `IInputState` que llena esta fuente (giro + freno). */
+  getState(): IInputState {
+    const pressed = (action: RaceTouchAction): boolean =>
+      this.buttons.find((button) => button.action === action)?.isPressed ?? false;
+    return {
+      left: pressed('left'),
+      right: pressed('right'),
+      throttle: false,
+      brake: pressed('brake'),
+      turbo: false,
+      drs: false,
+    };
+  }
+
+  private readonly onPointerDown = (pointer: { id: number; x: number; y: number }): void => {
+    for (const button of this.buttons) {
+      if (button.contains(pointer.x, pointer.y)) {
+        button.press(pointer.id);
+      }
+    }
+  };
+
+  private readonly onPointerUp = (pointer: { id: number; x: number; y: number }): void => {
+    for (const button of this.buttons) {
+      button.release(pointer.id);
+    }
+  };
+}
+
+/**
+ * RaceScene — carrera en circuito local, modo ENTRENAR (issue #9, V1).
+ *
+ * Una persona corre sola una de las 5 pistas, 3 vueltas, con countdown,
+ * HUD de vuelta/tiempos, minimapa, pausa y pantalla de resultados. Es la
+ * base de V2 (multi): la escena SOLO orquesta render/input — la lógica ya
+ * existe en `race/` (TrackPath, CircuitPhysics, LapTracker, gridOrder,
+ * raceRanking) y no se duplica acá.
+ *
+ * Decisiones documentadas:
+ * - AUTO: sprite directo con la textura procedural del jugador
+ *   (`TEXTURE_KEYS.playerCar`) controlado por `CircuitPhysics`. NO se reusa
+ *   `PlayerCar`: esa entidad está soldada al modo scroll vertical (clamps a
+ *   los bordes de pista, velocidad lateral con drag, body de arcade physics)
+ *   — incrustarla habría sido luchar contra su propio modelo. El sprite
+ *   puro + física propia es la opción menos forzada; V2 agrega sprites por
+ *   peer sobre el mismo patrón.
+ * - PISTA: pre-render a UNA textura por pista (`race-track-<id>`, patrón
+ *   TextureFactory: `Graphics` one-shot → `generateTexture`): pasto con
+ *   franjas de corte, cinta de asfalto sobre la polilínea densa con banda de
+ *   goma, kerbs rojo/blanco en las zonas de curvatura alta, líneas blancas
+ *   de borde, meta a cuadros en s=0 y marcas sutiles de sector. Cero
+ *   `Graphics` dinámicos por frame.
+ * - CÁMARA: única y fija en zoom `RACE.cameraZoom`, norte arriba, sigue al
+ *   auto con lerp y queda clampada al mundo; todo el HUD usa
+ *   `setScrollFactor(0)`.
+ * - INPUT: mismo stack que el modo BATALLA (`IInputState` fusionado por
+ *   `InputSystem`) con fuentes propias de carrera (teclado auto-acelerado y
+ *   ◀ ▶ + FRENO táctil); el puente a la física es el puro
+ *   `circuitInputFromState`.
+ * - PAUSA: igual que GameScene (PauseSystem + PauseScene encima, tecla P,
+ *   auto-pausa por blur) — PauseScene ahora recibe la escena objetivo por
+ *   init data (default Game: regresión cero en el modo BATALLA).
+ * - FIN: al completar `CIRCUIT.totalLaps` vueltas válidas (LapTracker) el
+ *   mundo se congela y la escena transiciona a la rama de resultados de
+ *   carrera de GameOverScene con `racePracticeResultsPayload`.
+ *
+ * V2 (issue #9) — MODO MULTI (`mode:'race'`, init data extendido de
+ * LobbyScene): misma escena y misma física, con la capa de red de la BATALLA
+ * (#1) y acciones NUEVAS aditivas (`rstate`/`rfin`/`race-over`). La parrilla
+ * posiciona a TODO el roster (`assignGridOrder` con la seed de la sala); el
+ * estado propio viaja a STATE_HZ en coordenadas de pista y los rivales se
+ * reconstruyen interpolando el progreso DESENROLLADO con el TrackPath local
+ * (`race/raceRemote`) — continuo en la meta. Ranking vivo (`rankCars`) →
+ * badge Pn/N en el HUD. El primer `rfin` gana; la carrera cierra cuando
+ * terminan todos o vence `RACE_FINISH_GRACE_MS`, y el ganador difunde
+ * `race-over` con `finalClassification`. Quien terminó specta siguiendo al
+ * líder. En multi NO hay pausa (la red no se pausa, igual que GameScene).
+ *
+ * V3 (issue #9) — robustez: el progreso ajeno pasa un filtro de
+ * plausibilidad contra el tope físico (`race/racePlausibility`; un avance
+ * imposible se ignora, un retroceso se acepta — no gana nada), los peers que
+ * dejan de mandar `rstate` salen del mundo a `PLAYER_STALE_MS` y clasifican
+ * como `disconnected` (`race/raceStale`, patrón MatchTracker de #1), y el
+ * chat de espectador de #2 se extiende a "terminó la propia carrera"
+ * (`isRaceSpectatorChatVisible`): quien cruzó la bandera lee y escribe en la
+ * sala mientras sigue al líder actual del ranking vivo.
+ *
+ * V4 (issue #9) — pulido: dron del motor por velocidad (arranca con el GO!,
+ * el update emite `speed` con el mapeo normalizado de `race/raceAudio` y se
+ * apaga en pausa/fin/shutdown por el bus de sesión — la API del AudioManager
+ * es la misma de la BATALLA, perfil móvil de #4 incluido), cartel pop
+ * "¡VUELTA n/N!" al completar cada vuelta que no sea la final, burst de
+ * confeti al cruzar la meta propia y vuelta rápida de la carrera (el mejor
+ * `bestLapMs` de los `rfin`, elegida por `fastestRaceLap`) viajando en el
+ * payload de resultados para que el podio multi la destaque.
+ */
+export class RaceScene extends Phaser.Scene {
+  static readonly KEY = 'Race';
+
+  /* Init data (parseado defensivo en init()). */
+  private sceneInit: RaceSceneInit = parseRaceSceneInit(undefined);
+
+  /* Núcleo puro de la carrera (issue #9, V0). */
+  private trackDef!: TrackDefinition;
+  private path!: TrackPath;
+  private carPhysics!: CircuitPhysics;
+  private lapTracker!: LapTracker;
+  private carState!: CarState;
+
+  /* Render del mundo + auto. */
+  private carSprite!: Phaser.GameObjects.Image;
+
+  /** Bus de sesión (audio del motor, botones de HUD). Resuelto en create. */
+  private bus!: EventBus<GameEvents>;
+
+  /**
+   * V4 — confeti del cruce de meta final (one-shot: creado con `emitting:
+   * false` y disparado con `explode` una sola vez por carrera, igual que los
+   * bursts de GameScene). Objeto de escena: el SHUTDOWN lo destruye.
+   */
+  private confettiEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
+
+  /* Input de carrera (mismo stack fusionado que el modo BATALLA). */
+  private inputSystem!: InputSystem;
+  private keyboard!: RaceKeyboardSource;
+  private touch!: RaceTouchControls;
+
+  /* HUD de pantalla (scrollFactor 0). */
+  private hudWidgets: { destroy(): void }[] = [];
+  private raceHud!: RaceHud;
+  private miniMap!: MiniMap;
+
+  /* Fase countdown 3-2-1-GO! (mismo CountdownSystem puro del modo BATALLA). */
+  private countdown!: CountdownSystem;
+  private countdownText!: Phaser.GameObjects.Text;
+
+  /* Pausa real (mismo patrón de GameScene, overlay con escena objetivo). */
+  private pauseSystem!: PauseSystem;
+  private pauseKey: Phaser.Input.Keyboard.Key | null = null;
+
+  /** true al completar la última vuelta: mundo congelado, transición en cola. */
+  private finished = false;
+
+  /* ---------------------------------------------------------------- */
+  /* V2 — carrera multijugador (mode: 'race', issue #9)                */
+  /*                                                                  */
+  /* El netcode es el de la BATALLA (#1) con acciones NUEVAS (patrón    */
+  /* aditivo del chat): `rstate` a STATE_HZ en coordenadas de pista,    */
+  /* `rfin` al terminar y `race-over` del ganador. El estado propio lo  */
+  /* genera la física local; el de los rivales se reconstruye del       */
+  /* progreso desenrollado interpolado con el TrackPath determinista.   */
+  /* ---------------------------------------------------------------- */
+
+  /** Parrilla completa (propia + remotos), determinista por (seed, roster). */
+  private gridSlots: GridSlot[] = [];
+  /** Transporte heredado del lobby vía registry (null en práctica). */
+  private netClient: NetClient | null = null;
+  /** Desuscripciones de red (limpian en SHUTDOWN). */
+  private netUnsubs: (() => void)[] = [];
+  /** Sprites remotos por peer (posición reconstruida del stream). */
+  private remotes = new Map<string, RemoteCar>();
+  /** Buffer de interpolación del progreso desenrollado por peer. */
+  private remoteBuffers = new Map<string, SnapshotBuffer<RaceRemoteSample>>();
+  /** Último (lap, s) crudo recibido por peer (ranking vivo). */
+  private remoteProgress = new Map<string, { lap: number; s: number }>();
+  /** `rfin` recibidos/propios por peer (tiempos exactos de los terminados). */
+  private finishedPeers = new Map<string, { totalMs: number; bestLapMs: number }>();
+  /** Peers fuera de la carrera sin terminar (leave o stale V3): en la
+   *  clasificación final van como `disconnected` con su último progreso. */
+  private disconnectedPeers = new Set<string>();
+  /** Primer `rfin` visto (ganador + instante local del arranque de gracia). */
+  private firstFinish: { peerId: string; at: number } | null = null;
+  /** Clasificación recibida por `race-over` (manda sobre la local). */
+  private raceOverStandings: RaceFinalStanding[] | null = null;
+  /** true tras difundir el propio `race-over` (idempotencia del ganador). */
+  private raceOverSent = false;
+  /** true cuando la carrera multi concluyó (transición a resultados). */
+  private raceConcluded = false;
+  /** true al terminar las 3 vueltas propias (paso a espectador). */
+  private selfFinished = false;
+  /** Acumulador del broadcast `rstate` (ventana de 1/STATE_HZ). */
+  private stateAccumulatorMs = 0;
+  /** Acumulador del ranking vivo (RACE_MULTI.rankIntervalMs). */
+  private rankAccumulatorMs = 0;
+  /** Última proyección del auto propio (broadcast/ranking del frame). */
+  private lastProjection: TrackProjection = { s: 0, lateral: 0, angle: 0 };
+  /** Peer cuyo sprite sigue la cámara (switch del espectador). */
+  private followingPeerId: string | null = null;
+
+  /* ---------------------------------------------------------------- */
+  /* V3 — robustez (plausibilidad, staleness, chat de espectador)      */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Filtro de plausibilidad del progreso ajeno (por peer, contra el tope
+   * físico de `CIRCUIT`): un avance imposible se ignora y espera el próximo
+   * `rstate` — sin árbitro P2P, es la única confianza validable.
+   */
+  private plausibility = new RacePlausibility();
+  /** Presencia de peers: quién dejó de mandar `rstate` (PLAYER_STALE_MS). */
+  private staleTracker = new RaceStaleTracker();
+  /** Acumulador del barrido de staleness (~1 vez por segundo, patrón #1). */
+  private staleSweepAccumulatorS = 0;
+  /** Botón CHAT del espectador de carrera (sólo tras el `rfin` propio). */
+  private spectatorChatButton: MenuButton | null = null;
+
+  constructor() {
+    super(RaceScene.KEY);
+  }
+
+  /**
+   * Init data de escena: `{ trackId, mode: 'practice' }` desde el selector
+   * de pistas del menú (o desde el REINTENTAR de resultados). Parseo
+   * defensivo: payload ausente o inválido degrada a la pista por default.
+   */
+  init(data: unknown): void {
+    this.sceneInit = parseRaceSceneInit(data);
+  }
+
+  create(): void {
+    const { width, height } = this.scale;
+
+    // Pista + núcleo puro frescos (el restart reutiliza la instancia).
+    this.finished = false;
+    this.bus = this.sessionBus();
+    this.trackDef = getTrackById(this.sceneInit.trackId) ?? TRACKS[0];
+    this.path = buildTrackPath(this.trackDef);
+    this.carPhysics = new CircuitPhysics(this.path, this.trackDef.widthPx);
+    this.lapTracker = new LapTracker(this.path);
+
+    // Parrilla determinista detrás de la meta: práctica = un solo corredor
+    // en la pole; multi = TODO el roster (misma seed ⇒ misma parrilla en
+    // todos los clientes, ver `gridOrder`).
+    this.gridSlots = this.isMultiRace()
+      ? assignGridOrder(this.rosterPlayers, this.sceneInit.seed ?? 0, this.path)
+      : assignGridOrder([{ peerId: 'player' }], PRACTICE_GRID_SEED, this.path);
+    const ownSlot = this.isMultiRace()
+      ? (this.gridSlots.find((slot) => slot.peerId === this.myPeerId) ??
+        this.gridSlots[0])
+      : this.gridSlots[0];
+    this.carState = {
+      x: ownSlot.x ?? this.path.sample(0).x,
+      y: ownSlot.y ?? this.path.sample(0).y,
+      heading: ownSlot.angle ?? 0,
+      speed: 0,
+    };
+
+    // Mundo estático: la pista pre-horneada en UNA imagen + el auto encima.
+    this.add.image(0, 0, this.ensureTrackTexture()).setOrigin(0, 0).setDepth(0);
+    this.carSprite = this.add
+      .sprite(this.carState.x, this.carState.y, TEXTURE_KEYS.playerCar)
+      .setDepth(10);
+    this.syncCarSprite();
+
+    // V4 — confeti del cruce de meta final: burst multicolor one-shot sobre
+    // el auto (tint = paleta de la sala, cero colores mágicos nuevos).
+    this.confettiEmitter = this.add
+      .particles(0, 0, TEXTURE_KEYS.particle, {
+        lifespan: RACE_CONFETTI.lifespanMs,
+        speed: { min: RACE_CONFETTI.speedMin, max: RACE_CONFETTI.speedMax },
+        angle: { min: RACE_CONFETTI.angleMin, max: RACE_CONFETTI.angleMax },
+        scale: { start: RACE_CONFETTI.scaleStart, end: 0 },
+        alpha: { start: 1, end: 0 },
+        tint: [...MULTIPLAYER.palette],
+        emitting: false,
+      })
+      .setDepth(RACE_CONFETTI.depth);
+
+    // Cámara: norte arriba, zoom fijo, sigue con lerp, clampada al mundo.
+    this.cameras.main.setBounds(
+      0,
+      0,
+      this.trackDef.worldSize.width,
+      this.trackDef.worldSize.height,
+    );
+    this.cameras.main.setZoom(RACE.cameraZoom);
+    this.cameras.main.startFollow(this.carSprite, false, RACE.cameraLerp, RACE.cameraLerp);
+
+    // Evento de fin: LapTracker avisa al completar la última vuelta válida.
+    // En práctica congela el mundo y va a resultados; en multi difunde el
+    // `rfin` propio (una vez) y pasa a espectador.
+    this.lapTracker.onRaceFinished = (event) => {
+      if (this.isMultiRace()) {
+        this.handleSelfRaceFinished(event);
+      } else {
+        this.finishRace();
+      }
+    };
+
+    // V4 — cartel pop al completar una vuelta válida que NO sea la última
+    // (la última ya tiene su cartel de BANDERA A CUADROS + confeti).
+    this.lapTracker.onLapCompleted = (event) => {
+      if (event.lap < CIRCUIT.totalLaps) {
+        this.showLapBanner(event.lap);
+      }
+    };
+
+    // Input de carrera: teclado propio + táctil propio, fusionados por el
+    // mismo InputSystem del modo BATALLA.
+    this.keyboard = new RaceKeyboardSource(this.input.keyboard ?? null);
+    this.touch = new RaceTouchControls(this);
+    this.inputSystem = new InputSystem([this.keyboard, this.touch]);
+    this.inputSystem.attach();
+
+    // Countdown 3-2-1-GO!: el mundo (física, vueltas, input) queda en gate
+    // hasta terminar la cuenta — igual criterio que GameScene.
+    this.pauseSystem = new PauseSystem();
+    this.countdown = new CountdownSystem();
+    this.createCountdownText(width, height);
+    this.renderCountdownLabel(this.countdown.label ?? '3');
+
+    this.createHud(width, height);
+
+    // Pausa real sólo en práctica: en multi la red no se pausa (mismo
+    // criterio que GameScene en la BATALLA) — ni botón, ni tecla, ni blur.
+    if (this.isMultiRace()) {
+      this.setupMultiRace();
+    } else {
+      this.createPauseControls();
+      // Pausa automática por pérdida de foco (HIDDEN/BLUR), como GameScene.
+      this.game.events.on(Phaser.Core.Events.HIDDEN, this.pauseGame);
+      this.game.events.on(Phaser.Core.Events.BLUR, this.pauseGame);
+      this.events.on(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
+    }
+
+    // HUD con el estado inicial (la cuenta aún no arrancó los relojes).
+    this.raceHud.setLap(this.lapTracker.currentLap, CIRCUIT.totalLaps);
+    this.raceHud.setTimings(this.lapTracker.currentLapMs, this.lapTracker.totalMs);
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.inputSystem.detach();
+      this.touch.destroy();
+      for (const widget of this.hudWidgets) {
+        widget.destroy();
+      }
+      this.hudWidgets = [];
+      if (!this.isMultiRace()) {
+        this.game.events.off(Phaser.Core.Events.HIDDEN, this.pauseGame);
+        this.game.events.off(Phaser.Core.Events.BLUR, this.pauseGame);
+        this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
+      }
+      this.teardownMultiRace();
+      // V4 — salida por cualquier camino (MENÚ desde la pausa, transición a
+      // resultados): corta el dron del motor sin SFX de crash. No-op si ya
+      // se apagó con el fin de la carrera.
+      this.bus.emit('game-aborted', undefined);
+    });
+  }
+
+  override update(_time: number, delta: number): void {
+    const dt = delta / 1000;
+
+    // Carrera terminada (práctica congelada o carrera multi concluida): el
+    // mundo queda congelado y sólo corre el delayedCall de la transición.
+    if (this.finished || this.raceConcluded) {
+      return;
+    }
+
+    // Tecla P: pausa con JustDown (anti auto-repeat), igual que GameScene.
+    // (En multi no hay pauseKey: el chequeo ni siquiera corre.)
+    if (this.pauseKey && Phaser.Input.Keyboard.JustDown(this.pauseKey)) {
+      this.pauseGame();
+      return;
+    }
+
+    // Countdown 3-2-1-GO!: nada de física ni vueltas hasta el GO!.
+    if (!this.countdown.isFinished) {
+      this.updateCountdown(dt);
+      return;
+    }
+
+    // ÚNICA lectura de input por frame → CircuitInput de la física pura.
+    // En multi, quien terminó su carrera deja de conducir (espectador).
+    if (!this.selfFinished) {
+      const input = circuitInputFromState(this.inputSystem.getState());
+      this.carPhysics.step(this.carState, dt, input);
+      // V4 — el dron del motor sigue la velocidad del auto (arranca con el
+      // GO!; se apaga en pausa/fin/shutdown por el bus de sesión).
+      this.bus.emit('speed', raceEngineSpeed(this.carState.speed));
+    }
+
+    // Vueltas: la coordenada de arco del frame alimenta al LapTracker.
+    const projection = this.path.project(this.carState.x, this.carState.y);
+    this.lastProjection = projection;
+    if (!this.selfFinished) {
+      this.lapTracker.update(projection.s, delta);
+    }
+
+    // Presentación: sprite del auto, minimapa y HUD de vuelta/tiempos.
+    this.syncCarSprite();
+    this.syncMiniMap();
+    this.raceHud.setLap(this.lapTracker.currentLap, CIRCUIT.totalLaps);
+    this.raceHud.setTimings(this.lapTracker.currentLapMs, this.lapTracker.totalMs);
+
+    // Multijugador: broadcast propio a STATE_HZ, rivales interpolados,
+    // ranking vivo, staleness y condiciones de cierre de la carrera.
+    if (this.isMultiRace()) {
+      this.broadcastRaceState(projection, delta);
+      this.syncRemoteCars();
+      this.updateLiveRanking(delta);
+      this.sweepStaleTick(delta);
+      this.checkRaceEnd();
+    }
+  }
+
+  /** true si esta escena corre la carrera MULTIJUGADOR (V2). */
+  private isMultiRace(): boolean {
+    return this.sceneInit.mode === 'race';
+  }
+
+  /** peerId propio (V2; '' en práctica). */
+  private get myPeerId(): string {
+    return this.sceneInit.myPeerId ?? '';
+  }
+
+  /** Roster congelado del start (V2; vacío en práctica). */
+  private get rosterPlayers(): PlayerInfo[] {
+    return this.sceneInit.players ?? [];
+  }
+
+  /** Minimapa: el auto propio + un punto por rival con SU color del roster. */
+  private syncMiniMap(): void {
+    const cars = [
+      { id: 'player', x: this.carState.x, y: this.carState.y, tint: PLAYER_MINIMAP_TINT },
+    ];
+    for (const [peerId, car] of this.remotes) {
+      cars.push({ id: peerId, ...car.position, tint: car.player.color });
+    }
+    this.miniMap.updateCars(cars);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Presentación                                                      */
+  /* ---------------------------------------------------------------- */
+
+  /** Sincroniza el sprite con el estado de la física (posición + heading). */
+  private syncCarSprite(): void {
+    this.carSprite.setPosition(this.carState.x, this.carState.y);
+    this.carSprite.rotation = this.carState.heading + CAR_SPRITE_ANGLE_OFFSET;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* V2 — carrera multijugador                                         */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Arma la capa multi: toma el NetClient que el lobby entregó por registry,
+   * crea un RemoteCar en SU casilla de parrilla por rival y se suscribe a
+   * las acciones nuevas de la carrera (`rstate`/`rfin`/`race-over`).
+   */
+  private setupMultiRace(): void {
+    const players = this.rosterPlayers;
+    const slotsByPeer = new Map(this.gridSlots.map((slot) => [slot.peerId, slot]));
+
+    // V3: filtros frescos (la instancia de escena sobrevive a los restarts).
+    this.plausibility = new RacePlausibility();
+    this.staleTracker = new RaceStaleTracker();
+
+    for (const player of players) {
+      if (player.peerId === this.myPeerId) {
+        continue;
+      }
+      const slot = slotsByPeer.get(player.peerId);
+      const car = new RemoteCar(this, player);
+      if (slot?.x !== undefined && slot?.y !== undefined) {
+        car.sync(slot.x, slot.y, slot.angle ?? 0);
+      }
+      this.remotes.set(player.peerId, car);
+      this.remoteBuffers.set(player.peerId, new SnapshotBuffer<RaceRemoteSample>());
+      this.remoteProgress.set(player.peerId, { lap: 0, s: slot?.s ?? 0 });
+      // Presencia inicial (base del stale para quien NUNCA mande `rstate`,
+      // igual criterio que el startedAt de MatchTracker).
+      this.staleTracker.record(player.peerId, this.time.now);
+    }
+
+    this.netClient = takeSessionNetClient(this.registry);
+    const client = this.netClient;
+    if (!client) {
+      return; // Degradación defensiva: carrera multi sin transporte.
+    }
+    this.netUnsubs.push(
+      client.onRaceState((peerId, payload) => this.handleRaceState(peerId, payload)),
+      client.onRaceFinish((peerId, payload) => this.handleRaceFinish(peerId, payload)),
+      client.onRaceOver((peerId, payload) => this.handleRaceOver(peerId, payload)),
+      client.onPeerLeave((peerId) => this.handlePeerLeftRace(peerId)),
+      // Chat de sala (V3): sigue llegando durante TODA la carrera — entra al
+      // store de sesión y el espectador (quien terminó) lo lee/escribe desde
+      // el overlay. Mismo cableado que el espectador de la BATALLA (#2).
+      client.onChat((fromPeerId, payload) => {
+        const store = getSessionChatStore(this.registry);
+        if (store) {
+          receiveRoomChat(store, client.getRoster(), fromPeerId, payload, Date.now());
+        }
+      }),
+    );
+  }
+
+  /** SHUTDOWN multi: sprites y suscripciones fuera, transporte destruido. */
+  private teardownMultiRace(): void {
+    for (const unsub of this.netUnsubs) {
+      unsub();
+    }
+    this.netUnsubs = [];
+    for (const car of this.remotes.values()) {
+      car.destroy();
+    }
+    this.remotes.clear();
+    this.remoteBuffers.clear();
+    this.plausibility.clear();
+    this.staleTracker.clear();
+    this.spectatorChatButton = null;
+    // La RaceScene heredó el cliente del lobby (handoff por registry): al
+    // apagarse (resultados, salida), la sala muere con la carrera.
+    this.netClient?.destroy();
+    this.netClient = null;
+  }
+
+  /**
+   * Llegó `rstate` de un rival: el payload se RE-normaliza con la pista local
+   * (misma función que el emisor — defensa en profundidad contra un peer
+   * corrupto) y alimenta el buffer como progreso DESENROLLADO (monótono, no
+   * salta en la meta) más el último (lap, s) crudo para el ranking.
+   *
+   * V3 — antes de tocar nada, el progreso pasa el filtro de plausibilidad
+   * (`race/racePlausibility`): un avance físicamente imposible se IGNORA
+   * (buffer, ranking y presencia ni se enteran) y se espera el próximo
+   * `rstate`; un sample aceptado refresca la presencia del peer (staleness).
+   */
+  private handleRaceState(peerId: string, payload: {
+    s: number;
+    o: number;
+    v: number;
+    lap: number;
+  }): void {
+    if (!this.remoteBuffers.has(peerId)) {
+      return; // Peer desconocido (no está en el roster congelado): ignorar.
+    }
+    const clean = roundRaceStatePayload(
+      payload,
+      this.path.totalLength,
+      this.trackDef.widthPx / 2,
+    );
+    const progress = unrollProgress(clean.lap, clean.s, this.path.totalLength);
+    if (!this.plausibility.accept(peerId, progress, this.time.now)) {
+      return; // Avance imposible: se ignora, se espera el próximo rstate.
+    }
+    this.staleTracker.record(peerId, this.time.now);
+    this.remoteBuffers.get(peerId)?.push({
+      t: this.time.now,
+      progress,
+      o: clean.o,
+    });
+    this.remoteProgress.set(peerId, { lap: clean.lap, s: clean.s });
+  }
+
+  /** Llegó `rfin`: ese peer terminó sus 3 vueltas con estos tiempos. */
+  private handleRaceFinish(peerId: string, payload: unknown): void {
+    const clean = parseRaceFinishPayload(payload);
+    if (!clean || !this.rosterPlayers.some((player) => player.peerId === peerId)) {
+      return;
+    }
+    this.finishedPeers.set(peerId, clean);
+    if (!this.firstFinish) {
+      this.firstFinish = { peerId, at: this.time.now };
+    }
+  }
+
+  /**
+   * Llegó `race-over` del ganador: su clasificación manda sobre la local.
+   * Mismo gate de roster que el `rfin` (un remitente fuera del roster
+   * congelado no puede concluir la carrera de todos).
+   */
+  private handleRaceOver(peerId: string, payload: unknown): void {
+    if (!this.rosterPlayers.some((player) => player.peerId === peerId)) {
+      return; // Remitente desconocido (no está en el roster congelado): ignorar.
+    }
+    const parsed = parseRaceOverPayload(payload);
+    if (!parsed) {
+      return;
+    }
+    this.raceOverStandings = parsed.standings;
+  }
+
+  /**
+   * Un peer se fue de la sala (V3): su coche se DESTRUYE (desaparece del
+   * mundo y del minimapa) y entra a la clasificación final como
+   * `disconnected` con su último progreso conocido (`remoteProgress` queda).
+   */
+  private handlePeerLeftRace(peerId: string): void {
+    this.disconnectedPeers.add(peerId);
+    this.staleTracker.markStale(peerId);
+    this.removeRemoteCar(peerId);
+  }
+
+  /**
+   * V3 — quita el coche de un peer del mundo SIN borrar su último progreso:
+   * el sprite sale de remotes (mundo + minimapa) y su buffer de
+   * interpolación se vacía, pero `remoteProgress` queda para que
+   * `finalClassification` lo clasifique por su último avance.
+   */
+  private removeRemoteCar(peerId: string): void {
+    this.remotes.get(peerId)?.destroy();
+    this.remotes.delete(peerId);
+    this.remoteBuffers.delete(peerId);
+  }
+
+  /**
+   * Barrido de staleness ~1 vez por segundo (mismo patrón que GameScene):
+   * todo rival a más de PLAYER_STALE_MS sin `rstate` (pestaña muerta, red
+   * caída sin leave) sale del mundo y clasifica como `disconnected`. Quien ya
+   * terminó dejó de emitir `rstate` POR DISEÑO (`broadcastRaceState` corta con
+   * `selfFinished`): no es un peer caído — su coche queda estacionado tras la
+   * meta y su clasificación ya es `finished` por su `rfin`.
+   */
+  private sweepStaleTick(deltaMs: number): void {
+    this.staleSweepAccumulatorS += deltaMs / 1000;
+    if (this.staleSweepAccumulatorS < STALE_SWEEP_INTERVAL_S) {
+      return;
+    }
+    this.staleSweepAccumulatorS = 0;
+    for (const peerId of this.staleTracker.sweep(this.time.now)) {
+      if (this.finishedPeers.has(peerId)) {
+        continue; // Terminó y dejó de transmitir: no es staleness.
+      }
+      this.disconnectedPeers.add(peerId);
+      this.removeRemoteCar(peerId);
+    }
+  }
+
+  /**
+   * Broadcast propio `rstate` a STATE_HZ: {s, o, v, lap} en coordenadas de
+   * pista, normalizado por la MISMA función que usa el receptor. El propio
+   * stream no llega por red (nadie se interpola a sí mismo): sólo se envía
+   * mientras se compite.
+   */
+  private broadcastRaceState(projection: TrackProjection, deltaMs: number): void {
+    if (this.selfFinished || !this.netClient) {
+      return;
+    }
+    this.stateAccumulatorMs += deltaMs;
+    const intervalMs = 1000 / STATE_HZ;
+    while (this.stateAccumulatorMs >= intervalMs) {
+      this.stateAccumulatorMs -= intervalMs;
+      this.netClient.sendRaceState(
+        roundRaceStatePayload(
+          {
+            s: projection.s,
+            o: projection.lateral,
+            v: this.carState.speed,
+            lap: this.lapTracker.lapsCompleted,
+          },
+          this.path.totalLength,
+          this.trackDef.widthPx / 2,
+        ),
+      );
+    }
+  }
+
+  /**
+   * Rivales interpolados: render a t − GHOST_INTERPOLATION_MS sobre el
+   * progreso desenrollado (continuo en la meta) y reconstrucción de
+   * x/y/ángulo con el TrackPath local. Sin datos aún (peer nuevo o caído),
+   * el coche queda en su última posición conocida (la casilla al arrancar).
+   */
+  private syncRemoteCars(): void {
+    const renderT = this.time.now - GHOST_INTERPOLATION_MS;
+    for (const [peerId, buffer] of this.remoteBuffers) {
+      const car = this.remotes.get(peerId);
+      if (!car) {
+        continue;
+      }
+      const point = buffer.renderAt(renderT);
+      if (!point) {
+        continue;
+      }
+      const position = sampleFromProgress(this.path, point.progress, point.o);
+      car.sync(position.x, position.y, position.angle);
+    }
+  }
+
+  /**
+   * Ranking vivo cada RACE_MULTI.rankIntervalMs: `rankCars` con el último
+   * (lap, s) de cada auto → badge "P3/8" en el HUD. Si uno mismo ya terminó
+   * (espectador), la cámara pasa a seguir al líder.
+   */
+  private updateLiveRanking(deltaMs: number): void {
+    this.rankAccumulatorMs += deltaMs;
+    if (this.rankAccumulatorMs < RACE_MULTI.rankIntervalMs) {
+      return;
+    }
+    this.rankAccumulatorMs = 0;
+
+    const myPeerId = this.myPeerId;
+    const own: RankedCar = {
+      peerId: myPeerId,
+      lap: this.lapTracker.lapsCompleted,
+      s: this.lastProjection.s,
+    };
+    const remotes: RankedCar[] = [...this.remoteProgress.entries()].map(([peerId, progress]) => ({
+      peerId,
+      lap: progress.lap,
+      s: progress.s,
+    }));
+    const standings = rankCars(own, remotes, this.path.totalLength);
+    const mine = standings.find((standing) => standing.peerId === myPeerId);
+    this.raceHud.setPosition(mine?.position ?? 1, standings.length);
+
+    // Espectador (V3 pulido): sigue al mejor clasificado que SIGA EN CARRERA
+    // — el líder nominal del ranking puede ser un coche que YA terminó
+    // (estacionado tras la meta, progreso más alto) o el propio (congelado
+    // desde el rfin: seguirlo es mirar la pantalla quieta). Si nadie rueda ya
+    // (todos terminaron o cayeron), el mejor coche presente; si no hay
+    // ninguno, el propio. Los desconectados conservan su fila en el ranking
+    // (su último progreso), pero ya no tienen coche que darles.
+    if (this.selfFinished) {
+      const leader =
+        standings.find(
+          (standing) =>
+            standing.peerId !== myPeerId &&
+            !this.finishedPeers.has(standing.peerId) &&
+            this.remotes.has(standing.peerId),
+        ) ??
+        standings.find(
+          (standing) =>
+            standing.peerId !== myPeerId && this.remotes.has(standing.peerId),
+        );
+      if (leader) {
+        this.followLeader(leader.peerId, myPeerId);
+      }
+    }
+  }
+
+  /** Cámara del espectador: sigue el sprite del líder (switch idempotente). */
+  private followLeader(leaderPeerId: string, myPeerId: string): void {
+    if (this.followingPeerId === leaderPeerId) {
+      return;
+    }
+    const target =
+      leaderPeerId === myPeerId
+        ? this.carSprite
+        : this.remotes.get(leaderPeerId)?.followTarget;
+    if (!target) {
+      return;
+    }
+    this.followingPeerId = leaderPeerId;
+    this.cameras.main.startFollow(target, false, RACE.cameraLerp, RACE.cameraLerp);
+  }
+
+  /**
+   * Condiciones de cierre de la carrera multi, EN ORDEN:
+   * 1) llegó `race-over` del ganador → sus standings mandan;
+   * 2) terminaron todos → el ganador difunde su clasificación y cierra;
+   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra el
+   *    ganador (difundiendo) o cada cliente con SU clasificación local
+   *    (defensa: ganador desaparecido — las reglas determinísticas hacen
+   *    que la clasificación local coincida con la que habría difundido).
+   */
+  private checkRaceEnd(): void {
+    if (this.raceConcluded) {
+      return;
+    }
+    if (this.raceOverStandings) {
+      this.concludeRace(this.raceOverStandings);
+      return;
+    }
+    const allFinished = this.rosterPlayers.every((player) =>
+      this.finishedPeers.has(player.peerId),
+    );
+    if (allFinished) {
+      this.broadcastRaceOverIfWinner();
+      this.concludeRace(this.buildFinalClassification());
+      return;
+    }
+    if (
+      this.firstFinish &&
+      this.time.now - this.firstFinish.at >= RACE_FINISH_GRACE_MS
+    ) {
+      this.broadcastRaceOverIfWinner();
+      this.concludeRace(this.buildFinalClassification());
+    }
+  }
+
+  /** El ganador (primer `rfin`) difunde `race-over` UNA vez. */
+  private broadcastRaceOverIfWinner(): void {
+    if (this.raceOverSent || this.firstFinish?.peerId !== this.myPeerId) {
+      return;
+    }
+    this.raceOverSent = true;
+    this.netClient?.sendRaceOver({ standings: this.buildFinalClassification() });
+  }
+
+  /**
+   * Clasificación final local con `finalClassification` (determinista):
+   * terminados con SU `rfin` (totalMs ASC) → en carrera por progreso →
+   * desconectados al final. Las mismas entradas producen el mismo orden en
+   * todos los clientes.
+   */
+  private buildFinalClassification(): RaceFinalStanding[] {
+    const cars: FinalCar[] = this.rosterPlayers.map((player) => {
+      const peerId = player.peerId;
+      const progress = this.lastKnownProgress(peerId);
+      const finish = this.finishedPeers.get(peerId);
+      if (finish) {
+        return { peerId, ...progress, status: 'finished' as const, totalMs: finish.totalMs };
+      }
+      if (this.disconnectedPeers.has(peerId)) {
+        return { peerId, ...progress, status: 'disconnected' as const };
+      }
+      return { peerId, ...progress, status: 'running' as const };
+    });
+    return finalClassification(cars, this.path.totalLength);
+  }
+
+  /** Último (lap, s) conocido de un auto: propio del tracker, remoto del stream. */
+  private lastKnownProgress(peerId: string): { lap: number; s: number } {
+    if (peerId === this.myPeerId) {
+      return { lap: this.lapTracker.lapsCompleted, s: this.lastProjection.s };
+    }
+    return this.remoteProgress.get(peerId) ?? { lap: 0, s: 0 };
+  }
+
+  /**
+   * Terminaron MIS 3 vueltas (evento del LapTracker en multi): difunde el
+   * `rfin` propio UNA vez con los tiempos exactos, registra la condición de
+   * ganador (si mi `rfin` es el primero, YO soy el ganador y cerraré la
+   * carrera) y pasa a espectador: sin input, cartel de fin y cámara que
+   * sigue al líder (gobierna `updateLiveRanking`).
+   */
+  private handleSelfRaceFinished(event: {
+    totalMs: number;
+    bestLapMs: number;
+  }): void {
+    if (this.selfFinished) {
+      return;
+    }
+    this.selfFinished = true;
+    this.finishedPeers.set(this.myPeerId, {
+      totalMs: event.totalMs,
+      bestLapMs: event.bestLapMs,
+    });
+    if (!this.firstFinish) {
+      this.firstFinish = { peerId: this.myPeerId, at: this.time.now };
+    }
+    this.netClient?.sendRaceFinish(
+      roundRaceFinishPayload({ totalMs: event.totalMs, bestLapMs: event.bestLapMs }),
+    );
+    this.inputSystem.detach();
+    // V4 — confeti de la meta final propia + corte del dron (dejo de
+    // conducir: paso a espectador, el motor del auto propio se apaga).
+    this.explodeConfetti();
+    this.bus.emit('game-aborted', undefined);
+    this.showFinishBanner(SPECTATOR_SUBTITLE);
+    // V3 (issue #9) — "terminó la carrera" es puerta del chat de espectador:
+    // quien cruzó la bandera lee y escribe en el chat de sala mientras los
+    // demás corren (la gate pura `isRaceSpectatorChatVisible` es la misma
+    // decisión 2A del issue #2, extendida al circuito).
+    this.createSpectatorChatButton();
+  }
+
+  /**
+   * Botón CHAT del espectador de carrera (V3): existe SÓLO tras el `rfin`
+   * propio en multi — por construcción un conductor nunca lo ve (el método
+   * sólo corre desde el evento de fin). Mismo estilo/ritmo que el botón del
+   * overlay de espectador de GameScene (#2), anclado bajo el subtítulo del
+   * cartel de fin. Vive en `hudWidgets`: el SHUTDOWN lo destruye.
+   */
+  private createSpectatorChatButton(): void {
+    if (!isRaceSpectatorChatVisible(this.selfFinished, this.isMultiRace())) {
+      return;
+    }
+    this.spectatorChatButton = new MenuButton(this, {
+      x: this.scale.width / 2,
+      y:
+        this.scale.height / 2 -
+        FINISH_LABEL_OFFSET_Y +
+        SPECTATOR_SUBTITLE_OFFSET_Y +
+        SPECTATOR_CHAT_BUTTON_GAP_PX,
+      width: SPECTATOR_OVERLAY.chatButtonWidth,
+      height: SPECTATOR_OVERLAY.chatButtonHeight,
+      label: 'CHAT',
+      tint: SPECTATOR_CHAT_TINT,
+      fontSize: SPECTATOR_OVERLAY.chatButtonFontSize,
+      bus: this.sessionBus(),
+      onPress: () => this.openSpectatorChat(),
+    });
+    this.spectatorChatButton.container.setScrollFactor(0);
+    this.hudWidgets.push(this.spectatorChatButton);
+  }
+
+  /**
+   * V3 — abre el overlay de chat ENCIMA de la carrera (patrón de GameScene:
+   * launch sin pausar; la carrera sigue sin el espectador). Tab SALA sobre
+   * el hilo `room` de la sesión con envío por el NetClient heredado. Sin
+   * transporte (degradación defensiva) no hay nada que abrir.
+   */
+  private openSpectatorChat(): void {
+    if (!this.netClient) {
+      return;
+    }
+    if (!this.scene.get(ChatScene.KEY)) {
+      this.scene.add(ChatScene.KEY, ChatScene, false);
+    }
+    this.scene.launch(ChatScene.KEY, {
+      thread: ROOM_THREAD_ID,
+      tab: 'room',
+      sendChat: (text: string) => this.netClient?.sendChat(text),
+    });
+  }
+
+  /** Cartel de bandera a cuadros (+ subtítulo de espectador en multi). */
+  private showFinishBanner(subtitle?: string): void {
+    const finishLabel = this.add
+      .text(this.scale.width / 2, this.scale.height / 2 - FINISH_LABEL_OFFSET_Y, FINISH_LABEL, {
+        fontFamily: 'monospace',
+        fontSize: `${FINISH_LABEL_FONT_SIZE}px`,
+        color: '#f7c531',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10)
+      .setDepth(60)
+      .setScrollFactor(0);
+
+    this.tweens.add({
+      targets: finishLabel,
+      alpha: 0.4,
+      delay: 600,
+      duration: 500,
+      yoyo: true,
+      repeat: -1,
+    });
+
+    if (subtitle) {
+      this.add
+        .text(
+          this.scale.width / 2,
+          this.scale.height / 2 - FINISH_LABEL_OFFSET_Y + SPECTATOR_SUBTITLE_OFFSET_Y,
+          subtitle,
+          {
+            fontFamily: 'monospace',
+            fontSize: `${SPECTATOR_SUBTITLE_FONT_SIZE}px`,
+            color: '#c8ccd4',
+          },
+        )
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 6)
+        .setDepth(60)
+        .setScrollFactor(0);
+    }
+  }
+
+  /** Conclusión de la carrera multi: transición a resultados (rama multi). */
+  private concludeRace(standings: readonly RaceFinalStanding[]): void {
+    if (this.raceConcluded) {
+      return;
+    }
+    this.raceConcluded = true;
+    this.finished = true;
+    this.inputSystem.detach();
+    // V4 — cierre de la carrera: aunque YO no haya terminado, dejo de
+    // conducir → el dron se apaga (no-op si ya estaba apagado).
+    this.bus.emit('game-aborted', undefined);
+    this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
+      this.scene.start(
+        GameOverScene.KEY,
+        raceMultiResultsPayload(
+          this.trackDef.id,
+          standings,
+          this.myPeerId,
+          this.rosterPlayers,
+          // V4 — vuelta rápida de la carrera: el mejor `bestLapMs` de los
+          // `rfin` (elección determinista en `fastestRaceLap`).
+          fastestRaceLap(
+            [...this.finishedPeers].map(([peerId, finish]) => ({
+              peerId,
+              bestLapMs: finish.bestLapMs,
+            })),
+          ),
+        ),
+      );
+    });
+  }
+
+  /** Burst one-shot de confeti sobre el auto (meta final, V4). */
+  private explodeConfetti(): void {
+    this.confettiEmitter.explode(
+      RACE_CONFETTI.burstCount,
+      this.carState.x,
+      this.carState.y,
+    );
+  }
+
+  /**
+   * V4 — pop "¡VUELTA 2/3!" al completar una vuelta (no la última): mismo
+   * lenguaje del countdown (texto gigante centrado en pantalla fija, pop de
+   * escala y fade). Se destruye solo al terminar el fade.
+   */
+  private showLapBanner(lap: number): void {
+    const banner = this.add
+      .text(
+        this.scale.width / 2,
+        this.scale.height / 2,
+        `¡${formatLapBadge(lap, CIRCUIT.totalLaps)}!`,
+        {
+          fontFamily: 'monospace',
+          fontSize: `${RACE_LAP_BANNER.fontSize}px`,
+          color: '#f7c531',
+        },
+      )
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 12)
+      .setDepth(60)
+      .setScrollFactor(0)
+      .setScale(RACE_LAP_BANNER.popScale);
+
+    this.tweens.add({
+      targets: banner,
+      scale: 1,
+      duration: RACE_LAP_BANNER.popMs,
+      ease: 'Cubic.Out',
+    });
+    this.tweens.add({
+      targets: banner,
+      alpha: 0,
+      delay: RACE_LAP_BANNER.holdMs,
+      duration: RACE_LAP_BANNER.fadeMs,
+      ease: 'Cubic.Out',
+      onComplete: () => banner.destroy(),
+    });
+  }
+
+  /**
+   * Pre-hornea la textura del mundo para ESTA pista (una vez por sesión;
+   * idempotente como TextureFactory.bake). Capas, de abajo hacia arriba:
+   * pasto con franjas de corte → asfalto (polilínea densa gruesa con
+   * círculos en los vértices para redondear las uniones) → banda de goma →
+   * kerbs en curvas → líneas de borde → meta a cuadros → marcas de sector.
+   */
+  private ensureTrackTexture(): string {
+    const key = TRACK_TEXTURE_PREFIX + this.trackDef.id;
+    if (this.textures.exists(key)) {
+      this.textures.remove(key);
+    }
+
+    const { width: worldW, height: worldH } = this.trackDef.worldSize;
+    const palette = this.trackDef.palette;
+    const halfW = this.trackDef.widthPx / 2;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    const path = this.path;
+
+    // Pasto con franjas de corte alternadas (paleta de la pista).
+    g.fillStyle(palette.grass, 1);
+    g.fillRect(0, 0, worldW, worldH);
+    g.fillStyle(palette.grassAlt, 1);
+    for (let y = GRASS_STRIPE_PX, stripe = 1; y < worldH; y += GRASS_STRIPE_PX, stripe += 1) {
+      if (stripe % 2 === 1) {
+        g.fillRect(0, y, worldW, Math.min(GRASS_STRIPE_PX, worldH - y));
+      }
+    }
+
+    // Polilínea densa del eje (Vector2 para strokePoints).
+    const axis: Phaser.Math.Vector2[] = [];
+    for (let i = 0; i < path.pointsCount; i += 1) {
+      const point = path.densePointAt(i);
+      axis.push(new Phaser.Math.Vector2(point.x, point.y));
+    }
+
+    // Cinta de asfalto: trazo grueso cerrado + círculos en los vértices
+    // (rellenan las uniones para que la cinta quede continua y suave).
+    g.lineStyle(this.trackDef.widthPx, palette.asphalt, 1);
+    g.strokePoints(axis, true);
+    g.fillStyle(palette.asphalt, 1);
+    for (const point of axis) {
+      g.fillCircle(point.x, point.y, halfW);
+    }
+
+    // Banda de goma ("groove"): el ruedo central apenas más oscuro.
+    const grooveWidth = this.trackDef.widthPx * GROOVE_WIDTH_RATIO;
+    g.lineStyle(grooveWidth, palette.asphaltAlt, 1);
+    g.strokePoints(axis, true);
+    g.fillStyle(palette.asphaltAlt, 1);
+    for (const point of axis) {
+      g.fillCircle(point.x, point.y, grooveWidth / 2);
+    }
+
+    // Líneas blancas del borde: polilíneas offset ±(halfW − borde/2).
+    for (const side of [-1, 1]) {
+      const edge: Phaser.Math.Vector2[] = axis.map((point, i) => {
+        const angle = path.densePointAt(i).angle;
+        const normal = angle + Math.PI / 2;
+        const offset = side * (halfW - EDGE_LINE_WIDTH_PX / 2);
+        return new Phaser.Math.Vector2(
+          point.x + Math.cos(normal) * offset,
+          point.y + Math.sin(normal) * offset,
+        );
+      });
+      g.lineStyle(EDGE_LINE_WIDTH_PX, EDGE_LINE_COLOR, 1);
+      g.strokePoints(edge, true);
+    }
+
+    // Kerbs rojo/blanco alternados SOLO en zonas de curvatura alta, a ambos
+    // lados del asfalto (bloques de arco de KERB_BLOCK_PX).
+    let blockIndex = 0;
+    for (let s = 0; s < path.totalLength; s += KERB_BLOCK_PX, blockIndex += 1) {
+      const s1 = Math.min(s + KERB_BLOCK_PX, path.totalLength);
+      const a = path.sample(s);
+      const b = path.sample(s1 >= path.totalLength ? 0 : s1);
+      const blockLength = Math.max(s1 - s, 1e-6);
+      const curvature = Math.abs(normalizeAngle(b.angle - a.angle)) / blockLength;
+      if (curvature < KERB_CURVATURE_THRESHOLD) {
+        continue;
+      }
+      const color = blockIndex % 2 === 0 ? palette.kerb : palette.kerbAlt;
+      g.fillStyle(color, 1);
+      for (const side of [-1, 1]) {
+        const inner = side * halfW;
+        const outer = side * (halfW + KERB_EXTRA_WIDTH_PX);
+        g.fillPoints([
+          this.offsetPoint(a, inner),
+          this.offsetPoint(b, inner),
+          this.offsetPoint(b, outer),
+          this.offsetPoint(a, outer),
+        ], true);
+      }
+    }
+
+    // Meta a cuadros en s=0: 2 filas × N columnas perpendiculares al eje.
+    const start = path.sample(0);
+    const square = this.trackDef.widthPx / START_LINE_SQUARES;
+    for (let row = 0; row < START_LINE_ROWS; row += 1) {
+      for (let col = 0; col < START_LINE_SQUARES; col += 1) {
+        const lateral = -halfW + col * square;
+        const along = (row - START_LINE_ROWS / 2) * square;
+        const corner = this.offsetPoint(start, lateral, along);
+        g.fillStyle((row + col) % 2 === 0 ? EDGE_LINE_COLOR : 0x1a1a20, 1);
+        g.fillPoints([
+          corner,
+          this.offsetPoint(start, lateral + square, along),
+          this.offsetPoint(start, lateral + square, along + square),
+          this.offsetPoint(start, lateral, along + square),
+        ], true);
+      }
+    }
+
+    // Marcas de sector sutiles (el sector 0 arranca en la meta: ahí ya hay
+    // línea a cuadros).
+    for (const window of path.sectorWindows) {
+      if (window.startS === 0) {
+        continue;
+      }
+      const mark = path.sample(window.startS);
+      g.fillStyle(EDGE_LINE_COLOR, SECTOR_MARK_ALPHA);
+      g.fillPoints([
+        this.offsetPoint(mark, -halfW, 0),
+        this.offsetPoint(mark, -halfW, SECTOR_MARK_WIDTH_PX),
+        this.offsetPoint(mark, halfW, SECTOR_MARK_WIDTH_PX),
+        this.offsetPoint(mark, halfW, 0),
+      ], true);
+    }
+
+    g.generateTexture(key, worldW, worldH);
+    g.destroy();
+    return key;
+  }
+
+  /**
+   * Punto del mundo a partir de una muestra del eje: desplazado `lateral`
+   * px sobre la normal (perpendicular al eje) y `along` px sobre la tangente
+   * (dirección de marcha). Único lugar donde se hace esa trigonometría.
+   */
+  private offsetPoint(
+    sample: { x: number; y: number; angle: number },
+    lateral: number,
+    along = 0,
+  ): Phaser.Math.Vector2 {
+    const normal = sample.angle + Math.PI / 2;
+    return new Phaser.Math.Vector2(
+      sample.x + Math.cos(normal) * lateral + Math.cos(sample.angle) * along,
+      sample.y + Math.sin(normal) * lateral + Math.sin(sample.angle) * along,
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* HUD, countdown y pausa                                            */
+  /* ---------------------------------------------------------------- */
+
+  /** HUD de pantalla fija (scrollFactor 0): vueltas, tiempos y minimapa. */
+  private createHud(width: number, height: number): void {
+    this.raceHud = new RaceHud(this, { depth: RACE_HUD.depth });
+    this.raceHud.container.setScrollFactor(0);
+    this.hudWidgets.push(this.raceHud);
+
+    this.miniMap = new MiniMap(this, this.path, {
+      x: width - RACE.miniMapMargin - RACE.miniMapSize / 2,
+      y: RACE.miniMapMargin + RACE.miniMapSize / 2,
+      depth: RACE_HUD.depth,
+    });
+    this.miniMap.container.setScrollFactor(0);
+    this.hudWidgets.push(this.miniMap);
+
+    // Botón de mute abajo al centro (misma posición que GameScene; el hueco
+    // entre los clusters táctiles sigue libre).
+    const bus = this.sessionBus();
+    const muteButton = new MuteButton(this, {
+      x: width / 2,
+      y: height - TOUCH_HUD.marginBottom - TOUCH_HUD.buttonSize / 2,
+      bus,
+      initiallyMuted: getAudioEngine(this.registry).isMuted,
+      depth: MUTE_BUTTON.gameDepth,
+    });
+    muteButton.container.setScrollFactor(0);
+    this.hudWidgets.push(muteButton);
+  }
+
+  /**
+   * Controles de pausa (practice sí pausa): botón bajo el minimapa + tecla
+   * P + auto-pausa por blur. La congelación REAL la hace `scene.pause()`
+   * desde `pauseGame()`; el overlay (PauseScene) se lanza apuntando a esta
+   * escena.
+   */
+  private createPauseControls(): void {
+    const pauseButton = new MenuButton(this, {
+      x: RACE.pauseX,
+      y: RACE.pauseY,
+      width: RACE_HUD.pauseButtonSize,
+      height: RACE_HUD.pauseButtonSize,
+      label: 'II',
+      tint: 0x525868,
+      fontSize: RACE_HUD.pauseButtonFontSize,
+      depth: MUTE_BUTTON.gameDepth,
+      bus: this.sessionBus(),
+      onPress: () => this.pauseGame(),
+    });
+    pauseButton.container.setScrollFactor(0);
+    this.hudWidgets.push(pauseButton);
+
+    this.pauseKey = this.input.keyboard?.addKey('P') ?? null;
+  }
+
+  /** Bus de sesión (inyectado en Boot): sólo `ui-click`/`mute` acá. */
+  private sessionBus(): EventBus<GameEvents> {
+    return getSessionEventBus(this.registry);
+  }
+
+  /** Texto gigante del countdown (por encima de todo, en pantalla fija). */
+  private createCountdownText(width: number, height: number): void {
+    this.countdownText = this.add
+      .text(width / 2, height / 2, '3', {
+        fontFamily: 'monospace',
+        fontSize: `${COUNTDOWN.fontSize}px`,
+        color: '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 14)
+      .setDepth(60)
+      .setScrollFactor(0);
+  }
+
+  /** Repinta el label del countdown con el pop de escala del cambio. */
+  private renderCountdownLabel(label: CountdownLabel): void {
+    this.tweens.killTweensOf(this.countdownText);
+    this.countdownText
+      .setText(label)
+      .setColor(label === 'GO!' ? '#5dff8a' : '#f2f2f2')
+      .setAlpha(1)
+      .setScale(1.45);
+    this.tweens.add({
+      targets: this.countdownText,
+      scale: 1,
+      duration: 240,
+      ease: 'Cubic.Out',
+    });
+  }
+
+  /** Un paso del countdown (mismo gate que GameScene: nada más corre). */
+  private updateCountdown(dt: number): void {
+    const previous = this.countdown.label;
+    this.countdown.update(dt);
+    const label = this.countdown.label;
+    if (label === previous) {
+      return;
+    }
+    if (label === null) {
+      this.finishCountdown();
+      return;
+    }
+    this.renderCountdownLabel(label);
+  }
+
+  /** Fin de la cuenta: el GO! se desvanece y el mundo arranca. */
+  private finishCountdown(): void {
+    // V4 — el dron del motor arranca con el GO! (mismo evento que la
+    // BATALLA; el AudioManager mantiene su perfil móvil de #4 intacto).
+    this.bus.emit('game-start', undefined);
+    this.tweens.killTweensOf(this.countdownText);
+    this.tweens.add({
+      targets: this.countdownText,
+      alpha: 0,
+      scale: 1.3,
+      duration: 260,
+      ease: 'Cubic.Out',
+      onComplete: () => this.countdownText.setVisible(false),
+    });
+  }
+
+  /**
+   * Pausa la carrera (botón II, tecla P o pérdida de foco). Idempotente vía
+   * PauseSystem; congela ESTA escena con `scene.pause()` y lanza el overlay
+   * apuntándolo a RaceScene.
+   */
+  private readonly pauseGame = (): void => {
+    if (this.finished || this.isMultiRace()) {
+      return;
+    }
+    if (!this.pauseSystem.pause()) {
+      return;
+    }
+    // Sin listeners no hay botones "pegados" si la escena se congela a
+    // mitad de un toque/tecla (el attach vuelve en el RESUME).
+    this.touch.detach();
+    this.keyboard.detach();
+    // V4 — el motor no sigue sonando con la carrera congelada (Fase 7).
+    this.bus.emit('game-paused', undefined);
+    this.scene.launch(PauseScene.KEY, { auto: this.pauseSystem.isAutoPaused, target: RaceScene.KEY });
+    this.scene.pause();
+  };
+
+  /** RESUME (vuelve de PauseScene): input re-armado y teclas limpias. */
+  private readonly handleSceneResume = (): void => {
+    this.pauseSystem.resume();
+    this.touch.attach();
+    this.keyboard.attach();
+    this.input.keyboard?.resetKeys();
+    // V4 — el dron vuelve con la carrera (el AudioManager re-arranca el
+    // motor; el evento `speed` del update lo re-sincroniza en el frame 1).
+    this.bus.emit('game-resumed', undefined);
+  };
+
+  /* ---------------------------------------------------------------- */
+  /* Fin de carrera                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Última vuelta válida completada (evento del LapTracker): congela el
+   * mundo (ni física ni input) y tras la pausa de lectura transiciona a la
+   * rama de resultados de carrera de GameOverScene.
+   */
+  private readonly finishRace = (): void => {
+    if (this.finished) {
+      return;
+    }
+    this.finished = true;
+    this.inputSystem.detach();
+
+    // V4 — confeti del cruce de la meta final + corte del dron del motor
+    // (sin SFX de crash: cruzar la meta no es un accidente).
+    this.explodeConfetti();
+    this.bus.emit('game-aborted', undefined);
+
+    this.showFinishBanner();
+
+    this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
+      this.scene.start(
+        GameOverScene.KEY,
+        racePracticeResultsPayload(
+          this.trackDef.id,
+          this.lapTracker.lapsCompleted,
+          this.lapTracker.bestLapMs,
+          this.lapTracker.totalMs,
+        ),
+      );
+    });
+  };
+}

@@ -2,9 +2,9 @@
 
 Videojuego de carreras de Fórmula 1 en 2D, estilo retro 8-bit (pixel art 100% procedural, cero assets externos), **mobile-first** en orientación vertical (resolución base 720×1280). **Phaser 4 + Vite + TypeScript strict.**
 
-Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor) y **chat social opt-in** (chat de sala, mensajes directos e invitaciones a partida — nadie aparece en ninguna lista hasta habilitarlo).
+Carrera infinita esquivable: acelerá, frená, activá **Turbo** y **DRS**, recolectá monedas y pickups, y sobreviví a rivales, restos y manchas de aceite mientras la dificultad sube con la distancia. El puntaje y las monedas persisten en `localStorage` (con fallback en memoria para modo privado). Además hay modo **multijugador online P2P** (battle royale por monedas, 2–10 jugadores, sin servidor), **carrera en circuito** (5 pistas de F1, en solitario para entrenar o contra otros jugadores) y **chat social opt-in** (chat de sala, mensajes directos e invitaciones a partida — nadie aparece en ninguna lista hasta habilitarlo).
 
-> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1) + chat social (issue #2).**
+> Plan completo por fases: [`PLAN_DESARROLLO.md`](./PLAN_DESARROLLO.md). Estado: **MVP completo (Fases 0–7) + multijugador battle royale (issue #1) + chat social (issue #2) + carrera en circuito (issue #9).**
 
 ---
 
@@ -146,6 +146,37 @@ Requisitos (una sola vez, quien administra el repo):
 
 ---
 
+## Carrera en circuito (ENTRENAR / CARRERA)
+
+**Vueltas por un circuito cerrado, como la F1 de verdad.** 5 pistas con identidad propia (**MÓNACO, MONZA, SILVERSTONE, SPA, SUZUKA**), parrilla de salida detrás de la meta, **3 vueltas (~2 min de carrera)** y cronometraje completo: tiempo total, vuelta en curso y **mejor vuelta**. El auto es **auto-acelerado**: el acelerador va pisado, frenar y doblar son las acciones (◀ ▶ + FRENO táctil, ←→/A·D + ↓/S/Espacio en teclado). El modo es **P2P sin servidor**: la pista es idéntica en todos los dispositivos (mismo trazado dibujado proceduralmente) y la parrilla es **aleatoria pero determinista** — la seed de la sala produce la misma grilla en cada cliente, sin negociar nada.
+
+### Cómo se juega
+
+- **ENTRENAR (practice, un solo corredor)**: Menú → **ENTRENAR** → elegí pista. Corrés solo contra el cronómetro, con pausa real (botón II, tecla P o pérdida de foco) y resultados con tu tiempo total y mejor vuelta. **REINTENTAR** repite la misma pista.
+- **CARRERA (multi, 2–10 jugadores)**: Menú → **MULTIJUGADOR** → crear/unirse a sala. El **anfitrión** elige el modo **CARRERA** y la pista (con miniatura); los invitados la conocen al arrancar. Countdown 3-2-1-GO! sincronizado, ranking en vivo (**P3/8** en el HUD) y al terminar cada uno difunde su `rfin` con sus tiempos exactos.
+- **Fin de carrera**: el primero en completar las 3 vueltas gana; la partida cierra cuando terminan todos o a los 30 s del primer finish (los que no llegaron clasifican por su último progreso). Podio final con nombres, colores y tiempos, **VUELTA RÁPIDA de la carrera** destacada en oro, y **confeti** al cruzar tu meta final. En multi, quien termina pasa a **espectador** siguiendo al líder (con botón CHAT, igual que la BATALLA).
+- **Sonido**: el dron del motor sube de tono con la velocidad (mismo sintetizador del modo solo, con perfil móvil), arranca con el GO! y se apaga en pausa, al terminar o al salir.
+
+### Límites de la v1 de la carrera (WebRTC)
+
+- **Los rivales se atraviesan**: cada cliente simula su auto y renderiza a los demás como autos "fantasma" semitransparentes — no hay colisiones entre jugadores (sin física compartida en P2P).
+- **Render 100 ms en el pasado**: cada rival se dibuja interpolado en `t − 100 ms` sobre su stream a 10 Hz (nunca teletransporta, pero va siempre un poco atrasado).
+- **Sin árbitro**: no hay servidor que valide — cada cliente aplica un **filtro de plausibilidad local** (un avance físicamente imposible según el tope de velocidad se ignora) y confía el resto.
+- **Peers mudos clasifican por último progreso**: quien deja de mandar estado (pestaña en background, red caída sin aviso) sale del mundo a los ~20 s y entra a la clasificación como ABANDONÓ con su último avance conocido.
+- **Sin reconexión**: recargar a mitad de carrera = abandonó, igual que la BATALLA.
+- **El pasto corta**: cortar por afuera salta sectores de la vuelta y **la vuelta no cuenta** (anti-corte por checkpoints); los récords del modo solo y de la BATALLA no se mezclan con esta pantalla.
+
+### QA del issue #9 (verificación manual, además de la suite)
+
+- [ ] ENTRENAR: countdown, 3 vueltas, cartel pop **¡VUELTA 2/3!** al completar cada vuelta que no sea la final, cartel ¡BANDERA A CUADROS! + **confeti** en la última, resultados con tiempo total y mejor vuelta, REINTENTAR repite la pista.
+- [ ] El dron del motor sube de tono al acelerar y baja al frenar; se calla en pausa, al cruzar la meta y al salir por MENÚ (sin sonido colgado).
+- [ ] CARRERA: parrilla idéntica en todos los dispositivos, badge Pn/N en vivo, `rfin` propio → espectador con cartel + botón CHAT, cierre de la carrera (todos terminan o gracia de 30 s) y **podio final idéntico** con la línea **VUELTA RÁPIDA: NOMBRE (M:SS.mmm)** en oro.
+- [ ] Un peer en background >20 s desaparece del mundo/minimapa y figura como ABANDONÓ en el podio; la carrera concluye igual.
+- [ ] Escalado móvil 720×1280 (Scale.FIT): HUD (vueltas/tiempos/Pn-N), minimapa, botón de mute y botones táctiles ◀ ▶ FRENO se ven y alcanzan bien en un teléfono chico — todo el HUD se dibuja en coordenadas del lienzo base y el canvas escala completo sin distorsión.
+- [ ] Regresión: el modo solo (JUGAR) y la BATALLA multi (leaderboard, espectador, chat) funcionan exactamente igual que antes.
+
+---
+
 ## Chat social (sala + directos, opt-in)
 
 **Chat de tres piezas: (1) chat de SALA de partida** — en el lobby y, si te eliminan, en modo espectador; el que sigue corriendo no tiene chat (decisión cerrada del issue: conducir sin distracciones) —; **(2) sala pública de presencia OPT-IN con mensajes directos (DM)**; **(3) invitaciones a partida** por DM. Todo P2P sobre la misma red de Trystero, sin servidor.
@@ -204,6 +235,10 @@ src/
 │                         #   lobby (roster/colores/anfitrión), roomRng (seed por sala),
 │                         #   interpolación de fantasmas, handoff lobby → carrera,
 │                         #   ChatClient + TrysteroChatClient (sala pública social)
+├── race/                 # carrera en circuito (issue #9): núcleo puro — TrackPath,
+│                         #   CircuitPhysics, LapTracker (vueltas/sectores), parrilla,
+│                         #   ranking/clasificación, plausibilidad, staleness,
+│                         #   interpolación de rivales, controles y 5 pistas validadas
 ├── chat/                 # chat social (issue #2): ChatStore puro (sanitize 200 /
 │                         #   throttle 1,5 s por hilo / no leídos / bloqueo sesión),
 │                         #   adaptadores roomChat/dmChat, sesión social
@@ -229,11 +264,12 @@ Decisiones clave:
 
 ## Tests
 
-- 64 archivos / 850 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- 84 archivos / 1132 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
 - Cubren la lógica pura de todos los sistemas: velocidad, turbo (drenaje/latch/recarga), DRS (umbral/duración/cooldown), spawn (scheduler con pasabilidad + pool), dificultad, puntaje, countdown, pausa, input (fusión de fuentes, multi-touch), steering del derrape (`slipSteer`), persistencia (parseo defensivo, mute persistido), audio (síntesis con fakes de Web Audio), flujo Game → GameOver y config.
 - Tests de integración sin runtime de Phaser: input → steering (fusión consumida por el auto, con derrape), SpawnScheduler × DifficultySystem (ritmo, patrones y cierre conjuntos), colisiones → economía (monedas/pickups → Score/Turbo/DRS/bus) y carrera → guardado → recarga.
 - Multijugador: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`, misma semántica que Trystero) — roster/colores/anfitrión, pista determinista por seed con perfiles de velocidad distintos, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes (lobby → start → carrera con perfiles distintos → 2 choques → match-over) que exige el MISMO ranking en los tres, con el de más monedas de ganador aunque otro haya sobrevivido más.
 - Chat social: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo entrada+salida), TrysteroChatClient contra rooms/hub fake (presencia opt-in, heartbeat, stale, DM/invite dirigidos), sesión social (DM con el overlay cerrado) — y el flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`: chat de sala + presencia opt-in con privacy-by-default verificada + 2 DM simultáneos con throttles independientes + escondite→DESCONECTADO + invitación con UNIRSE + badges por cliente), 100% determinista con reloj/timers inyectados.
+- Carrera en circuito (issue #9): pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación final, plausibilidad y staleness, reconstrucción de rivales, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi (`race/` + `raceMultiFullFlow`). V4: mapeo velocidad del circuito → dron del motor (`race/raceAudio`) y vuelta rápida del podio (`fastestRaceLap` + su viaje en el payload de resultados).
 
 ---
 

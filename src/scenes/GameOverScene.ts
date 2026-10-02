@@ -1,15 +1,22 @@
 import Phaser from 'phaser';
-import { GAME_OVER, LEADERBOARD } from '../config/balance';
+import { CIRCUIT, GAME_OVER, LEADERBOARD, RACE_FAST_LAP } from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
+import {
+  parseRaceMultiResults,
+  parseRacePracticeResults,
+  type RaceMultiResultsData,
+  type RacePracticeResultsData,
+} from '../race/results';
 import { GameScene } from './GameScene';
 import { LobbyScene } from './LobbyScene';
 import { MenuScene } from './MenuScene';
-import { formatDistance, formatScore } from '../ui/format';
+import { RaceScene } from './RaceScene';
+import { formatDistance, formatLapMs, formatScore } from '../ui/format';
 import { Leaderboard, personalResultMessage } from '../ui/Leaderboard';
 import { MenuButton } from '../ui/MenuButton';
 
@@ -70,6 +77,10 @@ export class GameOverScene extends Phaser.Scene {
   private raceData: GameOverData = parseGameOverData(undefined);
   /** M2 — payload multi (null = pantalla clásica de modo solo). */
   private multiData: MultiGameOverData | null = null;
+  /** V1 (issue #9) — resultados de la carrera de práctica (null = otra rama). */
+  private practiceData: RacePracticeResultsData | null = null;
+  /** V2 (issue #9) — clasificación final de la carrera multi (null = otra). */
+  private raceMultiData: RaceMultiResultsData | null = null;
 
   constructor() {
     super(GameOverScene.KEY);
@@ -78,6 +89,8 @@ export class GameOverScene extends Phaser.Scene {
   init(data: unknown): void {
     this.raceData = parseGameOverData(data);
     this.multiData = parseMultiGameOverData(data);
+    this.practiceData = parseRacePracticeResults(data);
+    this.raceMultiData = parseRaceMultiResults(data);
   }
 
   create(): void {
@@ -90,6 +103,23 @@ export class GameOverScene extends Phaser.Scene {
     // lobby: el transporte de la anterior ya se destruyó al salir de Game).
     if (this.multiData) {
       this.createMultiResults(centerX);
+      return;
+    }
+
+    // V2 (issue #9) — la carrera en circuito MULTIJUGADOR tiene su propia
+    // rama: clasificación final (podio con nombres y tiempos de los
+    // terminados). Va ANTES de la práctica: son modos distintos de la misma
+    // escena y el payload nunca es ambiguo (mode 'race-multi' vs 'practice').
+    if (this.raceMultiData) {
+      this.createRaceMultiResults(centerX);
+      return;
+    }
+
+    // V1 (issue #9) — la carrera de práctica (ENTRENAR) también tiene su
+    // propia rama: resumen de la carrera (tiempo total, mejor vuelta,
+    // vueltas) y botones REINTENTAR (misma pista) / MENÚ.
+    if (this.practiceData) {
+      this.createRaceResults(centerX);
       return;
     }
 
@@ -270,6 +300,246 @@ export class GameOverScene extends Phaser.Scene {
   private readonly createMultiRace = (): void => {
     const name = getPlayerProfileRepository(this.registry).load().name;
     this.scene.start(LobbyScene.KEY, { mode: 'create', name });
+  };
+
+  /**
+   * V2 (issue #9) — RESULTADOS de la carrera en circuito multijugador:
+   * podio P1..Pn con nombre+color (del roster congelado) y, para los que
+   * terminaron, su tiempo total (`rfin`); los que no llegaron muestran la
+   * vuelta en la que estaban y los caídos, ABANDONÓ. El ganador va en oro y
+   * la propia fila queda resaltada. V4: bajo el subtítulo va la línea
+   * "VUELTA RÁPIDA: NOMBRE (M:SS.mmm)" con el mejor `bestLapMs` de la
+   * carrera. Los botones son los de la BATALLA (MENÚ / CREAR PARTIDA: una
+   * carrera nueva empieza por el lobby).
+   */
+  private createRaceMultiResults(centerX: number): void {
+    const data = this.raceMultiData;
+    if (!data) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+    const nameOf = (peerId: string): string =>
+      data.players.find((player) => player.peerId === peerId)?.name ?? 'PILOTO';
+    const colorOf = (peerId: string): number =>
+      data.players.find((player) => player.peerId === peerId)?.color ?? 0xffffff;
+
+    this.add
+      .text(centerX, LEADERBOARD.titleY, 'RESULTADOS', MULTI_TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    const mine = data.standings.find((standing) => standing.peerId === data.myPeerId);
+    const place = mine?.position ?? data.standings.length;
+    this.add
+      .text(centerX, LEADERBOARD.messageY, personalResultMessage(place), {
+        fontFamily: 'monospace',
+        fontSize: `${LEADERBOARD.messageFontSize}px`,
+        color: place === 1 ? GOLD_COLOR : '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 8);
+
+    // Subtítulo: la pista corrida y el formato de la carrera.
+    this.add
+      .text(centerX, LEADERBOARD.headerY, `${data.trackName} · ${CIRCUIT.totalLaps} VUELTAS`, {
+        fontFamily: 'monospace',
+        fontSize: `${LEADERBOARD.headerFontSize + 8}px`,
+        color: DIM_COLOR,
+      })
+      .setOrigin(0.5);
+
+    // V4 (issue #9) — vuelta rápida de la carrera: el mejor `bestLapMs` de
+    // los `rfin` (viaja en el payload de resultados; null si nadie terminó).
+    // Etiqueta en oro, el mismo tono que el ganador del podio.
+    if (data.fastLap) {
+      this.add
+        .text(
+          centerX,
+          RACE_FAST_LAP.y,
+          `VUELTA RÁPIDA: ${nameOf(data.fastLap.peerId)} (${formatLapMs(data.fastLap.bestLapMs)})`,
+          {
+            fontFamily: 'monospace',
+            fontSize: `${RACE_FAST_LAP.fontSize}px`,
+            color: GOLD_COLOR,
+          },
+        )
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 6);
+    }
+
+    const rowStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${LEADERBOARD.rowFontSize + 6}px`,
+      color: '#f2f2f2',
+    };
+    data.standings.forEach((standing, index) => {
+      const y = LEADERBOARD.rowStartY + index * LEADERBOARD.rowHeight;
+      const isSelf = standing.peerId === data.myPeerId;
+      const rowColor = standing.position === 1 ? GOLD_COLOR : isSelf ? '#8fce3c' : '#f2f2f2';
+      const rightText =
+        standing.status === 'finished' && standing.totalMs !== null
+          ? formatLapMs(standing.totalMs)
+          : standing.status === 'running'
+            ? `VUELTA ${Math.min(standing.lap + 1, CIRCUIT.totalLaps)}`
+            : 'ABANDONÓ';
+      this.add
+        .rectangle(
+          LEADERBOARD.nameX - LEADERBOARD.swatchSize,
+          y,
+          LEADERBOARD.swatchSize,
+          LEADERBOARD.swatchSize,
+          colorOf(standing.peerId),
+        )
+        .setStrokeStyle(2, 0x0c0c14);
+      this.add
+        .text(LEADERBOARD.placeX, y, `P${standing.position}`, rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+      this.add
+        .text(LEADERBOARD.nameX, y, nameOf(standing.peerId), rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+      this.add
+        .text(LEADERBOARD.kmX, y, rightText, rowStyle)
+        .setOrigin(1, 0.5)
+        .setColor(rowColor);
+    });
+
+    new MenuButton(this, {
+      x: centerX,
+      y: LEADERBOARD.menuY,
+      width: LEADERBOARD.buttonWidth,
+      height: LEADERBOARD.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: LEADERBOARD.buttonFontSize,
+      bus,
+      onPress: this.goToMenu,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: LEADERBOARD.playY,
+      width: LEADERBOARD.buttonWidth,
+      height: LEADERBOARD.buttonHeight,
+      label: 'CREAR PARTIDA',
+      tint: 0x1d8f43,
+      fontSize: LEADERBOARD.buttonFontSize - 6,
+      bus,
+      onPress: this.createMultiRace,
+    });
+
+    this.input.keyboard?.on('keydown-ENTER', this.createMultiRace);
+    this.input.keyboard?.on('keydown-SPACE', this.createMultiRace);
+    this.input.keyboard?.on('keydown-C', this.createMultiRace);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    if (!prefersTouchControls(this.game.device)) {
+      this.add
+        .text(centerX, LEADERBOARD.hintY, 'ENTER / C  CREAR PARTIDA   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.createMultiRace);
+      this.input.keyboard?.off('keydown-SPACE', this.createMultiRace);
+      this.input.keyboard?.off('keydown-C', this.createMultiRace);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
+
+  /**
+   * V1 (issue #9) — RESULTADOS de la carrera de práctica (ENTRENAR): misma
+   * rejilla de la pantalla clásica (posiciones de GAME_OVER), distinto
+   * contenido: pista + vueltas como subtítulo, tiempo total, mejor vuelta y
+   * vueltas completadas. Botones REINTENTAR (misma pista) y MENÚ.
+   */
+  private createRaceResults(centerX: number): void {
+    const data = this.practiceData;
+    if (!data) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+
+    this.add
+      .text(centerX, GAME_OVER.titleY, 'RESULTADOS', TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    // Subtítulo: la pista corrida y el formato de la carrera.
+    this.add
+      .text(centerX, GAME_OVER.newRecordY, `${data.trackName} · ${CIRCUIT.totalLaps} VUELTAS`, {
+        fontFamily: 'monospace',
+        fontSize: '40px',
+        color: DIM_COLOR,
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 6);
+
+    const statStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${GAME_OVER.statFontSize}px`,
+      color: '#f2f2f2',
+    };
+
+    this.add
+      .text(centerX, GAME_OVER.scoreY, `TIEMPO TOTAL ${formatLapMs(data.totalMs)}`, statStyle)
+      .setOrigin(0.5);
+    this.add
+      .text(centerX, GAME_OVER.distanceY, `MEJOR VUELTA ${formatLapMs(data.bestLapMs)}`, statStyle)
+      .setOrigin(0.5)
+      .setColor(GOLD_COLOR);
+    this.add
+      .text(centerX, GAME_OVER.coinsY, `VUELTAS ${data.laps}/${CIRCUIT.totalLaps}`, statStyle)
+      .setOrigin(0.5);
+
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.retryY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'REINTENTAR',
+      tint: 0x1d8f43,
+      fontSize: GAME_OVER.buttonFontSize,
+      bus,
+      onPress: this.retryRace,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.menuY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: GAME_OVER.buttonFontSize,
+      bus,
+      onPress: this.goToMenu,
+    });
+
+    // Teclado: Enter/Espacio reintenta, M vuelve al menú.
+    this.input.keyboard?.on('keydown-ENTER', this.retryRace);
+    this.input.keyboard?.on('keydown-SPACE', this.retryRace);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    if (!prefersTouchControls(this.game.device)) {
+      this.add
+        .text(centerX, GAME_OVER.hintY, 'ENTER / ESPACIO  REINTENTAR   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.retryRace);
+      this.input.keyboard?.off('keydown-SPACE', this.retryRace);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
+
+  /** REINTENTAR (practice): RaceScene otra vez con la MISMA pista. */
+  private readonly retryRace = (): void => {
+    const data = this.practiceData;
+    this.scene.start(RaceScene.KEY, {
+      trackId: data?.trackId,
+      mode: 'practice',
+    });
   };
 
   private readonly retry = (): void => {

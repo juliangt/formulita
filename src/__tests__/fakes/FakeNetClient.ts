@@ -35,6 +35,9 @@ import {
   type MatchOverPayload,
   type PeerMeta,
   type PlayerInfo,
+  type RaceFinishPayload,
+  type RaceOverPayload,
+  type RaceStatePayload,
   type RosterEntry,
   type StartPayload,
   type StatePayload,
@@ -52,6 +55,9 @@ type HandlerMap = {
   eliminated: Set<(peerId: string, payload: EliminatedPayload) => void>;
   matchOver: Set<(peerId: string, payload: MatchOverPayload) => void>;
   chat: Set<(peerId: string, payload: ChatPayload) => void>;
+  raceState: Set<(peerId: string, payload: RaceStatePayload) => void>;
+  raceFinish: Set<(peerId: string, payload: RaceFinishPayload) => void>;
+  raceOver: Set<(peerId: string, payload: RaceOverPayload) => void>;
   roomFull: Set<() => void>;
   error: Set<(message: string) => void>;
 };
@@ -164,6 +170,9 @@ export class FakeNetClient implements NetClient {
     eliminated: new Set(),
     matchOver: new Set(),
     chat: new Set(),
+    raceState: new Set(),
+    raceFinish: new Set(),
+    raceOver: new Set(),
     roomFull: new Set(),
     error: new Set(),
   };
@@ -250,6 +259,20 @@ export class FakeNetClient implements NetClient {
     this.send('chat', makeChatPayload(text), null);
   }
 
+  /* ---------------- carrera en circuito (V2, issue #9) ---------------- */
+
+  sendRaceState(payload: RaceStatePayload): void {
+    this.send('rstate', payload, null);
+  }
+
+  sendRaceFinish(payload: RaceFinishPayload): void {
+    this.send('rfin', payload, null);
+  }
+
+  sendRaceOver(payload: RaceOverPayload): void {
+    this.send('race-over', payload, null);
+  }
+
   leave(): void {
     if (this.word) {
       this.hub.disconnect(this, this.word);
@@ -310,6 +333,21 @@ export class FakeNetClient implements NetClient {
   onChat(handler: (peerId: string, payload: ChatPayload) => void): () => void {
     this.handlers.chat.add(handler);
     return () => this.handlers.chat.delete(handler);
+  }
+
+  onRaceState(handler: (peerId: string, payload: RaceStatePayload) => void): () => void {
+    this.handlers.raceState.add(handler);
+    return () => this.handlers.raceState.delete(handler);
+  }
+
+  onRaceFinish(handler: (peerId: string, payload: RaceFinishPayload) => void): () => void {
+    this.handlers.raceFinish.add(handler);
+    return () => this.handlers.raceFinish.delete(handler);
+  }
+
+  onRaceOver(handler: (peerId: string, payload: RaceOverPayload) => void): () => void {
+    this.handlers.raceOver.add(handler);
+    return () => this.handlers.raceOver.delete(handler);
   }
 
   onRoomFull(handler: () => void): () => void {
@@ -397,6 +435,21 @@ export class FakeNetClient implements NetClient {
       case 'chat':
         for (const handler of this.handlers.chat) {
           handler(message.from, message.payload as ChatPayload);
+        }
+        break;
+      case 'rstate':
+        for (const handler of this.handlers.raceState) {
+          handler(message.from, message.payload as RaceStatePayload);
+        }
+        break;
+      case 'rfin':
+        for (const handler of this.handlers.raceFinish) {
+          handler(message.from, message.payload as RaceFinishPayload);
+        }
+        break;
+      case 'race-over':
+        for (const handler of this.handlers.raceOver) {
+          handler(message.from, message.payload as RaceOverPayload);
         }
         break;
     }

@@ -22,6 +22,9 @@ import type {
   EliminatedPayload,
   MatchOverPayload,
   PlayerInfo,
+  RaceFinishPayload,
+  RaceOverPayload,
+  RaceStatePayload,
   StartPayload,
   StatePayload,
 } from './protocol';
@@ -97,6 +100,20 @@ export interface NetClient {
    */
   sendChat(text: string): void;
 
+  /* ---------------- carrera en circuito (issue #9, V2) ---------------- */
+
+  /**
+   * Difunde el estado propio del circuito a STATE_HZ (acción `rstate`):
+   * {s, o, v, lap} YA normalizado por `roundRaceStatePayload`.
+   */
+  sendRaceState(payload: RaceStatePayload): void;
+
+  /** Difunde el fin de las 3 vueltas propias (acción `rfin`, UNA vez). */
+  sendRaceFinish(payload: RaceFinishPayload): void;
+
+  /** Difunde la clasificación final (acción `race-over`, el ganador, UNA vez). */
+  sendRaceOver(payload: RaceOverPayload): void;
+
   /* ---------------- lifecycle ---------------- */
 
   /** Sale de la sala (los demás ven el peer irse). Idempotente. */
@@ -137,6 +154,17 @@ export interface NetClient {
    * local (si el peer ya no está, la UI muestra "PILOTO").
    */
   onChat(handler: (fromPeerId: string, payload: ChatPayload) => void): () => void;
+
+  /* ---------------- carrera en circuito (issue #9, V2) ---------------- */
+
+  /** Estado del circuito de un rival a STATE_HZ (acción `rstate`). */
+  onRaceState(handler: (peerId: string, payload: RaceStatePayload) => void): () => void;
+
+  /** Un rival completó las 3 vueltas (acción `rfin`). */
+  onRaceFinish(handler: (peerId: string, payload: RaceFinishPayload) => void): () => void;
+
+  /** El ganador difundió la clasificación final (acción `race-over`). */
+  onRaceOver(handler: (peerId: string, payload: RaceOverPayload) => void): () => void;
 
   /** La sala estaba llena al intentar entrar: salir y avisar al usuario. */
   onRoomFull(handler: () => void): () => void;
