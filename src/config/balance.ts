@@ -411,6 +411,61 @@ export const DIFFICULTY = {
   maxPatternLevel: 3,
 } as const;
 
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito (issue #9, V0 — núcleo puro)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Física arcade de conducción sobre circuito cerrado (issue #9). Consume
+ * `race/circuitPhysics.ts`; las pistas de `race/tracks.ts` se validan contra
+ * `referenceSpeed`/`turnRate*` (radio de curvatura mínimo alcanzable) y contra
+ * la banda de duración de vuelta.
+ *
+ * Convención del input (auto-acelerado): el acelerador viene PISADO por
+ * defecto (ver `defaultCircuitInput`); frenar y girar son acciones explícitas.
+ * El giro se mide en rad/s y decae con la velocidad: `turnRateAtSpeed`
+ * interpola de `turnRateBase` (parado) a `turnRateAtMaxSpeed` (a punta).
+ */
+export const CIRCUIT = {
+  /** Velocidad máxima en asfalto (px/s). */
+  maxSpeed: 300,
+  /** Aceleración con el acelerador (px/s²): 0 → maxSpeed en ≈ 1.25 s. */
+  acceleration: 240,
+  /** Frenada a fondo (px/s²): maxSpeed → 0 en ≈ 0.47 s. */
+  brakeDeceleration: 640,
+  /** Roce al soltar todo (px/s²): la velocidad decae hacia 0. */
+  coastDrag: 130,
+  /** Tasa de giro a velocidad 0 (rad/s). */
+  turnRateBase: 3.4,
+  /** Tasa de giro a velocidad máxima (rad/s): a más velocidad, menos giro. */
+  turnRateAtMaxSpeed: 1.2,
+  /** Techo de velocidad en pasto, como fracción de `maxSpeed`. */
+  grassMaxSpeedFactor: 0.45,
+  /**
+   * Velocidad de referencia para validar pistas (px/s), ≈ 60% de `maxSpeed`.
+   * Es el ritmo medio de vuelta esperado (las curvas y el pasto impiden
+   * sostener la punta). Con ella se valida: (a) el radio de curvatura de
+   * cada punto de las 5 pistas — debe permitir sostener la curva a esta
+   * velocidad con la tasa de giro disponible — y (b) la longitud de vuelta
+   * contra la banda 36–44 s (objetivo 40 s ⇒ pista de ~7200 px).
+   */
+  referenceSpeed: 180,
+  /** Ventanas de sector por vuelta (checkpoints anti-corte). */
+  sectorCount: 8,
+  /** Vueltas por carrera. */
+  totalLaps: 3,
+  /** Banda de validación de duración de vuelta (s) a `referenceSpeed`. */
+  lapMinSeconds: 36,
+  lapMaxSeconds: 44,
+  /* Parrilla de salida: 2 columnas escalonadas detrás de la meta. */
+  /** Separación en s entre filas consecutivas (px de arco). */
+  gridRowStepPx: 70,
+  /** Lateral de cada columna respecto del eje (px; ±este valor). */
+  gridLateralOffsetPx: 35,
+  /** Distancia de la primera fila (pole) detrás de la meta (px de arco). */
+  gridStartOffsetPx: 140,
+} as const;
+
 /** X del centro de un carril del asfalto (índice 0 = izquierda). */
 export function laneCenterX(index: number, laneCount: number = SPAWN.laneCount): number {
   const roadWidth = TRACK.roadRight - TRACK.roadLeft;

@@ -1,0 +1,125 @@
+/**
+ * circuitPhysics — física arcade de conducción pura (issue #9, V0).
+ *
+ * Un paso fijo con `dt` inyectado sobre el estado `{x, y, heading, speed}`:
+ * - Auto-ACELERADO: el input por defecto trae el acelerador pisado (ver
+ *   `defaultCircuitInput`); frenar y girar son acciones explícitas que V1/V2
+ *   envían según teclado/touch. Sin input el roce (`coastDrag`) decae la
+ *   velocidad hacia 0.
+ * - Giro con tasa que DECAE con la velocidad (`turnRateAtSpeed` interpola de
+ *   `CIRCUIT.turnRateBase` a `CIRCUIT.turnRateAtMaxSpeed`): a más velocidad,
+ *   menos giro. Convención: `steer = -1` izquierda, `+1` derecha (pantalla
+ *   con y hacia abajo: heading crece girando a la derecha).
+ * - Pasto (sin muros duros): la distancia lateral que da `project` decide;
+ *   más allá de `widthPx / 2` del eje, el TECHO de velocidad se recorta a
+ *   `maxSpeed × grassMaxSpeedFactor` hasta volver al asfalto.
+ *
+ * Las constantes viven en `CIRCUIT` (balance.ts): cero números mágicos acá.
+ */
+
+import { CIRCUIT } from '../config/balance';
+import type { TrackPath } from './trackPath';
+
+/** Estado de un auto en el mundo (px, radianes, px/s). */
+export interface CarState {
+  x: number;
+  y: number;
+  /** Orientación (radianes, atan2-style; pantalla y hacia abajo). */
+  heading: number;
+  /** Velocidad escalar a lo largo del heading (px/s, ≥ 0). */
+  speed: number;
+}
+
+/**
+ * Input de conducción. AUTO-ACELERADO: `throttle: true` es el estado natural
+ * (el auto avanza solo); V1/V2 sólo necesitan enviar cambios (freno, giro).
+ */
+export interface CircuitInput {
+  throttle: boolean;
+  brake: boolean;
+  /** -1 izquierda, 0 recto, +1 derecha. */
+  steer: -1 | 0 | 1;
+}
+
+/** Input por defecto: acelerador pisado, sin freno ni giro. */
+export function defaultCircuitInput(): CircuitInput {
+  return { throttle: true, brake: false, steer: 0 };
+}
+
+/**
+ * Tasa de giro disponible (rad/s) a una velocidad dada: interpola linealmente
+ * de `turnRateBase` (parado) a `turnRateAtMaxSpeed` (a punta). Es la función
+ * que consume la validación de pistas (radio de curvatura mínimo alcanzable).
+ */
+export function turnRateAtSpeed(speed: number): number {
+  const s = Number.isFinite(speed)
+    ? Math.min(Math.max(speed, 0), CIRCUIT.maxSpeed)
+    : 0;
+  const ratio = s / CIRCUIT.maxSpeed;
+  return (
+    CIRCUIT.turnRateAtMaxSpeed +
+    (CIRCUIT.turnRateBase - CIRCUIT.turnRateAtMaxSpeed) * (1 - ratio)
+  );
+}
+
+/**
+ * dt máximo aceptado por paso (anti-espiral de la muerte), igual criterio
+ * que SpeedSystem: hitches se acotan; no finito o ≤ 0 es no-op.
+ */
+const MAX_DT = 0.25;
+
+export class CircuitPhysics {
+  constructor(
+    private readonly path: TrackPath,
+    /** Ancho jugable de la pista (px); el pasto empieza en `widthPx / 2`. */
+    private readonly widthPx: number,
+  ) {}
+
+  /**
+   * Avanza `state` un paso de `dt` segundos según `input` (muta y devuelve el
+   * MISMO objeto, estilo SpeedSystem). `dt` no finito o ≤ 0: no-op estricto.
+   */
+  step(state: CarState, dt: number, input: CircuitInput = defaultCircuitInput()): CarState {
+    if (!Number.isFinite(dt) || dt <= 0) {
+      return state;
+    }
+    const step = Math.min(dt, MAX_DT);
+
+    // Velocidad defensiva: un estado corrupto (NaN) arranca desde 0.
+    let speed = Number.isFinite(state.speed) ? state.speed : 0;
+
+    // 1) Longitudinal. El pasto se mide con la posición ANTES de mover.
+    const projection = this.path.project(state.x, state.y);
+    const halfWidth = this.widthPx / 2;
+    const onGrass = Math.abs(projection.lateral) > halfWidth;
+    const ceiling = CIRCUIT.maxSpeed * (onGrass ? CIRCUIT.grassMaxSpeedFactor : 1);
+
+    if (input.brake) {
+      // El freno gana si se pisa junto con el acelerador (prioridad de seguridad).
+      speed -= CIRCUIT.brakeDeceleration * step;
+    } else if (input.throttle) {
+      speed += CIRCUIT.acceleration * step;
+    } else {
+      // Roce: sin acelerador ni freno la velocidad decae hacia 0.
+      speed = Math.max(0, speed - CIRCUIT.coastDrag * step);
+    }
+
+    // Techo (pasto o punta) y piso: clamp final defensivo.
+    speed = Math.min(Math.max(speed, 0), Math.min(ceiling, CIRCUIT.maxSpeed));
+
+    // 2) Giro: tasa que decae con la velocidad.
+    const steer = input.steer === -1 || input.steer === 1 ? input.steer : 0;
+    const heading = Number.isFinite(state.heading)
+      ? state.heading + steer * turnRateAtSpeed(speed) * step
+      : 0;
+
+    // 3) Integración de posición a lo largo del heading.
+    state.x = (Number.isFinite(state.x) ? state.x : 0)
+      + Math.cos(heading) * speed * step;
+    state.y = (Number.isFinite(state.y) ? state.y : 0)
+      + Math.sin(heading) * speed * step;
+    state.heading = heading;
+    state.speed = speed;
+    return state;
+  }
+}
