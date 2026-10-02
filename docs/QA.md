@@ -66,6 +66,7 @@ Criterio de aceptación (M3): partida de ~10 minutos con dispositivos REALES en 
 - [ ] Un peer en background >20 s desaparece del mundo/minimapa y figura como ABANDONÓ en el podio; la carrera concluye igual.
 - [ ] Escalado móvil 720×1280 (Scale.FIT): HUD (vueltas/tiempos/Pn-N), minimapa, botón de mute y botones táctiles ◀ ▶ GAS FRENO se ven y alcanzan bien en un teléfono chico — todo el HUD se dibuja en coordenadas del lienzo base y el canvas escala completo sin distorsión.
 - [ ] Largada hacia **arriba** de la pantalla en las 5 pistas (auto y parrilla), y **gas manual**: sin tocar GAS el auto desacelera sola (coast); con GAS llega al techo de velocidad (issue #20).
+- [ ] Overlay MULTIJUGADOR en viewport con letterbox (≠ 9:16): el input de nombre se ve DENTRO del panel y acepta texto; tocar CREAR/UNIRSE sin nombre muestra "INGRESÁ TU NOMBRE" (issue #21). Ídem input de palabra de sala en UNIRSE y los inputs de chat en DM.
 - [ ] El pasto corta: cortar por afuera salta sectores de la vuelta y **la vuelta no cuenta** (anti-corte por checkpoints).
 - [ ] Regresión: el modo solo (JUGAR) y la BATALLA multi (leaderboard, espectador, chat) funcionan exactamente igual que antes.
 

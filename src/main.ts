@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { createGameConfig, GAME_HEIGHT, GAME_WIDTH } from './config/gameConfig';
 import { isDebugMode } from './config/debugFlags';
+import { installDomContainerSync } from './core/domContainerSync';
 
 /** Contenedor DOM donde Phaser monta el canvas. */
 const GAME_CONTAINER_ID = 'game';
@@ -63,6 +64,14 @@ function bootstrap(): Phaser.Game {
   }
   const game = new Phaser.Game(createGameConfig(container));
   installViewportSync(game);
+  // Issue #21: el contenedor DOM de Phaser (inputs de nombre/palabra/DM de
+  // chat) NO acompaña el letterbox del canvas — Phaser solo le escribe
+  // `scale` + márgenes heredados y el flex de index.html lo manda afuera del
+  // viewport. Cada refresh del ScaleManager emite `resize` DESPUÉS de escribir
+  // el contenedor, así que una sola suscripción re-alinea el contenedor con el
+  // rect real del canvas en todos los caminos (boot, READY, rotaciones y los
+  // refresh de arriba). Ver core/domContainerSync.ts.
+  installDomContainerSync(game, GAME_WIDTH);
   // El modo debug (issue #16) se resuelve UNA vez al arrancar y solo gobierna
   // los artefactos de diagnóstico (tag de build + anillo de tap). El refresh
   // de escala — el fix de iOS — corre SIEMPRE, con o sin debug.

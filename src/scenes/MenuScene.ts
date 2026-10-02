@@ -111,6 +111,22 @@ const NAME_INPUT_CSS = {
 };
 
 /**
+ * Issue #21 — aviso cuando se toca CREAR SALA/UNIRSE sin nombre. Antes era un
+ * `return` silencioso (botones que parecían muertos): ahora un texto efímero
+ * bajo el input (mismo rojo de error que usa el lobby en setStatus).
+ */
+const NAME_WARNING_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+  fontFamily: 'monospace',
+  fontSize: '26px',
+  color: '#d63c3c',
+};
+const NAME_WARNING_MESSAGE = 'INGRESÁ TU NOMBRE';
+/** MS que el aviso queda visible antes del fade (se corta si el usuario escribe). */
+const NAME_WARNING_VISIBLE_MS = 2200;
+/** MS del fade de salida del aviso. */
+const NAME_WARNING_FADE_MS = 400;
+
+/**
  * MenuScene — pantalla principal (Fase 5).
  *
  * - Título pixel-art con estética 100% procedural: texto 8-bit con sombra
@@ -141,6 +157,8 @@ export class MenuScene extends Phaser.Scene {
   /* M1 — overlay multijugador (nombre + crear/unirse), null si cerrado. */
   private multiOverlay: Phaser.GameObjects.Container | null = null;
   private multiNameInput: Phaser.GameObjects.DOMElement | null = null;
+  /** Issue #21 — aviso "INGRESÁ TU NOMBRE" (muere con el overlay). */
+  private multiNameWarning: Phaser.GameObjects.Text | null = null;
 
   /* V1 (issue #9) — overlay del selector de pistas de ENTRENAR. */
   private trackOverlay: Phaser.GameObjects.Container | null = null;
@@ -408,10 +426,44 @@ export class MenuScene extends Phaser.Scene {
     inputNode.placeholder = 'PILOTO';
     this.multiNameInput.setOrigin(0.5).setDepth(101);
 
+    // Issue #21 — aviso efímero bajo el input (entre el input y CREAR SALA).
+    // Texto de la escena, no DOM: el sync del contenedor no lo afecta.
+    const nameWarning = this.add
+      .text(centerX, 648, NAME_WARNING_MESSAGE, NAME_WARNING_STYLE)
+      .setOrigin(0.5)
+      .setVisible(false);
+    overlay.add(nameWarning);
+    this.multiNameWarning = nameWarning;
+
+    /** Muestra el aviso opaco y agenda su fade (el destroy del overlay lo corta). */
+    const showNameWarning = (): void => {
+      this.tweens.killTweensOf(nameWarning);
+      nameWarning.setAlpha(1).setVisible(true);
+      this.tweens.add({
+        targets: nameWarning,
+        alpha: 0,
+        delay: NAME_WARNING_VISIBLE_MS,
+        duration: NAME_WARNING_FADE_MS,
+        onComplete: () => nameWarning.setVisible(false),
+      });
+    };
+    /** Apaga el aviso de inmediato (el usuario ya está escribiendo). */
+    const hideNameWarning = (): void => {
+      this.tweens.killTweensOf(nameWarning);
+      nameWarning.setVisible(false);
+    };
+    // Se escribe → el aviso pierde el sentido: fuera al instante. El listener
+    // muere con el nodo (el destroy del DOMElement lo retira del documento).
+    inputNode.addEventListener('input', hideNameWarning);
+
     const goLobby = (mode: 'create' | 'join'): void => {
       const name = sanitizePlayerName(inputNode.value);
       if (name.length === 0) {
-        return; // Sin nombre no hay lobby: el input queda enfocado.
+        // Sin nombre no hay lobby: ahora HAY feedback (antes `return` mudo —
+        // botones que parecían muertos) y el foco deja el teclado listo.
+        showNameWarning();
+        inputNode.focus();
+        return;
       }
       getPlayerProfileRepository(this.registry).save({ name });
       this.closeMultiplayerOverlay();
@@ -462,6 +514,12 @@ export class MenuScene extends Phaser.Scene {
   };
 
   private readonly closeMultiplayerOverlay = (): void => {
+    // El aviso (texto) muere con el contenedor del overlay; acá solo se corta
+    // su fade pendiente y se suelta la referencia.
+    if (this.multiNameWarning) {
+      this.tweens.killTweensOf(this.multiNameWarning);
+    }
+    this.multiNameWarning = null;
     this.multiNameInput?.destroy();
     this.multiNameInput = null;
     this.multiOverlay?.destroy();
