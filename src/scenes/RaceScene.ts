@@ -8,6 +8,7 @@ import {
   MUTE_BUTTON,
   MULTIPLAYER,
   RACE,
+  RACE_AI,
   RACE_CONFETTI,
   RACE_FINISH_GRACE_MS,
   RACE_HUD,
@@ -44,7 +45,11 @@ import {
   parseRaceSceneInit,
   raceMultiResultsPayload,
   racePracticeResultsPayload,
+  raceVsCpuResultsPayload,
+  DEFAULT_CPU_DIFFICULTY,
+  type CpuDifficulty,
   type RaceSceneInit,
+  type RaceVsCpuResultsData,
 } from '../race/results';
 import { raceEngineSpeed } from '../race/raceAudio';
 import {
@@ -72,6 +77,7 @@ import { TouchButton } from '../systems/TouchButton';
 import type { PointerEventEmitter } from '../systems/TouchSource';
 import { InputSystem, type IInputSource, type IInputState } from '../systems/InputSystem';
 import { RemoteCar } from '../entities/RemoteCar';
+import { AiDriver } from '../race/ai/aiDriver';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { formatLapBadge } from '../ui/format';
 import { MiniMap } from '../ui/MiniMap';
@@ -133,6 +139,23 @@ const FINISH_LABEL_OFFSET_Y = 160;
  * Determinista para que la salida sea idéntica en cada sesión.
  */
 const PRACTICE_GRID_SEED = 0;
+
+/**
+ * peerId canónico del auto propio en las parrillas locales (práctica y vs
+ * CPU): la parrilla canoniza por peerId, así que la etiqueta es parte del
+ * contrato determinista.
+ */
+const PLAYER_PEER_ID = 'player';
+
+/** peerId canónico del rival CPU (issue #14) dentro de la parrilla local. */
+const CPU_PEER_ID = 'cpu';
+
+/**
+ * Color del rival CPU: el segundo de la paleta de sala (el primero es el
+ * rojo F1 del jugador) — contraste alto contra el asfalto y contra el auto
+ * propio, sin colores mágicos nuevos.
+ */
+const CPU_CAR_COLOR = MULTIPLAYER.palette[1];
 
 /** Color del tinte del punto del jugador en el minimapa (rojo F1 propio). */
 const PLAYER_MINIMAP_TINT = 0xd63c3c;
@@ -336,6 +359,15 @@ class RaceTouchControls implements IInputSource {
  * confeti al cruzar la meta propia y vuelta rápida de la carrera (el mejor
  * `bestLapMs` de los `rfin`, elegida por `fastestRaceLap`) viajando en el
  * payload de resultados para que el podio multi la destaque.
+ *
+ * V0 (issue #14) — GRAN PREMIO VS CPU (`mode:'vs-cpu'`): la misma carrera de
+ * 3 vueltas contra UN rival "piloto de pruebas" (`race/ai/aiDriver.ts`).
+ * Mismo paso fijo, misma `CircuitPhysics` para los dos autos (el driver del
+ * rival sólo decide su `CircuitInput`), parrilla de 2 por `assignGridOrder`
+ * con la seed del init data y ranking vivo con `rankCars` → badge Pn/N.
+ * El modo corta cuando el JUGADOR completa las vueltas (mismo criterio de
+ * congelación de la práctica) y transiciona a la rama vs-cpu de resultados
+ * con la posición final del jugador (1º/2º en V0) — ver `buildVsCpuResults`.
  */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';
@@ -447,6 +479,39 @@ export class RaceScene extends Phaser.Scene {
   /** Botón CHAT del espectador de carrera (sólo tras el `rfin` propio). */
   private spectatorChatButton: MenuButton | null = null;
 
+  /* ---------------------------------------------------------------- */
+  /* V0 (issue #14) — GRAN PREMIO vs CPU (mode: 'vs-cpu')               */
+  /*                                                                  */
+  /* Un rival "piloto de pruebas" (`race/ai/aiDriver.ts`) simulado en   */
+  /* el MISMO paso fijo que el jugador y con la MISMA `CircuitPhysics`: */
+  /* el driver sólo decide el `CircuitInput` (nada de posiciones). La   */
+  /* parrilla de 2 sale de `assignGridOrder` con la seed del init data  */
+  /* y el ranking vivo reutiliza `rankCars` → `RaceHud.setPosition`.    */
+  /* El modo corta cuando el JUGADOR cruza la meta final (mismo         */
+  /* criterio de congelación de la práctica): el rival que ya terminó   */
+  /* queda congelado tras la línea y el resto clasifica por progreso    */
+  /* con `finalClassification`.                                        */
+  /* ---------------------------------------------------------------- */
+
+  /** Estado físico del rival (null fuera del modo vs-cpu). */
+  private cpuState: CarState | null = null;
+  /** Física del rival (misma clase que la del jugador). */
+  private cpuPhysics: CircuitPhysics | null = null;
+  /** Vueltas del rival (mismo LapTracker que el del jugador). */
+  private cpuLapTracker: LapTracker | null = null;
+  /** Driver del rival (V0: sigue el eje a velocidad fija). */
+  private cpuDriver: AiDriver | null = null;
+  /** Sprite del rival (patrón RemoteCar: textura por color + nombre). */
+  private cpuCar: RemoteCar | null = null;
+  /** Dificultad del rival (presets en `RACE_AI`; default 'normal'). */
+  private cpuDifficulty: CpuDifficulty = DEFAULT_CPU_DIFFICULTY;
+  /** true cuando el rival completó SUS 3 vueltas (se congela en la meta). */
+  private cpuFinished = false;
+  /** Tiempos exactos del rival al terminar (para la clasificación final). */
+  private cpuFinish: { totalMs: number; bestLapMs: number } | null = null;
+  /** Última coordenada de arco del rival (ranking y clasificación). */
+  private cpuLastS = 0;
+
   constructor() {
     super(RaceScene.KEY);
   }
@@ -471,16 +536,35 @@ export class RaceScene extends Phaser.Scene {
     this.carPhysics = new CircuitPhysics(this.path, this.trackDef.widthPx);
     this.lapTracker = new LapTracker(this.path);
 
+    // V0 (#14) — estado del rival fresco (el restart reutiliza la instancia).
+    this.cpuState = null;
+    this.cpuPhysics = null;
+    this.cpuLapTracker = null;
+    this.cpuDriver = null;
+    this.cpuCar?.destroy();
+    this.cpuCar = null;
+    this.cpuFinished = false;
+    this.cpuFinish = null;
+    this.cpuLastS = 0;
+    this.cpuDifficulty = this.sceneInit.difficulty ?? DEFAULT_CPU_DIFFICULTY;
+
     // Parrilla determinista detrás de la meta: práctica = un solo corredor
     // en la pole; multi = TODO el roster (misma seed ⇒ misma parrilla en
-    // todos los clientes, ver `gridOrder`).
+    // todos los clientes, ver `gridOrder`); vs CPU (#14) = jugador + rival.
     this.gridSlots = this.isMultiRace()
       ? assignGridOrder(this.rosterPlayers, this.sceneInit.seed ?? 0, this.path)
-      : assignGridOrder([{ peerId: 'player' }], PRACTICE_GRID_SEED, this.path);
+      : this.isVsCpu()
+        ? assignGridOrder(
+            [{ peerId: PLAYER_PEER_ID }, { peerId: CPU_PEER_ID }],
+            this.sceneInit.seed ?? 0,
+            this.path,
+          )
+        : assignGridOrder([{ peerId: PLAYER_PEER_ID }], PRACTICE_GRID_SEED, this.path);
     const ownSlot = this.isMultiRace()
       ? (this.gridSlots.find((slot) => slot.peerId === this.myPeerId) ??
         this.gridSlots[0])
-      : this.gridSlots[0];
+      : (this.gridSlots.find((slot) => slot.peerId === PLAYER_PEER_ID) ??
+        this.gridSlots[0]);
     this.carState = {
       x: ownSlot.x ?? this.path.sample(0).x,
       y: ownSlot.y ?? this.path.sample(0).y,
@@ -554,8 +638,12 @@ export class RaceScene extends Phaser.Scene {
 
     this.createHud(width, height);
 
-    // Pausa real sólo en práctica: en multi la red no se pausa (mismo
-    // criterio que GameScene en la BATALLA) — ni botón, ni tecla, ni blur.
+    // Pausa real sólo en los modos locales (práctica y vs CPU): en multi la
+    // red no se pausa (mismo criterio que GameScene) — ni botón, ni tecla,
+    // ni blur.
+    if (this.isVsCpu()) {
+      this.setupVsCpu();
+    }
     if (this.isMultiRace()) {
       this.setupMultiRace();
     } else {
@@ -583,6 +671,9 @@ export class RaceScene extends Phaser.Scene {
         this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
       }
       this.teardownMultiRace();
+      // V0 (#14) — el sprite del rival CPU sale con la escena.
+      this.cpuCar?.destroy();
+      this.cpuCar = null;
       // V4 — salida por cualquier camino (MENÚ desde la pausa, transición a
       // resultados): corta el dron del motor sin SFX de crash. No-op si ya
       // se apagó con el fin de la carrera.
@@ -643,12 +734,25 @@ export class RaceScene extends Phaser.Scene {
       this.updateLiveRanking(delta);
       this.sweepStaleTick(delta);
       this.checkRaceEnd();
+      return;
+    }
+
+    // V0 (#14) — vs CPU: sim del rival en el MISMO paso fijo (misma física)
+    // + ranking vivo de 2 autos. El modo corta cuando el JUGADOR termina
+    // (finishRace), así que acá no hay condición de cierre propia.
+    if (this.isVsCpu()) {
+      this.stepVsCpu(dt, delta);
     }
   }
 
   /** true si esta escena corre la carrera MULTIJUGADOR (V2). */
   private isMultiRace(): boolean {
     return this.sceneInit.mode === 'race';
+  }
+
+  /** true si esta escena corre el GRAN PREMIO vs CPU (issue #14, V0). */
+  private isVsCpu(): boolean {
+    return this.sceneInit.mode === 'vs-cpu';
   }
 
   /** peerId propio (V2; '' en práctica). */
@@ -666,6 +770,11 @@ export class RaceScene extends Phaser.Scene {
     const cars = [
       { id: 'player', x: this.carState.x, y: this.carState.y, tint: PLAYER_MINIMAP_TINT },
     ];
+    // V0 (#14) — el rival CPU compite en el mundo: su punto usa el MISMO
+    // color que su sprite (MiniMap ya soporta N marcadores).
+    if (this.cpuCar && this.cpuState) {
+      cars.push({ id: CPU_PEER_ID, x: this.cpuState.x, y: this.cpuState.y, tint: CPU_CAR_COLOR });
+    }
     for (const [peerId, car] of this.remotes) {
       cars.push({ id: peerId, ...car.position, tint: car.player.color });
     }
@@ -680,6 +789,139 @@ export class RaceScene extends Phaser.Scene {
   private syncCarSprite(): void {
     this.carSprite.setPosition(this.carState.x, this.carState.y);
     this.carSprite.rotation = this.carState.heading + CAR_SPRITE_ANGLE_OFFSET;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* V0 (issue #14) — carrera vs CPU                                   */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Arma el rival: su casilla de parrilla (asignada junto con la del
+   * jugador), su física/lapTracker/driver V0 y su sprite (patrón RemoteCar:
+   * textura por color de `GhostCar.ensureTexture` + etiqueta de nombre).
+   */
+  private setupVsCpu(): void {
+    const slot =
+      this.gridSlots.find((entry) => entry.peerId === CPU_PEER_ID) ?? this.gridSlots[1] ?? this.gridSlots[0];
+
+    this.cpuState = {
+      x: slot.x ?? this.path.sample(0).x,
+      y: slot.y ?? this.path.sample(0).y,
+      heading: slot.angle ?? 0,
+      speed: 0,
+    };
+    this.cpuPhysics = new CircuitPhysics(this.path, this.trackDef.widthPx);
+    this.cpuLapTracker = new LapTracker(this.path);
+    // El rival que completa sus 3 vueltas se CONGELA tras la meta: el modo
+    // corta cuando termina el JUGADOR y el clasificador final decide con el
+    // totalMs exacto del CPU (o su último progreso, si no llegó).
+    this.cpuLapTracker.onRaceFinished = () => {
+      if (this.cpuLapTracker) {
+        this.cpuFinished = true;
+        this.cpuFinish = {
+          totalMs: this.cpuLapTracker.totalMs,
+          bestLapMs: this.cpuLapTracker.bestLapMs,
+        };
+      }
+    };
+    const preset = RACE_AI.targetSpeedFraction[this.cpuDifficulty] ?? RACE_AI.targetSpeedFraction.normal;
+    this.cpuDriver = new AiDriver(this.path, {
+      targetSpeedFraction: preset,
+      lookAheadPx: RACE_AI.lookAheadPx,
+      steerDeadzoneRad: RACE_AI.steerDeadzoneRad,
+    });
+
+    this.cpuCar = new RemoteCar(this, {
+      peerId: CPU_PEER_ID,
+      name: RACE_AI.driverName,
+      color: CPU_CAR_COLOR,
+    });
+    if (slot.x !== undefined && slot.y !== undefined) {
+      this.cpuCar.sync(slot.x, slot.y, slot.angle ?? 0);
+    }
+  }
+
+  /**
+   * Un frame del vs CPU: el rival corre en el MISMO paso fijo que el jugador
+   * (mismo `dt`, misma `CircuitPhysics`) y el ranking vivo de 2 autos repinta
+   * el badge Pn/N al ritmo de `RACE_MULTI.rankIntervalMs` (igual que multi).
+   */
+  private stepVsCpu(dt: number, deltaMs: number): void {
+    if (!this.cpuState || !this.cpuPhysics || !this.cpuDriver || !this.cpuLapTracker) {
+      return;
+    }
+    if (!this.cpuFinished) {
+      const input = this.cpuDriver.drive(this.cpuState);
+      this.cpuPhysics.step(this.cpuState, dt, input);
+      const projection = this.path.project(this.cpuState.x, this.cpuState.y);
+      this.cpuLastS = projection.s;
+      this.cpuLapTracker.update(projection.s, deltaMs);
+    }
+    this.cpuCar?.sync(this.cpuState.x, this.cpuState.y, this.cpuState.heading);
+
+    // Ranking vivo (sólo consume progreso: lap + s, mismo contrato que multi).
+    this.rankAccumulatorMs += deltaMs;
+    if (this.rankAccumulatorMs < RACE_MULTI.rankIntervalMs) {
+      return;
+    }
+    this.rankAccumulatorMs = 0;
+    const standings = rankCars(
+      { peerId: PLAYER_PEER_ID, lap: this.lapTracker.lapsCompleted, s: this.lastProjection.s },
+      [
+        {
+          peerId: CPU_PEER_ID,
+          lap: this.cpuLapTracker.lapsCompleted,
+          s: this.cpuLastS,
+        },
+      ],
+      this.path.totalLength,
+    );
+    const mine = standings.find((standing) => standing.peerId === PLAYER_PEER_ID);
+    this.raceHud.setPosition(mine?.position ?? 1, standings.length);
+  }
+
+  /**
+   * Resultados del vs CPU: clasificación final con `finalClassification` —
+   * el jugador (siempre `finished`: el modo corta con SU bandera a cuadros)
+   * y el rival terminado por SU tiempo o en carrera por último progreso —
+   * de donde sale la posición 1º/2º que viaja en el payload.
+   */
+  private buildVsCpuResults(): RaceVsCpuResultsData {
+    const cars: FinalCar[] = [
+      {
+        peerId: PLAYER_PEER_ID,
+        lap: this.lapTracker.lapsCompleted,
+        s: this.lastProjection.s,
+        status: 'finished',
+        totalMs: this.lapTracker.totalMs,
+      },
+      this.cpuFinish && this.cpuLapTracker
+        ? {
+            peerId: CPU_PEER_ID,
+            lap: this.cpuLapTracker.lapsCompleted,
+            s: this.cpuLastS,
+            status: 'finished' as const,
+            totalMs: this.cpuFinish.totalMs,
+          }
+        : {
+            peerId: CPU_PEER_ID,
+            lap: this.cpuLapTracker?.lapsCompleted ?? 0,
+            s: this.cpuLastS,
+            status: 'running' as const,
+          },
+    ];
+    const standings = finalClassification(cars, this.path.totalLength);
+    const position =
+      standings.find((standing) => standing.peerId === PLAYER_PEER_ID)?.position ?? 1;
+    return raceVsCpuResultsPayload(
+      this.trackDef.id,
+      position,
+      cars.length,
+      this.cpuDifficulty,
+      this.lapTracker.lapsCompleted,
+      this.lapTracker.bestLapMs,
+      this.lapTracker.totalMs,
+    );
   }
 
   /* ---------------------------------------------------------------- */
@@ -1602,14 +1844,19 @@ export class RaceScene extends Phaser.Scene {
     this.showFinishBanner();
 
     this.time.delayedCall(GAMEOVER_TRANSITION_MS, () => {
+      // V0 (#14) — vs CPU: resultados con la posición final del jugador
+      // (el modo corta con SU bandera a cuadros; el rival clasifica por su
+      // tiempo o su último progreso). Práctica: el payload de siempre.
       this.scene.start(
         GameOverScene.KEY,
-        racePracticeResultsPayload(
-          this.trackDef.id,
-          this.lapTracker.lapsCompleted,
-          this.lapTracker.bestLapMs,
-          this.lapTracker.totalMs,
-        ),
+        this.isVsCpu()
+          ? this.buildVsCpuResults()
+          : racePracticeResultsPayload(
+              this.trackDef.id,
+              this.lapTracker.lapsCompleted,
+              this.lapTracker.bestLapMs,
+              this.lapTracker.totalMs,
+            ),
       );
     });
   };

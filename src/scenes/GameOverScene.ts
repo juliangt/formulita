@@ -7,10 +7,13 @@ import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
 import {
+  CPU_DIFFICULTY_LABELS,
   parseRaceMultiResults,
   parseRacePracticeResults,
+  parseRaceVsCpuResults,
   type RaceMultiResultsData,
   type RacePracticeResultsData,
+  type RaceVsCpuResultsData,
 } from '../race/results';
 import { GameScene } from './GameScene';
 import { LobbyScene } from './LobbyScene';
@@ -48,6 +51,14 @@ const HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   color: DIM_COLOR,
 };
 
+/* #14 — rama VS CPU de resultados: dos líneas bajo el título (mensaje
+ * personal + subtítulo pista/dificultad) alrededor del Y del cartel de la
+ * rama práctica (GAME_OVER.newRecordY), misma rejilla de botones. */
+const VS_CPU_MESSAGE_OFFSET_Y = -40;
+const VS_CPU_SUBTITLE_OFFSET_Y = 40;
+const VS_CPU_MESSAGE_FONT_SIZE = 48;
+const VS_CPU_SUBTITLE_FONT_SIZE = 32;
+
 /**
  * GameOverScene — resultados de la carrera (Fase 5).
  *
@@ -79,6 +90,8 @@ export class GameOverScene extends Phaser.Scene {
   private multiData: MultiGameOverData | null = null;
   /** V1 (issue #9) — resultados de la carrera de práctica (null = otra rama). */
   private practiceData: RacePracticeResultsData | null = null;
+  /** #14 — resultados del GRAN PREMIO vs CPU (null = otra rama). */
+  private vsCpuData: RaceVsCpuResultsData | null = null;
   /** V2 (issue #9) — clasificación final de la carrera multi (null = otra). */
   private raceMultiData: RaceMultiResultsData | null = null;
 
@@ -90,6 +103,7 @@ export class GameOverScene extends Phaser.Scene {
     this.raceData = parseGameOverData(data);
     this.multiData = parseMultiGameOverData(data);
     this.practiceData = parseRacePracticeResults(data);
+    this.vsCpuData = parseRaceVsCpuResults(data);
     this.raceMultiData = parseRaceMultiResults(data);
   }
 
@@ -120,6 +134,14 @@ export class GameOverScene extends Phaser.Scene {
     // vueltas) y botones REINTENTAR (misma pista) / MENÚ.
     if (this.practiceData) {
       this.createRaceResults(centerX);
+      return;
+    }
+
+    // #14 — GRAN PREMIO VS CPU: misma rejilla de la rama práctica, con la
+    // posición final (1º/2º en V0), la dificultad del rival y REINTENTAR
+    // con la MISMA pista + dificultad.
+    if (this.vsCpuData) {
+      this.createRaceVsCpuResults(centerX);
       return;
     }
 
@@ -539,6 +561,123 @@ export class GameOverScene extends Phaser.Scene {
     this.scene.start(RaceScene.KEY, {
       trackId: data?.trackId,
       mode: 'practice',
+    });
+  };
+
+  /**
+   * #14 — RESULTADOS del GRAN PREMIO VS CPU: mismo layout de la rama
+   * práctica (rejilla GAME_OVER), distinto contenido: pista + vueltas +
+   * dificultad del rival como subtítulo, mensaje personal por posición
+   * (1º/2º en V0), tiempo total, mejor vuelta y vueltas completadas.
+   * Botones REINTENTAR (misma pista + dificultad, seed fresca) y MENÚ.
+   */
+  private createRaceVsCpuResults(centerX: number): void {
+    const data = this.vsCpuData;
+    if (!data) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+
+    this.add
+      .text(centerX, GAME_OVER.titleY, 'RESULTADOS', TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    // Mensaje personal por posición (1 = ¡GANASTE!, oro; 2º en blanco).
+    const isWinner = data.position === 1;
+    this.add
+      .text(centerX, GAME_OVER.newRecordY + VS_CPU_MESSAGE_OFFSET_Y, personalResultMessage(data.position), {
+        fontFamily: 'monospace',
+        fontSize: `${VS_CPU_MESSAGE_FONT_SIZE}px`,
+        color: isWinner ? GOLD_COLOR : '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 8);
+
+    // Subtítulo: pista, formato de la carrera y dificultad del rival.
+    this.add
+      .text(
+        centerX,
+        GAME_OVER.newRecordY + VS_CPU_SUBTITLE_OFFSET_Y,
+        `${data.trackName} · ${CIRCUIT.totalLaps} VUELTAS · RIVAL ${CPU_DIFFICULTY_LABELS[data.difficulty]}`,
+        {
+          fontFamily: 'monospace',
+          fontSize: `${VS_CPU_SUBTITLE_FONT_SIZE}px`,
+          color: DIM_COLOR,
+        },
+      )
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 6);
+
+    const statStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${GAME_OVER.statFontSize}px`,
+      color: '#f2f2f2',
+    };
+
+    this.add
+      .text(centerX, GAME_OVER.scoreY, `POSICIÓN P${data.position}/${data.totalCars}`, statStyle)
+      .setOrigin(0.5)
+      .setColor(isWinner ? GOLD_COLOR : '#f2f2f2');
+    this.add
+      .text(centerX, GAME_OVER.distanceY, `TIEMPO TOTAL ${formatLapMs(data.totalMs)}`, statStyle)
+      .setOrigin(0.5);
+    this.add
+      .text(centerX, GAME_OVER.coinsY, `MEJOR VUELTA ${formatLapMs(data.bestLapMs)}`, statStyle)
+      .setOrigin(0.5);
+
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.retryY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'REINTENTAR',
+      tint: 0x1d8f43,
+      fontSize: GAME_OVER.buttonFontSize,
+      bus,
+      onPress: this.retryRaceVsCpu,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.menuY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: GAME_OVER.buttonFontSize,
+      bus,
+      onPress: this.goToMenu,
+    });
+
+    // Teclado: Enter/Espacio reintenta, M vuelve al menú.
+    this.input.keyboard?.on('keydown-ENTER', this.retryRaceVsCpu);
+    this.input.keyboard?.on('keydown-SPACE', this.retryRaceVsCpu);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    if (!prefersTouchControls(this.game.device)) {
+      this.add
+        .text(centerX, GAME_OVER.hintY, 'ENTER / ESPACIO  REINTENTAR   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.retryRaceVsCpu);
+      this.input.keyboard?.off('keydown-SPACE', this.retryRaceVsCpu);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
+
+  /**
+   * REINTENTAR (vs CPU): RaceScene con la MISMA pista + dificultad y una
+   * seed fresca de parrilla (misma política que la salida desde el menú).
+   */
+  private readonly retryRaceVsCpu = (): void => {
+    const data = this.vsCpuData;
+    this.scene.start(RaceScene.KEY, {
+      trackId: data?.trackId,
+      mode: 'vs-cpu',
+      difficulty: data?.difficulty,
+      seed: Date.now(),
     });
   };
 

@@ -562,9 +562,42 @@ export const RACE_MULTI = {
    * Intervalo del ranking vivo (ms): `rankCars` corre cada este tiempo (no
    * por frame — el orden no cambia tan rápido y el badge repinta sólo si
    * cambió el texto). También gobierna el seguimiento de cámara del
-   * espectador (quien terminó sigue al líder).
+   * espectador (quien terminó sigue al líder). El vs CPU (#14) reutiliza el
+   * mismo ritmo para su ranking de 2 autos.
    */
   rankIntervalMs: 250,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Gran Premio vs CPU (issue #14, V0)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rival CPU del GRAN PREMIO (issue #14, V0): un "piloto de pruebas" que
+ * sigue el EJE de la pista a velocidad fija (`race/ai/aiDriver.ts`). V0
+ * hardcodea la fracción de velocidad por dificultad acá; una fase posterior
+ * la reemplaza por presets completos de dificultad.
+ */
+export const RACE_AI = {
+  /**
+   * Velocidad objetivo del CPU como fracción de `CIRCUIT.maxSpeed`, por
+   * dificultad. V0 sólo usa 'normal' (el menú aún no distingue), pero las
+   * tres fracciones ya fijan la escala: por encima de la referencia
+   * (`CIRCUIT.referenceSpeed` = 0.6 × maxSpeed) el CPU no sostiene las
+   * curvas más cerradas y se abre al pasto, donde el techo lo frena —
+   * comportamiento deseado, más error por dificultad.
+   */
+  targetSpeedFraction: {
+    easy: 0.65,
+    normal: 0.75,
+    hard: 0.85,
+  },
+  /** Distancia del punto de mira sobre el eje (px de arco). */
+  lookAheadPx: 120,
+  /** Zona muerta del error angular (rad): debajo, volante recto. */
+  steerDeadzoneRad: 0.06,
+  /** Nombre visible del rival en su etiqueta y resultados. */
+  driverName: 'CPU',
 } as const;
 
 /* ------------------------------------------------------------------ */
