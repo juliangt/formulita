@@ -30,7 +30,18 @@ export type SfxName =
   /** Golpe no letal (rival/piedra): thump grave y corto (issue #10, H2). */
   | 'damage'
   /** Choque destructivo (ruido + caída de tono). */
-  | 'crash';
+  | 'crash'
+  /**
+   * Largada del GRAN PREMIO (issue #14, V3): arpegio ascendente en el GO! del
+   * countdown. Sólo lo pide la rama vs CPU (práctica y multi no cambian).
+   */
+  | 'go'
+  /**
+   * Cambio de posición en el ranking vivo del GRAN PREMIO (#14, V3):
+   * "zip" corto de adelantamiento — mismo sonido al ganar o perder el lugar
+   * (la dirección se lee en el badge Pn/N del HUD).
+   */
+  | 'overtake';
 
 export interface ISfxEngine {
   /** Estado de silencio actual (persistido entre sesiones). */

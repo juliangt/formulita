@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DISTANCE_METERS_PER_PIXEL } from '../config/balance';
-import { formatDistance, formatLapBadge, formatLapMs, formatScore } from '../ui/format';
+import {
+  formatDistance,
+  formatGrandPrixChip,
+  formatLapBadge,
+  formatLapMs,
+  formatRaceGaps,
+  formatScore,
+} from '../ui/format';
 
 /**
  * Tests del formateo puro de la UI (Fase 5): los números que muestran el HUD
@@ -101,5 +108,45 @@ describe('formatLapBadge — badge VUELTA n/N del HUD de carrera (V1)', () => {
     expect(formatLapBadge(1, Number.NaN)).toBe('VUELTA 1/1');
     expect(formatLapBadge(Number.NaN, 3)).toBe('VUELTA 1/3');
     expect(formatLapBadge(2, 0)).toBe('VUELTA 1/1');
+  });
+});
+
+describe('formatGrandPrixChip — chip de contexto del GRAN PREMIO (#14, V3)', () => {
+  it('une modo, pista y dificultad con el separador del chip', () => {
+    expect(formatGrandPrixChip('MÓNACO', 'DIFÍCIL')).toBe('GRAN PREMIO · MÓNACO · DIFÍCIL');
+    expect(formatGrandPrixChip('MONZA', 'NORMAL')).toBe('GRAN PREMIO · MONZA · NORMAL');
+  });
+
+  it('omite los segmentos vacíos junto con su separador (nunca deja "· " colgando)', () => {
+    expect(formatGrandPrixChip('', 'DIFÍCIL')).toBe('GRAN PREMIO · DIFÍCIL');
+    expect(formatGrandPrixChip('SPA', '')).toBe('GRAN PREMIO · SPA');
+    expect(formatGrandPrixChip('', '')).toBe('GRAN PREMIO');
+  });
+
+  it('es defensivo: espacios alrededor se recortan', () => {
+    expect(formatGrandPrixChip('  SUZUKA  ', ' FÁCIL ')).toBe('GRAN PREMIO · SUZUKA · FÁCIL');
+    expect(formatGrandPrixChip('   ', '   ')).toBe('GRAN PREMIO');
+  });
+});
+
+describe('formatRaceGaps — línea de gaps del HUD vs CPU (#14, V3)', () => {
+  it('muestra adelante (positivo) y atrás (negativo) con unidad y 1 decimal', () => {
+    expect(formatRaceGaps(1.2, -0.8)).toBe('+1.2s -0.8s');
+    expect(formatRaceGaps(30, -30)).toBe('+30.0s -30.0s');
+  });
+
+  it('con un solo vecino muestra sólo ese lado', () => {
+    expect(formatRaceGaps(2.5, null)).toBe('+2.5s');
+    expect(formatRaceGaps(null, -0.4)).toBe('-0.4s');
+  });
+
+  it('sin vecinos devuelve vacío (el HUD oculta la línea)', () => {
+    expect(formatRaceGaps(null, null)).toBe('');
+  });
+
+  it('es defensivo: valores no finitos no se muestran', () => {
+    expect(formatRaceGaps(Number.NaN, Number.POSITIVE_INFINITY)).toBe('');
+    expect(formatRaceGaps(1, Number.NaN)).toBe('+1.0s');
+    expect(formatRaceGaps(Number.NEGATIVE_INFINITY, -1)).toBe('-1.0s');
   });
 });

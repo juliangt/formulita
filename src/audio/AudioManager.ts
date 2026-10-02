@@ -562,6 +562,12 @@ export class AudioManager implements ISfxEngine {
         case 'crash':
           this.playCrash(ctx, master);
           break;
+        case 'go':
+          this.playGo(ctx, master);
+          break;
+        case 'overtake':
+          this.playOvertake(ctx, master);
+          break;
       }
     } catch {
       // La síntesis jamás puede romper el juego.
@@ -758,6 +764,59 @@ export class AudioManager implements ISfxEngine {
 
     osc.connect(oscGain);
     oscGain.connect(master);
+    osc.start(t);
+    osc.stop(t + 0.16);
+  }
+
+  /**
+   * Largada del GRAN PREMIO (issue #14, V3): arpegio ascendente de tres
+   * notas cuadradas (sol-si-re cortos) — el "¡ya!" sobre el GO!. Más largo y
+   * más brillante que el click de UI para que se distinga del blip de
+   * botones; agudo (banda > 400 Hz) para que los parlantes de un celular lo
+   * reproduzcan sin depender del perfil móvil del dron.
+   */
+  private playGo(ctx: AudioContextLike, master: GainNodeLike): void {
+    const notes = [784, 988, 1319];
+    const noteSeconds = 0.09;
+    for (let i = 0; i < notes.length; i += 1) {
+      const t = ctx.currentTime + 0.01 + i * noteSeconds;
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(notes[i], t);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(ALMOST_ZERO, t);
+      gain.gain.linearRampToValueAtTime(0.14, t + 0.006);
+      gain.gain.exponentialRampToValueAtTime(ALMOST_ZERO, t + noteSeconds);
+
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(t);
+      osc.stop(t + noteSeconds + 0.02);
+    }
+  }
+
+  /**
+   * Cambio de posición en el GRAN PREMIO (#14, V3): "zip" cortito de
+   * barrido triangular ascendente — suena igual al ganar o al perder el
+   * lugar (la dirección se lee en el badge Pn/N; el sonido sólo avisa que la
+   * pelea se movió). Distinto de la moneda (sine de dos tonos) y del pickup
+   * (barrido largo de 0.14 s): acá es un glissando rápido y suave.
+   */
+  private playOvertake(ctx: AudioContextLike, master: GainNodeLike): void {
+    const t = ctx.currentTime + 0.01;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(430, t);
+    osc.frequency.exponentialRampToValueAtTime(1040, t + 0.1);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(ALMOST_ZERO, t);
+    gain.gain.linearRampToValueAtTime(0.13, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(ALMOST_ZERO, t + 0.14);
+
+    osc.connect(gain);
+    gain.connect(master);
     osc.start(t);
     osc.stop(t + 0.16);
   }
@@ -1106,6 +1165,10 @@ export class AudioManager implements ISfxEngine {
    *   (la carrera está congelada: el motor no sigue sonando en pausa).
    * - `game-aborted` (Fase 7) → apaga el dron sin SFX de crash (MENÚ desde
    *   la pausa).
+   * - `race-go` (issue #14, V3) → SFX de largada del GRAN PREMIO (la escena
+   *   vs CPU lo emite en el GO!; práctica y multi no lo emiten).
+   * - `race-overtake` (#14, V3) → SFX de cambio de posición en el ranking
+   *   vivo (la escena ya viene con el enfriamiento aplicado).
    * - `ui-click` → click; `mute` → aplica y persiste el mute.
    *
    * @returns función de desuscripción (el audio vive toda la sesión: no se
@@ -1142,6 +1205,8 @@ export class AudioManager implements ISfxEngine {
       bus.on('game-paused', () => this.stopEngine()),
       bus.on('game-resumed', () => this.startEngine()),
       bus.on('game-aborted', () => this.stopEngine()),
+      bus.on('race-go', () => this.play('go')),
+      bus.on('race-overtake', () => this.play('overtake')),
       bus.on('ui-click', () => this.play('click')),
       bus.on('mute', (muted) => this.setMuted(muted)),
     ];

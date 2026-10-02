@@ -71,6 +71,20 @@ export type GameEvents = {
    * dron del motor sin sonar el SFX de crash (a diferencia de `game-over`).
    */
   'game-aborted': undefined;
+  /**
+   * GO! del countdown del GRAN PREMIO (issue #14, V3): dispara el SFX de
+   * largada. Sólo lo emite la rama vs CPU (`RaceScene.finishCountdown` hace
+   * el gate) — la práctica y el multi no cambian su comportamiento. Distinto
+   * de `game-start` (que arranca el dron en TODOS los modos y no suena).
+   */
+  'race-go': undefined;
+  /**
+   * La posición propia del ranking vivo del GRAN PREMIO (#14, V3) cambió
+   * (adelantó o lo adelantaron): dispara el SFX de adelantamiento. El
+   * enfriamiento (~2 s, máx. 1 sonido por cambio) lo decide el detector puro
+   * (`race/racePositionSwap`) ANTES de emitir — el bus nunca recibe rafagas.
+   */
+  'race-overtake': undefined;
 };
 
 export class EventBus<TEvents extends object> {

@@ -569,6 +569,37 @@ export const RACE_MULTI = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Gran Premio vs CPU — HUD enriquecido (issue #14, V3)                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Presentación V3 del GRAN PREMIO (issue #14): la columna izquierda del HUD
+ * gana el GAP a los rivales de adelante/atrás y el chip de modo/pista/
+ * dificultad; la largada y los cambios de posición suenan. La lógica es pura
+ * (`race/raceGap`, `race/racePositionSwap`); acá sólo viven los números de
+ * layout y feel. Práctica y multi no consumen nada de este bloque (cero
+ * cambios de comportamiento).
+ */
+export const RACE_VS_CPU = {
+  /** Techo del |gap| mostrado (s): más lejos se clampea (ya no informa). */
+  gapMaxSeconds: 30,
+  /** Velocidad propia mínima (px/s) para confiar en el gap en tiempo. */
+  gapMinOwnSpeedPx: 30,
+  /** Y del texto de gaps (centro), bajo el badge de posición (184). */
+  gapY: 222,
+  /** Tamaño de fuente del gap (px): discreto, como el tiempo total. */
+  gapFontSize: 20,
+  /** Y del chip "GRAN PREMIO · MÓNACO · DIFÍCIL" (centro), cierra la columna. */
+  infoChipY: 258,
+  /** Tamaño de fuente del chip (px). */
+  infoChipFontSize: 20,
+  /** Tamaño de fuente del nombre sobre los rivales vs CPU (px; multi usa 20). */
+  rivalNameFontSize: 24,
+  /** Enfriamiento del SFX de cambio de posición (ms): máximo 1 por cambio. */
+  positionSfxCooldownMs: 2000,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Gran Premio vs CPU (issue #14, V0)                                  */
 /* ------------------------------------------------------------------ */
 

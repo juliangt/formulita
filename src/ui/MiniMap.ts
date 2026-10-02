@@ -10,6 +10,11 @@
  *
  * V2 (multi): `updateCars` acepta N coches con tinte (la paleta del roster);
  * V1 pasa sólo el auto del jugador.
+ *
+ * V3 (#14): destacado del auto PROPIO (punto más grande + halo, presentación
+ * decidida por la función pura `miniMapDotPresentation`) — OPT-IN por init
+ * (`highlightId`): sin la opción el look es exactamente el histórico, así la
+ * práctica y el multi no cambian salvo que la escena lo pida.
  */
 
 import Phaser from 'phaser';
@@ -19,6 +24,7 @@ import type { TrackPath } from '../race/trackPath';
 import {
   computeMiniMapTransform,
   miniMapContour,
+  miniMapDotPresentation,
   worldToMiniMap,
 } from '../race/minimap';
 
@@ -31,8 +37,6 @@ const BORDER_PX = 3;
 /** Color y grosor del contorno de la pista. */
 const CONTOUR_COLOR = 0xe8e6e0;
 const CONTOUR_WIDTH_PX = 3;
-/** Escala de la partícula 4×4 usada como punto de coche. */
-const CAR_DOT_SCALE = 3;
 
 /** Coche a dibujar sobre el minimapa. */
 export interface MiniMapCar {
@@ -56,6 +60,11 @@ export interface MiniMapConfig {
   readonly padding?: number;
   /** Profundidad en la escena. */
   readonly depth?: number;
+  /**
+   * V3 (#14) — id del coche a DESTACAR (el propio): punto más grande con
+   * halo. Opt-in: `undefined` (default) mantiene el look clásico de V1/V2.
+   */
+  readonly highlightId?: string;
 }
 
 export class MiniMap {
@@ -63,7 +72,16 @@ export class MiniMap {
 
   private readonly transform: ReturnType<typeof computeMiniMapTransform>;
   private readonly size: number;
+  private readonly highlightId: string | undefined;
   private readonly dots = new Map<string, Phaser.GameObjects.Image>();
+  /** Halos de los puntos destacados (mismo id; viven DETRÁS de los puntos). */
+  private readonly halos = new Map<string, Phaser.GameObjects.Image>();
+  /**
+   * Cantidad de hijos de presentación (panel + contorno) previos a los
+   * puntos: los halos se insertan en ese índice para quedar por encima de la
+   * pista y por DEBAJO de todos los coches.
+   */
+  private readonly baseChildCount: number;
 
   constructor(
     scene: Phaser.Scene,
@@ -76,9 +94,11 @@ export class MiniMap {
       size = RACE.miniMapSize,
       padding = RACE.miniMapPadding,
       depth = 0,
+      highlightId,
     } = config;
 
     this.size = size;
+    this.highlightId = highlightId;
     this.transform = computeMiniMapTransform(path, size, padding);
 
     this.container = scene.add.container(x, y).setDepth(depth);
@@ -98,33 +118,59 @@ export class MiniMap {
     );
     contour.strokePoints(points, true);
     this.container.add(contour);
+
+    this.baseChildCount = this.container.length;
   }
 
   /**
    * Sincroniza los puntos de los coches con la lista dada (llamado por
    * frame). Crea el punto la primera vez que aparece un id, lo reutiliza
-   * después y destruye los que ya no viajan (coches eliminados en V2).
+   * después y destruye los que ya no viajan (coches eliminados en V2). El id
+   * destacado (`highlightId`) escala su punto y le agrega un halo tenue.
    */
   updateCars(cars: readonly MiniMapCar[]): void {
     const seen = new Set<string>();
     for (const car of cars) {
       seen.add(car.id);
+      const presentation = miniMapDotPresentation(car.id === this.highlightId);
       let dot = this.dots.get(car.id);
       if (!dot) {
         dot = this.container.scene.add
           .image(0, 0, TEXTURE_KEYS.particle)
-          .setScale(CAR_DOT_SCALE)
+          .setScale(presentation.scale)
           .setTint(car.tint);
         this.dots.set(car.id, dot);
         this.container.add(dot);
       }
+      dot.setScale(presentation.scale);
       const point = worldToMiniMap(car.x, car.y, this.transform);
-      dot.setPosition(point.x - this.size / 2, point.y - this.size / 2);
+      const px = point.x - this.size / 2;
+      const py = point.y - this.size / 2;
+      dot.setPosition(px, py);
+      if (presentation.halo) {
+        let halo = this.halos.get(car.id);
+        if (!halo) {
+          halo = this.container.scene.add
+            .image(0, 0, TEXTURE_KEYS.particle)
+            .setTint(presentation.halo.tint);
+          this.halos.set(car.id, halo);
+          this.container.add(halo);
+          // El halo entra por DEBAJO de todos los puntos (encima del panel).
+          this.container.moveTo(halo, this.baseChildCount);
+        }
+        halo.setScale(presentation.halo.scale).setAlpha(presentation.halo.alpha);
+        halo.setPosition(px, py);
+      } else {
+        this.halos.get(car.id)?.destroy();
+        this.halos.delete(car.id);
+      }
     }
     for (const [id, dot] of this.dots) {
       if (!seen.has(id)) {
         dot.destroy();
         this.dots.delete(id);
+        this.halos.get(id)?.destroy();
+        this.halos.delete(id);
       }
     }
   }
@@ -132,5 +178,6 @@ export class MiniMap {
   destroy(): void {
     this.container.destroy();
     this.dots.clear();
+    this.halos.clear();
   }
 }

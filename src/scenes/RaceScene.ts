@@ -13,6 +13,7 @@ import {
   RACE_HUD,
   RACE_LAP_BANNER,
   RACE_MULTI,
+  RACE_VS_CPU,
   SPECTATOR_OVERLAY,
   STATE_HZ,
   TOUCH_HUD,
@@ -45,12 +46,15 @@ import {
   raceMultiResultsPayload,
   racePracticeResultsPayload,
   raceVsCpuResultsPayload,
+  CPU_DIFFICULTY_LABELS,
   DEFAULT_CPU_DIFFICULTY,
   type CpuDifficulty,
   type RaceSceneInit,
   type RaceVsCpuResultsData,
 } from '../race/results';
 import { raceEngineSpeed } from '../race/raceAudio';
+import { computeRaceGaps } from '../race/raceGap';
+import { PositionSwapDetector } from '../race/racePositionSwap';
 import {
   sampleFromProgress,
   unrollProgress,
@@ -400,6 +404,17 @@ class RaceTouchControls implements IInputSource {
    * driver corre con errores humanos (Poisson), búsqueda de hueco (visión de
    * los demás autos, ver `stepVsCpu`) y goma acotada según el gap al
    * jugador — todo con el RNG propio del rival, determinista por seed.
+   *
+   * V3 (issue #14) — CARRERA VIVA: durante el GRAN PREMIO se entiende contra
+   * quién se pelea — gap en tiempo a los rivales de adelante/atrás (puro en
+   * `race/raceGap`, mostrado a 4 Hz con el ranking), chip de contexto
+   * "GRAN PREMIO · PISTA · DIFICULTAD", punto PROPIO destacado en el
+   * minimapa (opt-in en `MiniMap`), nombres un punto más grandes sobre los
+   * rivales y SFX de largada + adelantamiento (detección pura con
+   * enfriamiento en `race/racePositionSwap`, sonando por el bus como
+   * `race-go`/`race-overtake`). Práctica y multi: cero cambios, salvo el
+   * destacado del minimapa en multi (opt-in genérico). La cámara NO cambia:
+   * su zoom fijo ya elegido prioriza legibilidad móvil (decisión V3).
    */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';
@@ -535,6 +550,12 @@ export class RaceScene extends Phaser.Scene {
   private rivals: RivalRuntime[] = [];
   /** Dificultad de los rivales (presets en `RACE_AI`; default 'normal'). */
   private cpuDifficulty: CpuDifficulty = DEFAULT_CPU_DIFFICULTY;
+  /**
+   * V3 (#14) — detector de cambios de posición propia (SFX de
+   * adelantamiento con enfriamiento). Se recrea en create: el restart
+   * reutiliza la instancia de escena y el estado debe arrancar limpio.
+   */
+  private positionSwapDetector!: PositionSwapDetector;
 
   constructor() {
     super(RaceScene.KEY);
@@ -568,6 +589,9 @@ export class RaceScene extends Phaser.Scene {
     this.rivals = [];
     this.rivalRoster = [];
     this.cpuDifficulty = this.sceneInit.difficulty ?? DEFAULT_CPU_DIFFICULTY;
+    // V3 (#14) — detector fresco de cambios de posición (idempotencia del
+    // restart: sin línea base heredada de la carrera anterior).
+    this.positionSwapDetector = new PositionSwapDetector(RACE_VS_CPU.positionSfxCooldownMs);
 
     // Parrilla determinista detrás de la meta: práctica = un solo corredor
     // en la pole; multi = TODO el roster (misma seed ⇒ misma parrilla en
@@ -795,7 +819,7 @@ export class RaceScene extends Phaser.Scene {
   /** Minimapa: el auto propio + un punto por rival con SU color del roster. */
   private syncMiniMap(): void {
     const cars = [
-      { id: 'player', x: this.carState.x, y: this.carState.y, tint: PLAYER_MINIMAP_TINT },
+      { id: PLAYER_PEER_ID, x: this.carState.x, y: this.carState.y, tint: PLAYER_MINIMAP_TINT },
     ];
     // V1 (#14) — los 7 rivales compiten en el mundo: cada punto usa el MISMO
     // color que su sprite (MiniMap ya soporta N marcadores).
@@ -838,6 +862,13 @@ export class RaceScene extends Phaser.Scene {
     this.racingLine = buildRacingLine(this.path, this.trackDef.widthPx);
     const slotsByPeer = new Map(this.gridSlots.map((slot) => [slot.peerId, slot]));
 
+    // V3 (#14) — chip de contexto "GRAN PREMIO · MÓNACO · DIFÍCIL": fijo
+    // toda la carrera (el HUD repinta sólo si cambió).
+    this.raceHud.setInfoChip(
+      this.trackDef.name,
+      CPU_DIFFICULTY_LABELS[this.cpuDifficulty] ?? CPU_DIFFICULTY_LABELS.normal,
+    );
+
     for (const rival of this.rivalRoster) {
       const slot = slotsByPeer.get(rival.peerId) ?? this.gridSlots[0];
       const state: CarState = {
@@ -872,6 +903,11 @@ export class RaceScene extends Phaser.Scene {
         peerId: rival.peerId,
         name: rival.name,
         color: rival.color,
+      }, {
+        // V3 (#14) — nombre un punto más grande que el default del multi:
+        // en el GRAN PREMIO hay que saber CONTRA QUIÉN se pelea a zoom
+        // RACE.cameraZoom (el multi conserva su tamaño histórico).
+        labelFontSize: RACE_VS_CPU.rivalNameFontSize,
       });
       if (slot.x !== undefined && slot.y !== undefined) {
         car.sync(slot.x, slot.y, slot.angle ?? 0);
@@ -952,6 +988,25 @@ export class RaceScene extends Phaser.Scene {
     );
     const mine = standings.find((standing) => standing.peerId === PLAYER_PEER_ID);
     this.raceHud.setPosition(mine?.position ?? 1, standings.length);
+
+    // V3 (#14) — gap en tiempo a los rivales de adelante/atrás (puramente
+    // del progreso desenrollado dividido por la velocidad propia: se oculta
+    // con la velocidad baja, al arrancar, y se clampea lejos).
+    const gaps = computeRaceGaps(
+      mine?.progress ?? 0,
+      this.carState.speed,
+      standings.filter((standing) => standing.peerId !== PLAYER_PEER_ID),
+      { maxSeconds: RACE_VS_CPU.gapMaxSeconds, minOwnSpeedPx: RACE_VS_CPU.gapMinOwnSpeedPx },
+    );
+    this.raceHud.setGaps(gaps.ahead?.seconds ?? null, gaps.behind?.seconds ?? null);
+
+    // V3 (#14) — SFX de adelantamiento: la detección (dirección + enfriamiento
+    // de ~2 s, máximo 1 por cambio) es el detector puro; el bus sólo se entera
+    // cuando corresponde sonar.
+    const swap = this.positionSwapDetector.update(mine?.position ?? 1, this.time.now);
+    if (swap !== null) {
+      this.bus.emit('race-overtake', undefined);
+    }
   }
 
   /**
@@ -1754,6 +1809,10 @@ export class RaceScene extends Phaser.Scene {
       x: width - RACE.miniMapMargin - RACE.miniMapSize / 2,
       y: RACE.miniMapMargin + RACE.miniMapSize / 2,
       depth: RACE_HUD.depth,
+      // V3 (#14) — el punto PROPIO se destaca donde hay rivales (vs CPU y
+      // multi): más grande y con halo. La práctica conserva SU look clásico
+      // de un solo punto (el destacado es opt-in por init del widget).
+      highlightId: this.isVsCpu() || this.isMultiRace() ? PLAYER_PEER_ID : undefined,
     });
     this.miniMap.container.setScrollFactor(0);
     this.hudWidgets.push(this.miniMap);
@@ -1849,6 +1908,12 @@ export class RaceScene extends Phaser.Scene {
 
   /** Fin de la cuenta: el GO! se desvanece y el mundo arranca. */
   private finishCountdown(): void {
+    // V3 (#14) — SFX de largada del GRAN PREMIO (sólo vs CPU: la práctica y
+    // el multi no cambian su arranque). El `game-start` de siempre va para
+    // TODOS los modos: arranca el dron del motor, no suena.
+    if (this.isVsCpu()) {
+      this.bus.emit('race-go', undefined);
+    }
     // V4 — el dron del motor arranca con el GO! (mismo evento que la
     // BATALLA; el AudioManager mantiene su perfil móvil de #4 intacto).
     this.bus.emit('game-start', undefined);
