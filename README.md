@@ -26,8 +26,7 @@ Requisitos: Node 20+ (probado en Node 22) y npm 10+.
 npm install
 npm run dev        # dev server en http://localhost:5173 (expuesto en la LAN)
 npm run build      # chequeo de tipos (tsc) + build de producción en dist/
-npm run preview    # sirve el build de producción (http://localhost:4173)
-npm run serve      # sirve dist/ en el puerto 5200 (sin cache, útil en iOS)
+npm run preview    # sirve dist/ en http://localhost:4173 (sin caché para iOS, expuesto en la LAN)
 npm test           # suite de tests (Vitest)
 ```
 
@@ -40,7 +39,7 @@ npm test           # suite de tests (Vitest)
 3. Abrí esa URL en el navegador del celular (`server.host: true` ya está configurado en `vite.config.ts`).
 4. Si no conecta: revisá que el firewall de tu máquina permita conexiones entrantes al puerto 5173.
 
-También funciona con `npm run preview` (puerto 4173) o `npm run serve` (puerto 5200) para probar el build desde el celular.
+También funciona con `npm run preview` (puerto 4173) para probar el build desde el celular.
 
 ### Instalarla como "app" (opcional)
 
