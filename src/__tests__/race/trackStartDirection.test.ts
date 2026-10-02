@@ -5,7 +5,7 @@ import { TRACKS, buildTrackPath } from '../../race/tracks';
 
 /**
  * Tests de REGRESIÓN del criterio del issue #20 (Fase 2): la LARGADA es
- * hacia ARRIBA de la pantalla en las 5 pistas y la inversión de los
+ * hacia ARRIBA de la pantalla en las 6 pistas y la inversión de los
  * waypoints no cambió la geometría.
  *
  * La Fase 1 invirtió el orden de los waypoints de las 5 pistas (los MISMOS
@@ -96,6 +96,7 @@ describe('issue #20 — la inversión de waypoints no cambia la geometría', () 
     silverstone: 28,
     spa: 30,
     suzuka: 32,
+    galvez: 31,
   } as const;
 
   for (const def of TRACKS) {

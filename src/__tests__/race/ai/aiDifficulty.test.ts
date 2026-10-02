@@ -479,9 +479,10 @@ function simulateLaps(
  *   silverstone | 29683  | 27272  | 23956
  *   spa         | 29733  | 27378  | 24089
  *   suzuka      | 29594  | 27517  | 24378
+ *   galvez      | 29272  | 27028  | 24133
  *
  * Solape acotado (medido, mismas seeds): normal es 7.0–8.3% más rápido que
- * fácil y difícil 11.4–12.3% más rápido que normal — se pueden batir entre
+ * fácil y difícil 10.7–12.3% más rápido que normal — se pueden batir entre
  * sí en una carrera punta a punta, pero NUNCA se confunden en el ritmo.
  */
 const MEASURED_MEDIAN_RIVAL_LAP_MS: Record<
@@ -493,6 +494,7 @@ const MEASURED_MEDIAN_RIVAL_LAP_MS: Record<
   silverstone: { easy: 29683, normal: 27272, hard: 23956 },
   spa: { easy: 29733, normal: 27378, hard: 24089 },
   suzuka: { easy: 29594, normal: 27517, hard: 24378 },
+  galvez: { easy: 29272, normal: 27028, hard: 24133 },
 };
 
 /** Ancho de la banda de validación alrededor de lo medido (±10%). */
