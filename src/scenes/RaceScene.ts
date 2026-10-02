@@ -595,6 +595,24 @@ export class RaceScene extends Phaser.Scene {
     // restart: sin línea base heredada de la carrera anterior).
     this.positionSwapDetector = new PositionSwapDetector(RACE_VS_CPU.positionSfxCooldownMs);
 
+    // Estado POR CARRERA fresco (multi y vs CPU): la instancia de escena
+    // sobrevive a los restarts y nada de la carrera anterior debe colarse —
+    // un `race-over`/`rfin` viejo concluía la siguiente carrera multi al
+    // instante y un `selfFinished` heredado del multi congelaba al jugador
+    // en el GRAN PREMIO (nunca pisaba el acelerador ni contaba vueltas).
+    this.raceConcluded = false;
+    this.selfFinished = false;
+    this.firstFinish = null;
+    this.raceOverStandings = null;
+    this.raceOverSent = false;
+    this.followingPeerId = null;
+    this.rankAccumulatorMs = 0;
+    this.stateAccumulatorMs = 0;
+    this.staleSweepAccumulatorS = 0;
+    this.finishedPeers.clear();
+    this.remoteProgress.clear();
+    this.disconnectedPeers.clear();
+
     // Parrilla determinista detrás de la meta: práctica = un solo corredor
     // en la pole; multi = TODO el roster (misma seed ⇒ misma parrilla en
     // todos los clientes, ver `gridOrder`); vs CPU (#14) = jugador + los 7

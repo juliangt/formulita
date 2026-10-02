@@ -146,13 +146,13 @@ Requisitos (una sola vez, quien administra el repo):
 
 ---
 
-## Carrera en circuito (ENTRENAR / CARRERA)
+## Carrera en circuito (GRAN PREMIO / CARRERA)
 
 **Vueltas por un circuito cerrado, como la F1 de verdad.** 5 pistas con identidad propia (**MÓNACO, MONZA, SILVERSTONE, SPA, SUZUKA**), parrilla de salida detrás de la meta, **3 vueltas (~2 min de carrera)** y cronometraje completo: tiempo total, vuelta en curso y **mejor vuelta**. El auto es **auto-acelerado**: el acelerador va pisado, frenar y doblar son las acciones (◀ ▶ + FRENO táctil, ←→/A·D + ↓/S/Espacio en teclado). El modo es **P2P sin servidor**: la pista es idéntica en todos los dispositivos (mismo trazado dibujado proceduralmente) y la parrilla es **aleatoria pero determinista** — la seed de la sala produce la misma grilla en cada cliente, sin negociar nada.
 
 ### Cómo se juega
 
-- **ENTRENAR (practice, un solo corredor)**: Menú → **ENTRENAR** → elegí pista. Corrés solo contra el cronómetro, con pausa real (botón II, tecla P o pérdida de foco) y resultados con tu tiempo total y mejor vuelta. **REINTENTAR** repite la misma pista.
+- **Practice (un solo corredor)**: la variante solitaria de la carrera. Con el GRAN PREMIO (#14) quedó como rama interna de la RaceScene (fallback del init y REINTENTAR desde resultados): el botón local del menú pasó a lanzar el **GRAN PREMIO**. Mismas 3 vueltas contra el cronómetro, con pausa real (botón II, tecla P o pérdida de foco) y resultados con tu tiempo total y mejor vuelta.
 - **CARRERA (multi, 2–10 jugadores)**: Menú → **MULTIJUGADOR** → crear/unirse a sala. El **anfitrión** elige el modo **CARRERA** y la pista (con miniatura); los invitados la conocen al arrancar. Countdown 3-2-1-GO! sincronizado, ranking en vivo (**P3/8** en el HUD) y al terminar cada uno difunde su `rfin` con sus tiempos exactos.
 - **Fin de carrera**: el primero en completar las 3 vueltas gana; la partida cierra cuando terminan todos o a los 30 s del primer finish (los que no llegaron clasifican por su último progreso). Podio final con nombres, colores y tiempos, **VUELTA RÁPIDA de la carrera** destacada en oro, y **confeti** al cruzar tu meta final. En multi, quien termina pasa a **espectador** siguiendo al líder (con botón CHAT, igual que la BATALLA).
 - **Sonido**: el dron del motor sube de tono con la velocidad (mismo sintetizador del modo solo, con perfil móvil), arranca con el GO! y se apaga en pausa, al terminar o al salir.
@@ -168,7 +168,7 @@ Requisitos (una sola vez, quien administra el repo):
 
 ### QA del issue #9 (verificación manual, además de la suite)
 
-- [ ] ENTRENAR: countdown, 3 vueltas, cartel pop **¡VUELTA 2/3!** al completar cada vuelta que no sea la final, cartel ¡BANDERA A CUADROS! + **confeti** en la última, resultados con tiempo total y mejor vuelta, REINTENTAR repite la pista.
+- [ ] Carrera local (GRAN PREMIO, y practice como rama interna): countdown, 3 vueltas, cartel pop **¡VUELTA 2/3!** al completar cada vuelta que no sea la final, cartel ¡BANDERA A CUADROS! + **confeti** en la última, resultados con tiempo total y mejor vuelta.
 - [ ] El dron del motor sube de tono al acelerar y baja al frenar; se calla en pausa, al cruzar la meta y al salir por MENÚ (sin sonido colgado).
 - [ ] CARRERA: parrilla idéntica en todos los dispositivos, badge Pn/N en vivo, `rfin` propio → espectador con cartel + botón CHAT, cierre de la carrera (todos terminan o gracia de 30 s) y **podio final idéntico** con la línea **VUELTA RÁPIDA: NOMBRE (M:SS.mmm)** en oro.
 - [ ] Un peer en background >20 s desaparece del mundo/minimapa y figura como ABANDONÓ en el podio; la carrera concluye igual.
@@ -183,7 +183,7 @@ Requisitos (una sola vez, quien administra el repo):
 
 ### Cómo se juega
 
-1. Menú → **GRAN PREMIO** → elegí pista (con miniatura) y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
+1. Menú → **GRAN PREMIO** → elegí pista y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
 2. Countdown 3-2-1-GO! y largada: **mismos controles que la carrera en circuito** (auto-acelerado: ◀ ▶ + FRENO táctil, ←→/A·D + ↓/S/Espacio en teclado — ver [Controles](#controles)).
 3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD** y minimapa con **tu punto destacado**. Cambiar de posición suena (igual al ganar que al perder el lugar).
 4. Al cruzar TU meta: **podio con el top 3** (nombres de los rivales, ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista y dificultad con parrilla nueva.
@@ -210,7 +210,7 @@ Requisitos (una sola vez, quien administra el repo):
 - [ ] Podio correcto: top 3 con nombres y ganador en oro; terminar 4º o peor muestra tu fila destacada debajo; ¡NUEVO RÉCORD! parpadea solo cuando superaste una marca (posición o vuelta).
 - [ ] Récords por pista × dificultad aislados: una marca en MÓNACO FÁCIL no aparece ni en MONZA ni en DIFÍCIL, y persiste tras recargar la página (F5).
 - [ ] Sin red: en modo avión / offline el GRAN PREMIO arranca y corre completo (el modo nunca toca la red).
-- [ ] Regresión: ENTRENAR, CARRERA multi, la BATALLA y el modo solo funcionan exactamente igual que antes.
+- [ ] Regresión: CARRERA multi, la BATALLA y el modo solo funcionan exactamente igual que antes (el practice de #9 queda como rama interna de la RaceScene, sin cambios de comportamiento).
 
 ---
 
