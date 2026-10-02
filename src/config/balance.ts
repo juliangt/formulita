@@ -261,6 +261,55 @@ export const MENU = {
 } as const;
 
 /**
+ * Layout del overlay selector de GRAN PREMIO de MenuScene (V1, issue #9):
+ * panel centrado con título, una fila por pista (botón con el nombre + hint
+ * del circuito real que lo inspira), selector de DIFICULTAD del rival (#14)
+ * y CERRAR. Mismo patrón de la subpantalla EN LÍNEA.
+ *
+ * Issue #26: con la 6ª pista (GÁLVEZ) el paso de 120 px hacía que la última
+ * fila cayera sobre el rótulo de dificultad. Se compactó la fila (alto 76,
+ * hint 14 px, paso 102) manteniendo panel, dificultad y CERRAR en su lugar:
+ * la última fila queda ~18 px por encima de DIFICULTAD DEL RIVAL y todo el
+ * bloque vive dentro del panel (invariante fijado en `balance.test.ts`).
+ */
+export const TRACK_PICKER = {
+  /** Opacidad del velo oscuro sobre el menú (0–1). */
+  dimAlpha: 0.86,
+  /** Centro Y y tamaño del panel. */
+  panelY: 700,
+  panelWidth: 620,
+  panelHeight: 1050,
+  /** Y del título ENTRENAR y del subtítulo (centros). */
+  titleY: 300,
+  subtitleY: 368,
+  /** Filas de pistas: centro Y de la primera y paso entre filas. */
+  rowStartY: 444,
+  rowStep: 102,
+  /** Tamaño del botón de cada fila. */
+  rowWidth: 540,
+  rowHeight: 76,
+  /** Hint del circuito inspirador: hueco bajo el botón y fuente. */
+  hintGap: 8,
+  hintFontSize: 14,
+  /* #14 — selector de dificultad del rival: rótulo + 3 botones pixel
+   * (FÁCIL / NORMAL / DIFÍCIL) entre las filas de pistas y CERRAR. */
+  /** Y del rótulo DIFICULTAD (centro) y su fuente. */
+  difficultyLabelY: 1044,
+  difficultyLabelFontSize: 24,
+  /** Y del centro de la fila de botones de dificultad. */
+  difficultyRowY: 1088,
+  /** Tamaño de cada botón de dificultad y offsets X desde el centro. */
+  difficultyButtonWidth: 180,
+  difficultyButtonHeight: 60,
+  difficultyButtonOffsetX: 200,
+  difficultyFontSize: 24,
+  /** Botón CERRAR. */
+  closeY: 1170,
+  closeWidth: 300,
+  closeHeight: 88,
+} as const;
+
+/**
  * Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo).
  *
  * V1 (issue #9): la rama de resultados de carrera (ENTRENAR) reutiliza las
@@ -465,7 +514,7 @@ export const CIRCUIT = {
    * Velocidad de referencia para validar pistas (px/s), ≈ 60% de `maxSpeed`.
    * Es el ritmo medio de vuelta esperado (las curvas y el pasto impiden
    * sostener la punta). Con ella se valida: (a) el radio de curvatura de
-   * cada punto de las 5 pistas — debe permitir sostener la curva a esta
+   * cada punto de las 6 pistas — debe permitir sostener la curva a esta
    * velocidad con la tasa de giro disponible — y (b) la longitud de vuelta
    * contra la banda 36–44 s (objetivo 40 s ⇒ pista de ~18000 px).
    * Issue #18: 180 × 2.5 (mundo ×2.5 ⇒ vuelta de ~40 s intacta).
@@ -1088,7 +1137,10 @@ export const LOBBY = {
   trackButtonHeight: 56,
   trackButtonFontSize: 22,
   /* Overlay del picker de pistas del lobby (miniaturas TrackThumb), mismo
-   * patrón del selector de ENTRENAR del menú. */
+   * patrón del selector de ENTRENAR del menú. Issue #26: con 6 pistas el
+   * paso de 118 px hacía que la última fila cayera sobre CERRAR; se compactó
+   * a 96 px (subiendo un pelín el arranque) para que la 6ª fila quede
+   * ~18 px por encima de CERRAR y todo siga dentro del panel. */
   /** Centro Y y tamaño del panel. */
   trackPanelY: 660,
   trackPanelWidth: 620,
@@ -1099,8 +1151,8 @@ export const LOBBY = {
   trackCloseWidth: 300,
   trackCloseHeight: 88,
   /** Filas: centro Y de la primera y paso entre filas. */
-  trackRowStartY: 430,
-  trackRowStep: 118,
+  trackRowStartY: 424,
+  trackRowStep: 96,
   /** Lado de la miniatura de cada fila (TrackThumb) y su centro X. */
   trackThumbSize: 88,
   trackThumbX: 155,
