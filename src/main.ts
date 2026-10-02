@@ -68,7 +68,7 @@ function bootstrap(): Phaser.Game {
   // de escala — el fix de iOS — corre SIEMPRE, con o sin debug.
   const debug = isDebugMode();
   installTransformGuard(game, { echo: debug });
-  installBuildTag();
+  installBuildTag(debug);
   return game;
 }
 
@@ -179,8 +179,8 @@ function createEchoRing(): HTMLDivElement {
  * qué versión corre cada dispositivo. En dev muestra "dev" (import.meta.url
  * no lleva hash). pointer-events: none → no interfiere.
  */
-function installBuildTag(): void {
-  if (typeof document === 'undefined' || !isDebugMode()) {
+function installBuildTag(debug: boolean): void {
+  if (typeof document === 'undefined' || !debug) {
     return;
   }
   const hash = import.meta.url.split('/').pop()?.match(/index-([\w-]+)\.js/)?.[1] ?? 'dev';
