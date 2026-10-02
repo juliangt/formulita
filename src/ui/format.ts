@@ -24,3 +24,31 @@ export function formatScore(score: number): string {
   const safe = Number.isFinite(score) && score > 0 ? Math.floor(score) : 0;
   return String(safe).padStart(SCORE_DIGITS, '0');
 }
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito (issue #9, V1)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tiempo de carrera en ms → cronómetro "M:SS.mmm" (0:42.317). Es el formato
+ * del HUD de la RaceScene y de la rama de resultados de carrera de
+ * GameOverScene. Defensivo: NaN, infinitos y negativos muestran 0:00.000.
+ */
+export function formatLapMs(ms: number): string {
+  const safe = Number.isFinite(ms) && ms > 0 ? Math.floor(ms) : 0;
+  const minutes = Math.floor(safe / 60000);
+  const seconds = Math.floor((safe % 60000) / 1000);
+  const millis = safe % 1000;
+  return `${minutes}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+}
+
+/**
+ * Badge de vuelta del HUD de carrera: "VUELTA 2/3". La vuelta entrante se
+ * clampea a [1, totalLaps] (defensa contra valores fuera de rango) y el total
+ * es siempre ≥ 1.
+ */
+export function formatLapBadge(lap: number, totalLaps: number): string {
+  const total = Number.isFinite(totalLaps) ? Math.max(1, Math.floor(totalLaps)) : 1;
+  const current = Number.isFinite(lap) ? Math.min(Math.max(1, Math.floor(lap)), total) : 1;
+  return `VUELTA ${current}/${total}`;
+}

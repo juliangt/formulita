@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DISTANCE_METERS_PER_PIXEL } from '../config/balance';
-import { formatDistance, formatScore } from '../ui/format';
+import { formatDistance, formatLapBadge, formatLapMs, formatScore } from '../ui/format';
 
 /**
  * Tests del formateo puro de la UI (Fase 5): los números que muestran el HUD
@@ -61,5 +61,45 @@ describe('formatDistance — metros por debajo del km, km después', () => {
     expect(formatDistance(Number.NaN)).toBe('0 M');
     expect(formatDistance(Number.POSITIVE_INFINITY)).toBe('0 M');
     expect(formatDistance(-500)).toBe('0 M');
+  });
+});
+
+describe('formatLapMs — cronómetro de la carrera en circuito (V1)', () => {
+  it('formatea M:SS.mmm', () => {
+    expect(formatLapMs(0)).toBe('0:00.000');
+    expect(formatLapMs(42_317)).toBe('0:42.317');
+    expect(formatLapMs(63_456)).toBe('1:03.456');
+    expect(formatLapMs(601_234)).toBe('10:01.234');
+  });
+
+  it('trunca los fraccionales de milisegundo (no redondea el cronómetro)', () => {
+    expect(formatLapMs(42_317.9)).toBe('0:42.317');
+  });
+
+  it('es defensivo: NaN, infinitos y negativos muestran 0:00.000', () => {
+    expect(formatLapMs(Number.NaN)).toBe('0:00.000');
+    expect(formatLapMs(Number.POSITIVE_INFINITY)).toBe('0:00.000');
+    expect(formatLapMs(Number.NEGATIVE_INFINITY)).toBe('0:00.000');
+    expect(formatLapMs(-1)).toBe('0:00.000');
+  });
+});
+
+describe('formatLapBadge — badge VUELTA n/N del HUD de carrera (V1)', () => {
+  it('formatea la vuelta en curso sobre el total', () => {
+    expect(formatLapBadge(1, 3)).toBe('VUELTA 1/3');
+    expect(formatLapBadge(2, 3)).toBe('VUELTA 2/3');
+    expect(formatLapBadge(3, 3)).toBe('VUELTA 3/3');
+  });
+
+  it('clampea la vuelta entrante a [1, totalLaps]', () => {
+    expect(formatLapBadge(0, 3)).toBe('VUELTA 1/3');
+    expect(formatLapBadge(-2, 3)).toBe('VUELTA 1/3');
+    expect(formatLapBadge(9, 3)).toBe('VUELTA 3/3');
+  });
+
+  it('es defensivo: total inválido cae a 1 y NaN da vuelta 1', () => {
+    expect(formatLapBadge(1, Number.NaN)).toBe('VUELTA 1/1');
+    expect(formatLapBadge(Number.NaN, 3)).toBe('VUELTA 1/3');
+    expect(formatLapBadge(2, 0)).toBe('VUELTA 1/1');
   });
 });

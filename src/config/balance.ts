@@ -188,6 +188,11 @@ export const RACE_HUD = {
  * M1 — multijugador: se agregó el botón MULTIJUGADOR debajo de JUGAR y el
  * bloque se reacomodó (título/auto/estadísticas más arriba) para que ambos
  * botones + la ayuda quepan sin tocarse.
+ *
+ * V1 (issue #9): se agregó el botón ENTRENAR (RaceScene local) entre JUGAR y
+ * MULTIJUGADOR y el bloque inferior volvió a reacomodarse: los tres botones
+ * grandes bajaron de 118 a 96/88 px de alto y la ayuda compactó su interlineado
+ * para que todo siga quepa en el lienzo sin tocarse.
  */
 export const MENU = {
   /** Velocidad de scroll de la pista de fondo (px/s). */
@@ -206,34 +211,43 @@ export const MENU = {
   /** Y de la línea de monedas (centro). */
   coinsY: 714,
   /** Botón JUGAR: centro Y, tamaño y fuente de la etiqueta. */
-  playY: 848,
+  playY: 840,
   playWidth: 400,
-  playHeight: 118,
+  playHeight: 104,
   playFontSize: 52,
-  /* M1 — botón MULTIJUGADOR: debajo de JUGAR, mismo ancho, etiqueta más
-   * chica (13 caracteres de monospace tienen que entrar en 400 px). */
+  /* V1 (issue #9) — botón ENTRENAR: debajo de JUGAR, mismo ancho, abre el
+   * selector de pistas (overlay) y lanza RaceScene en modo práctica. */
+  /** Centro Y del botón ENTRENAR. */
+  trainY: 948,
+  /** Ancho/alto del botón ENTRENAR (mismo ancho que JUGAR). */
+  trainWidth: 400,
+  trainHeight: 88,
+  /** Tamaño de fuente de la etiqueta ENTRENAR (px). */
+  trainFontSize: 40,
+  /* M1 — botón MULTIJUGADOR: debajo de ENTRENAR, mismo ancho (13 caracteres
+   * de monospace tienen que entrar en 400 px). */
   /** Centro Y del botón MULTIJUGADOR. */
-  multiY: 988,
-  /** Ancho/alto del botón MULTIJUGADOR (mismo ancho que JUGAR). */
+  multiY: 1056,
+  /** Ancho/alto del botón MULTIJUGADOR (mismo ancho que JUGAR/ENTRENAR). */
   multiWidth: 400,
-  multiHeight: 118,
+  multiHeight: 88,
   /** Tamaño de fuente de la etiqueta MULTIJUGADOR (px). */
   multiFontSize: 40,
   /* C2 (issue #2) — botón CHAT: debajo de MULTIJUGADOR, mismo ancho; abre el
    * overlay con la tab PÚBLICO (el chat social vive también en el menú). El
-   * bloque de ayuda baja para hacerle sitio (helpY 1150 → 1204): quedan 9 px
-   * de aire a cada lado del botón y 13 px de margen inferior. */
+   * bloque de ayuda compactó su interlineado para hacerle sitio (helpY
+   * 1204 → 1220, helpLineHeight 34 → 30). */
   /** Centro Y del botón CHAT del menú. */
-  chatY: 1096,
-  /** Ancho/alto del botón CHAT (mismo ancho que JUGAR/MULTIJUGADOR). */
+  chatY: 1136,
+  /** Ancho/alto del botón CHAT (mismo ancho que JUGAR/ENTRENAR/MULTIJUGADOR). */
   chatWidth: 400,
   chatHeight: 64,
   /** Tamaño de fuente de la etiqueta CHAT (px). */
   chatFontSize: 34,
   /** Y del centro del bloque de ayuda de controles. */
-  helpY: 1204,
+  helpY: 1220,
   /** Separación vertical entre líneas de ayuda (px). */
-  helpLineHeight: 34,
+  helpLineHeight: 30,
   /** Tamaño de fuente de las líneas de récord/monedas (px). */
   statFontSize: 34,
   /* Botón FULLSCREEN (Fase 7, solo desktop): esquina superior izquierda,
@@ -249,7 +263,14 @@ export const MENU = {
   fullscreenFontSize: 22,
 } as const;
 
-/** Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo). */
+/**
+ * Layout de GameOverScene sobre el lienzo 720×1280 (de arriba hacia abajo).
+ *
+ * V1 (issue #9): la rama de resultados de carrera (ENTRENAR) reutiliza las
+ * mismas posiciones: el título pasa a RESULTADOS, la línea del cartel muestra
+ * la pista y las tres líneas de estadísticas muestran tiempo total, mejor
+ * vuelta y vueltas completadas.
+ */
 export const GAME_OVER = {
   /** Y del título GAME OVER (centro). */
   titleY: 210,
@@ -464,6 +485,54 @@ export const CIRCUIT = {
   gridLateralOffsetPx: 35,
   /** Distancia de la primera fila (pole) detrás de la meta (px de arco). */
   gridStartOffsetPx: 140,
+} as const;
+
+/* ------------------------------------------------------------------ */
+/* Carrera en circuito (issue #9, V1 — RaceScene local / ENTRENAR)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Presentación de la RaceScene (V1): cámara, HUD de carrera y minimapa sobre
+ * el lienzo 720×1280. El gameplay vive en `CIRCUIT`; acá sólo hay layout y
+ * feeling de cámara. V2 (multi) reutiliza el mismo bloque.
+ */
+export const RACE = {
+  /* Cámara: sigue al auto con lerp (norte arriba, sin rotación), zoom fijo
+   * y clampada al mundo de la pista. El zoom < 1 muestra más contexto del
+   * circuito: a 300 px/s la punta cruza la pantalla en ~3 s a zoom 1, y con
+   * 0.8 se ve lo suficiente para planificar la curva siguiente. */
+  /** Zoom fijo de la cámara (1 = px de mundo 1:1). */
+  cameraZoom: 0.8,
+  /** Lerp de seguimiento (por frame, interpolación exponencial de Phaser). */
+  cameraLerp: 0.14,
+  /* HUD de carrera (RaceHud): columna del borde superior izquierdo. El
+   * minimapa ocupa la esquina superior derecha, así que el centro queda
+   * despejado para ver la pista adelante. */
+  /** X del borde izquierdo de los textos del HUD (origen 0). */
+  hudX: 24,
+  /** Y del badge VUELTA n/N (centro). */
+  lapBadgeY: 56,
+  /** Y del tiempo de vuelta en curso (centro). */
+  lapTimeY: 104,
+  /** Y del tiempo total (centro). */
+  totalTimeY: 142,
+  /** Tamaños de fuente del HUD de carrera (px). */
+  lapBadgeFontSize: 34,
+  lapTimeFontSize: 30,
+  totalTimeFontSize: 22,
+  /* Minimapa (MiniMap): cuadrado en la esquina superior derecha. */
+  /** Lado del minimapa (px). */
+  miniMapSize: 180,
+  /** Margen del minimapa desde los bordes superior/derecho (px). */
+  miniMapMargin: 20,
+  /** Padding interno entre el borde del panel y el contorno (px). */
+  miniMapPadding: 12,
+  /* Botón de pausa: centrado bajo el minimapa (misma columna), mismo tamaño
+   * que el de GameScene (RACE_HUD.pauseButtonSize). */
+  /** X del centro del botón de pausa. */
+  pauseX: 610,
+  /** Y del centro del botón de pausa. */
+  pauseY: 268,
 } as const;
 
 /** X del centro de un carril del asfalto (índice 0 = izquierda). */

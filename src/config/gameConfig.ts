@@ -4,6 +4,7 @@ import { PreloadScene } from '../scenes/PreloadScene';
 import { MenuScene } from '../scenes/MenuScene';
 import { LobbyScene } from '../scenes/LobbyScene';
 import { GameScene } from '../scenes/GameScene';
+import { RaceScene } from '../scenes/RaceScene';
 import { GameOverScene } from '../scenes/GameOverScene';
 import { PauseScene } from '../scenes/PauseScene';
 
@@ -67,13 +68,26 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
     dom: {
       createContainer: true,
     },
-    // Flujo completo (Fase 5 + pausa de Fase 7 + lobby de M1): Boot →
-    // Preload (texturas) → Menu → Game → GameOver; REINTENTAR vuelve a Game
-    // y MENÚ a Menu. LobbyScene (M1) vive entre Menu y Game: se arranca con
-    // init data {mode:'create'|'join', name} desde el menú y arranca Game
-    // con los datos de la sala. PauseScene es un OVERLAY: no está en el
-    // flujo, se lanza encima de Game (pausada) y se detiene al reanudar. El
-    // orden del array es el flujo: Phaser arranca la primera escena.
-    scene: [BootScene, PreloadScene, MenuScene, LobbyScene, GameScene, GameOverScene, PauseScene],
+    // Flujo completo (Fase 5 + pausa de Fase 7 + lobby de M1 + carrera de
+    // circuito V1): Boot → Preload (texturas) → Menu → Game → GameOver;
+    // REINTENTAR vuelve a Game y MENÚ a Menu. LobbyScene (M1) vive entre Menu
+    // y Game: se arranca con init data {mode:'create'|'join', name} desde el
+    // menú y arranca Game con los datos de la sala. RaceScene (V1, issue #9)
+    // es el flujo paralelo de ENTRENAR: el menú la arranca con init data
+    // {trackId, mode:'practice'} y su GameOver transiciona a la MISMA
+    // GameOverScene (rama de resultados de carrera). PauseScene es un
+    // OVERLAY: no está en el flujo, se lanza encima de Game o de Race
+    // (pausada) y se detiene al reanudar. El orden del array es el flujo:
+    // Phaser arranca la primera escena.
+    scene: [
+      BootScene,
+      PreloadScene,
+      MenuScene,
+      LobbyScene,
+      GameScene,
+      RaceScene,
+      GameOverScene,
+      PauseScene,
+    ],
   };
 }

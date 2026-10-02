@@ -33,12 +33,15 @@ const HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
  * escena se LANZA encima (`scene.launch`) precisamente porque una escena
  * pausada tampoco procesa su input: los botones REANUDAR/MENÚ viven acá.
  *
- * Contrato con GameScene (patrón init data de Fase 5, no EventBus): se lanza
- * con `{ auto: boolean }` para explicar la PAUSA AUTOMÁTICA por pérdida de
- * foco. Al reanudar hace `resume(Game)` — el evento RESUME de la escena de
- * juego es el que re-sincroniza su PauseSystem y re-arma el input táctil —;
- * al ir al MENÚ hace `stop(Game)` (dispara el shutdown/limpieza de la
- * carrera) y `start(Menu)`.
+ * Contrato con la escena de juego (patrón init data de Fase 5, no EventBus):
+ * se lanza con `{ auto: boolean }` para explicar la PAUSA AUTOMÁTICA por
+ * pérdida de foco. V1 (issue #9) — acepta además `target`: la KEY de la
+ * escena de juego a reanudar/apagar (RaceScene lanza el overlay apuntándose
+ * a sí misma; el default sigue siendo GameScene, regresión cero en el modo
+ * BATALLA). Al reanudar hace `resume(target)` — el evento RESUME de la
+ * escena de juego es el que re-sincroniza su PauseSystem y re-arma el input
+ * táctil —; al ir al MENÚ hace `stop(target)` (dispara el shutdown/limpieza
+ * de la carrera) y `start(Menu)`.
  *
  * Teclado (desktop): P o ESC reanudan, M vuelve al menú. Las teclas se
  * registran con `addKey` y se consumen con `JustDown` en `update`: así el
@@ -50,6 +53,8 @@ export class PauseScene extends Phaser.Scene {
 
   /** `true` si la pausa vigente fue automática (pérdida de foco). */
   private autoPaused = false;
+  /** Escena de juego sobre la que vuela este overlay (default: Game). */
+  private targetKey: string = GameScene.KEY;
   private keyP: Phaser.Input.Keyboard.Key | null = null;
   private keyEsc: Phaser.Input.Keyboard.Key | null = null;
   private keyM: Phaser.Input.Keyboard.Key | null = null;
@@ -59,9 +64,11 @@ export class PauseScene extends Phaser.Scene {
   }
 
   init(data: unknown): void {
-    // Parseo defensivo: si se lanza en caliente sin payload, es pausa manual.
+    // Parseo defensivo: si se lanza en caliente sin payload, es pausa manual
+    // sobre GameScene (comportamiento de siempre).
     const record = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
     this.autoPaused = record.auto === true;
+    this.targetKey = typeof record.target === 'string' ? record.target : GameScene.KEY;
   }
 
   create(): void {
@@ -136,15 +143,15 @@ export class PauseScene extends Phaser.Scene {
     return key !== null && Phaser.Input.Keyboard.JustDown(key);
   }
 
-  /** Reanuda la carrera y se quita de encima (GameScene escucha su RESUME). */
+  /** Reanuda la carrera y se quita de encima (la escena objetivo escucha su RESUME). */
   private readonly resumeGame = (): void => {
-    this.scene.resume(GameScene.KEY);
+    this.scene.resume(this.targetKey);
     this.scene.stop();
   };
 
   /** Abandona: apaga la carrera (shutdown = limpieza) y vuelve al menú. */
   private readonly goToMenu = (): void => {
-    this.scene.stop(GameScene.KEY);
+    this.scene.stop(this.targetKey);
     this.scene.start(MenuScene.KEY);
   };
 }

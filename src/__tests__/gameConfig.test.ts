@@ -6,6 +6,7 @@ import { PreloadScene } from '../scenes/PreloadScene';
 import { MenuScene } from '../scenes/MenuScene';
 import { LobbyScene } from '../scenes/LobbyScene';
 import { GameScene } from '../scenes/GameScene';
+import { RaceScene } from '../scenes/RaceScene';
 import { GameOverScene } from '../scenes/GameOverScene';
 import { PauseScene } from '../scenes/PauseScene';
 
@@ -58,20 +59,24 @@ describe('gameConfig', () => {
     expect(input.activePointers ?? 1).toBeGreaterThan(1);
   });
 
-  it('registra el flujo completo Boot → Preload → Menu → Lobby → Game → GameOver y el overlay de pausa', () => {
+  it('registra el flujo completo Boot → Preload → Menu → Lobby → Game → Race → GameOver y el overlay de pausa', () => {
     const config = createGameConfig('game');
     const scenes = config.scene as Phaser.Scene[];
 
     // Phaser arranca la primera escena del array; el orden ES el flujo.
     // LobbyScene (M1) vive entre Menu y Game (se arranca con init data
-    // {mode:'create'|'join'} desde el menú). PauseScene es el overlay de la
-    // Fase 7: se lanza ENCIMA de Game (pausada), no participa del flujo.
+    // {mode:'create'|'join'} desde el menú). RaceScene (V1, issue #9) es el
+    // flujo paralelo de ENTRENAR: el menú la arranca con init data
+    // {trackId, mode:'practice'} y su GameOver transiciona a la misma
+    // GameOverScene. PauseScene es el overlay de la Fase 7: se lanza ENCIMA
+    // de la carrera pausada, no participa del flujo.
     expect(scenes).toEqual([
       BootScene,
       PreloadScene,
       MenuScene,
       LobbyScene,
       GameScene,
+      RaceScene,
       GameOverScene,
       PauseScene,
     ]);
@@ -91,6 +96,7 @@ describe('gameConfig', () => {
     expect(MenuScene.KEY).toBe('Menu');
     expect(LobbyScene.KEY).toBe('Lobby');
     expect(GameScene.KEY).toBe('Game');
+    expect(RaceScene.KEY).toBe('Race');
     expect(GameOverScene.KEY).toBe('GameOver');
     expect(PauseScene.KEY).toBe('Pause');
   });
