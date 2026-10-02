@@ -56,6 +56,10 @@ jobs:
         run: npm run build -- --base=/formulita/
         env:
           VITE_TRYSTERO_APP_ID: ${{ vars.VITE_TRYSTERO_APP_ID }}
+          # Trackers de señalización custom (opcional, issue #8): sin esta
+          # variable el deploy usa los defaults de la librería. Si se define,
+          # tiene que ser IGUAL en todas las instalaciones (fragmentación).
+          VITE_TRYSTERO_RELAYS: ${{ vars.VITE_TRYSTERO_RELAYS }}
 
       - name: Configurar Pages
         uses: actions/configure-pages@v5

@@ -229,8 +229,9 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 - **Qué es**: la lista de **trackers de señalización BitTorrent** que usa Trystero para el encuentro inicial entre jugadores (CSV de `wss://`/`ws://`). El tracker es solo el casamentero: una vez establecida la conexión, el tráfico del juego es **P2P directo** entre navegadores y nunca pasa por él.
 - **Si falta o queda vacía**: la librería usa sus trackers default — comportamiento actual; no hace falta definirla.
 - **Cuándo cambiarlo**: solo si querés depender de trackers propios (autoalojados) o si un default dejara de funcionar.
-- **Riesgo de fragmentación**: la sala existe DENTRO de los trackers usados — dos jugadores con listas **distintas** nunca se encuentran, aunque compartan appId y palabra de sala. Cualquier lista custom tiene que ser **igual en todas las instalaciones** (coordiná el cambio con todos los jugadores).
-- Formato y validación: `wss://a, wss://b` — se ignoran entradas vacías o sin `wss://`/`ws://`; si la variable tiene contenido pero ninguna URL válida, el multijugador **falla rápido** con error visible (no degrada en silencio a los defaults, que fragmentaría el matchmaking).
+- **Riesgo de fragmentación**: la sala existe DENTRO de los trackers usados — dos jugadores con listas **disjuntas** (sin ningún tracker en común) nunca se encuentran, aunque compartan appId y palabra de sala; con al menos un tracker compartido sí conectan. Cualquier lista custom tiene que ser **igual en todas las instalaciones** (coordiná el cambio con todos los jugadores).
+- Formato y validación: `wss://a, wss://b` — se ignoran entradas vacías o sin `wss://`/`ws://`; si la variable tiene contenido pero ninguna URL válida, el multijugador **falla rápido** con error visible (no degrada en silencio a los defaults, que fragmentaría el matchmaking). Con lista custom se usan TODAS las URLs (la redundancia de la librería solo aplica a sus defaults).
+- **Producción (Pages)**: para que llegue al deploy hay que agregarla al paso de build de `.github/workflows/deploy.yml` junto a `VITE_TRYSTERO_APP_ID` (`VITE_TRYSTERO_RELAYS: ${{ vars.VITE_TRYSTERO_RELAYS }}`); en dev alcanza con `.env.local`.
 
 ### Publicación (GitHub Pages)
 
