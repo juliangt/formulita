@@ -4,14 +4,20 @@
  *
  * La RaceScene comparte con GameScene el stack de input (`IInputState`
  * fusionado por `InputSystem`, teclado + táctil), pero el CONSUMIDOR cambia:
- * `CircuitPhysics` espera un `CircuitInput` auto-acelerado
- * (`throttle` siempre pisado, freno y giro explícitos). Acá vive ese mapeo,
- * las teclas de la carrera y el layout de los botones táctiles, todo puro y
- * testeable sin Phaser (mismo criterio que KeyboardSource/TouchButton).
+ * `CircuitPhysics` espera un `CircuitInput` {throttle, brake, steer}. Acá
+ * vive ese mapeo, las teclas de la carrera y el layout de los botones
+ * táctiles, todo puro y testeable sin Phaser (mismo criterio que
+ * KeyboardSource/TouchButton).
  *
- * Teclado de carrera: ←→ o A/D giran; ↓, S o ESPACIO frenan (el acelerador
- * va pisado solo: no hay tecla de gas). Táctil: ◀ ▶ abajo-izquierda (mismo
- * layout del modo BATALLA) y FRENO abajo-derecha en la casilla del freno.
+ * Issue #20 — GAS MANUAL: el acelerador ya no viene pisado por defecto; el
+ * jugador controla el gas (tecla W/↑ o botón GAS táctil) y con él sus
+ * frenadas y trazadas. Sin gas pisado el auto desacelera por el roce
+ * (`CIRCUIT.coastDrag`); el freno conserva prioridad sobre el gas.
+ *
+ * Teclado de carrera: W/↑ acelera; ←→ o A/D giran; ↓, S o ESPACIO frenan.
+ * Táctil: ◀ ▶ abajo-izquierda (mismo layout del modo BATALLA) y GAS + FRENO
+ * abajo-derecha en SUS casillas del layout de 6 botones (gas en la esquina,
+ * donde llega el pulgar derecho).
  */
 
 import {
@@ -24,26 +30,28 @@ import type { CircuitInput } from './circuitPhysics';
 
 /**
  * Estado fusionado `IInputState` → `CircuitInput` de la física. El acelerador
- * viene PISADO por defecto (auto-acelerado, ver `CIRCUIT`): frenar es la
- * acción explícita y el giro se toma de la dirección pedida (ambos lados a la
- * vez se cancelan, comportamiento de Fase 1).
+ * es la acción del jugador (issue #20: gas manual — sin pisarlo el auto
+ * desacelera por `CIRCUIT.coastDrag`); el freno gana sobre el gas en la
+ * física y el giro se toma de la dirección pedida (ambos lados a la vez se
+ * cancelan, comportamiento de Fase 1).
  */
 export function circuitInputFromState(state: IInputState): CircuitInput {
   const steer = (state.left ? -1 : 0) + (state.right ? 1 : 0);
   return {
-    throttle: true,
+    throttle: state.throttle,
     brake: state.brake,
     steer: steer as -1 | 0 | 1,
   };
 }
 
 /**
- * Teclas de la carrera (nombres de KeyCodes de Phaser): girar y frenar. Sin
- * throttle (auto-acelerado), turbo ni DRS: no existen en el circuito.
+ * Teclas de la carrera (nombres de KeyCodes de Phaser): gas, giro y freno.
+ * Sin turbo ni DRS: no existen en el circuito.
  */
 export const RACE_KEY_BINDINGS = {
   left: ['LEFT', 'A'],
   right: ['RIGHT', 'D'],
+  throttle: ['W', 'UP'],
   brake: ['DOWN', 'S', 'SPACE'],
 } as const;
 
@@ -97,14 +105,14 @@ export class RaceKeyboardSource {
     this.keysByAction.clear();
   }
 
-  /** Porción de `IInputState` que llena esta fuente (giro + freno). */
+  /** Porción de `IInputState` que llena esta fuente (gas + giro + freno). */
   getState(): IInputState {
     const isDown = (action: RaceInputAction): boolean =>
       this.keysByAction.get(action)?.some((key) => key.isDown) ?? false;
     return {
       left: isDown('left'),
       right: isDown('right'),
-      throttle: false,
+      throttle: isDown('throttle'),
       brake: isDown('brake'),
       turbo: false,
       drs: false,
@@ -112,16 +120,22 @@ export class RaceKeyboardSource {
   }
 }
 
-/** Acciones táctiles de la carrera: ◀ ▶ para girar y FRENO. */
-export type RaceTouchAction = 'left' | 'right' | 'brake';
+/** Acciones táctiles de la carrera: ◀ ▶ para girar y GAS + FRENO. */
+export type RaceTouchAction = 'left' | 'right' | 'throttle' | 'brake';
 
-export const RACE_TOUCH_ACTIONS: readonly RaceTouchAction[] = ['left', 'right', 'brake'];
+export const RACE_TOUCH_ACTIONS: readonly RaceTouchAction[] = [
+  'left',
+  'right',
+  'throttle',
+  'brake',
+];
 
 /**
  * Layout táctil de la carrera: reutiliza el layout de 6 botones del modo
  * BATALLA (`computeTouchButtonLayout`) y se queda con ◀ ▶ (abajo-izquierda,
- * como siempre) y la casilla del freno (abajo-derecha, donde estaba BRK).
- * El resto de las casillas queda libre (no hay GAS: auto-acelerado).
+ * como siempre) y GAS + FRENO abajo-derecha en SUS casillas (gas en la
+ * esquina exterior, donde llega el pulgar derecho; freno a su lado).
+ * El resto de las casillas (turbo/drs) queda libre.
  */
 export function computeRaceTouchLayout(
   width: number,
@@ -131,6 +145,7 @@ export function computeRaceTouchLayout(
   return {
     left: full.left,
     right: full.right,
+    throttle: full.throttle,
     brake: full.brake,
   };
 }

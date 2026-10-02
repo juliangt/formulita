@@ -230,9 +230,10 @@ interface RivalRuntime {
  * Fuente táctil de la carrera (implementa `IInputSource`): reutiliza la
  * lógica de `TouchButton` (tracking multi-touch por pointerId, hit-test
  * manual que no roba eventos al juego) y la presentación `PixelButton`, con
- * el layout propio del circuito (◀ ▶ + FRENO) de `raceControls`. Es la
- * hermana chica de `TouchSource` (GameScene) sin GAS/TURBO/DRS: el circuito
- * es auto-acelerado.
+ * el layout propio del circuito (◀ ▶ + GAS + FRENO) de `raceControls`. Es la
+ * hermana chica de `TouchSource` (GameScene) sin TURBO/DRS. Issue #20: el
+ * circuito ya NO es auto-acelerado — el botón GAS (misma casilla/esquina y
+ * estilo verde del modo BATALLA) pisa el acelerador.
  */
 class RaceTouchControls implements IInputSource {
   readonly name = 'race-touch';
@@ -247,6 +248,8 @@ class RaceTouchControls implements IInputSource {
     const styles: Record<RaceTouchAction, PixelButtonStyle> = {
       left: { icon: TEXTURE_KEYS.hudArrowLeft, tint: 0x3c6cd6 },
       right: { icon: TEXTURE_KEYS.hudArrowRight, tint: 0x3c6cd6 },
+      // MISMO estilo del GAS de la BATALLA (TouchSource): label verde.
+      throttle: { label: 'GAS', tint: 0x3c9e52 },
       brake: { label: 'FRENO', tint: 0xd63c3c },
     };
 
@@ -303,14 +306,14 @@ class RaceTouchControls implements IInputSource {
     }
   }
 
-  /** Porción de `IInputState` que llena esta fuente (giro + freno). */
+  /** Porción de `IInputState` que llena esta fuente (giro + gas + freno). */
   getState(): IInputState {
     const pressed = (action: RaceTouchAction): boolean =>
       this.buttons.find((button) => button.action === action)?.isPressed ?? false;
     return {
       left: pressed('left'),
       right: pressed('right'),
-      throttle: false,
+      throttle: pressed('throttle'),
       brake: pressed('brake'),
       turbo: false,
       drs: false,
@@ -366,9 +369,9 @@ class RaceTouchControls implements IInputSource {
  *   funcionando porque Phaser resuelve el hit-test por cámara con el mismo
  *   filtro de render.
  * - INPUT: mismo stack que el modo BATALLA (`IInputState` fusionado por
- *   `InputSystem`) con fuentes propias de carrera (teclado auto-acelerado y
- *   ◀ ▶ + FRENO táctil); el puente a la física es el puro
- *   `circuitInputFromState`.
+ *   `InputSystem`) con fuentes propias de carrera (teclado W/↑ + ◀ ▶ + FRENO
+ *   y táctil ◀ ▶ + GAS + FRENO, issue #20: gas manual); el puente a la
+ *   física es el puro `circuitInputFromState`.
  * - PAUSA: igual que GameScene (PauseSystem + PauseScene encima, tecla P,
  *   auto-pausa por blur) — PauseScene ahora recibe la escena objetivo por
  *   init data (default Game: regresión cero en el modo BATALLA).

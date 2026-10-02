@@ -442,10 +442,12 @@ export const DIFFICULTY = {
  * `referenceSpeed`/`turnRate*` (radio de curvatura mínimo alcanzable) y contra
  * la banda de duración de vuelta.
  *
- * Convención del input (auto-acelerado): el acelerador viene PISADO por
- * defecto (ver `defaultCircuitInput`); frenar y girar son acciones explícitas.
- * El giro se mide en rad/s y decae con la velocidad: `turnRateAtSpeed`
- * interpola de `turnRateBase` (parado) a `turnRateAtMaxSpeed` (a punta).
+ * Convención del input (issue #20: gas manual): gas, freno y giro son las
+ * tres acciones explícitas del `CircuitInput` — el jugador las pisa por
+ * teclado/táctil vía `raceControls.circuitInputFromState` y sin gas el roce
+ * (`coastDrag`) frena el auto. El giro se mide en rad/s y decae con la
+ * velocidad: `turnRateAtSpeed` interpola de `turnRateBase` (parado) a
+ * `turnRateAtMaxSpeed` (a punta).
  */
 export const CIRCUIT = {
   /** Velocidad máxima en asfalto (px/s). Issue #18: 300 × 2.5. */

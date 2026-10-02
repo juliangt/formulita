@@ -2,10 +2,12 @@
  * circuitPhysics — física arcade de conducción pura (issue #9, V0).
  *
  * Un paso fijo con `dt` inyectado sobre el estado `{x, y, heading, speed}`:
- * - Auto-ACELERADO: el input por defecto trae el acelerador pisado (ver
- *   `defaultCircuitInput`); frenar y girar son acciones explícitas que V1/V2
- *   envían según teclado/touch. Sin input el roce (`coastDrag`) decae la
- *   velocidad hacia 0.
+ * - Longitudinal con las TRES acciones explícitas del `CircuitInput`: gas,
+ *   freno (prioridad sobre el gas) y giro. Sin gas ni freno el roce
+ *   (`coastDrag`) decae la velocidad hacia 0. El default de `step` es el
+ *   input "a fondo" (`defaultCircuitInput`), pensado para sims headless —
+ *   el input del JUGADOR llega por `raceControls.circuitInputFromState`
+ *   (issue #20: gas manual, sin auto-acelerado).
  * - Giro con tasa que DECAE con la velocidad (`turnRateAtSpeed` interpola de
  *   `CIRCUIT.turnRateBase` a `CIRCUIT.turnRateAtMaxSpeed`): a más velocidad,
  *   menos giro. Convención: `steer = -1` izquierda, `+1` derecha (pantalla
@@ -31,8 +33,9 @@ export interface CarState {
 }
 
 /**
- * Input de conducción. AUTO-ACELERADO: `throttle: true` es el estado natural
- * (el auto avanza solo); V1/V2 sólo necesitan enviar cambios (freno, giro).
+ * Input de conducción: gas, freno y giro son ACCIONES explícitas (issue #20:
+ * el puente del jugador las mapea de teclado/táctil; el AiDriver produce el
+ * suyo).
  */
 export interface CircuitInput {
   throttle: boolean;
@@ -41,7 +44,11 @@ export interface CircuitInput {
   steer: -1 | 0 | 1;
 }
 
-/** Input por defecto: acelerador pisado, sin freno ni giro. */
+/**
+ * Input neutro "a fondo" (default de `step`): acelerador pisado, sin freno
+ * ni giro. Lo consumen sims headless y harness; el input del jugador NUNCA
+ * llega forzado por acá (ver `raceControls.circuitInputFromState`).
+ */
 export function defaultCircuitInput(): CircuitInput {
   return { throttle: true, brake: false, steer: 0 };
 }

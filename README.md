@@ -66,11 +66,12 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 
 ### Modos de circuito (GRAN PREMIO y CARRERA)
 
-El auto es **auto-acelerado**: el acelerador va pisado todo el viaje; frenar y doblar son las únicas acciones.
+El acelerador es **manual** (issue #20): hay que pisar GAS; sin gas el auto desacelera sola (coast) y frenar y doblar siguen siendo acciones explícitas.
 
 | Acción | Teclado | Táctil (HUD) |
 | --- | --- | --- |
 | Doblar | ← → o A / D | ◀ ▶ (abajo-izquierda) |
+| Gas | W o ↑ | GAS (abajo-derecha, verde) |
 | Freno | ↓ / S / Espacio | FRENO (abajo-derecha) |
 
 Común a todos los modos:
@@ -116,7 +117,7 @@ El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde �
 ### Cómo se juega
 
 1. Menú → **GRAN PREMIO** → elegí pista y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
-2. Countdown 3-2-1-GO! y largada: **mismos controles que la carrera en circuito** (auto-acelerado — ver [Controles](#controles)).
+2. Countdown 3-2-1-GO! y largada hacia **arriba** de la pantalla: **mismos controles que la carrera en circuito** (gas manual — ver [Controles](#controles)).
 3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD** y minimapa con **tu punto destacado**. Cambiar de posición suena (igual al ganar que al perder el lugar).
 4. Al cruzar TU meta: **podio con el top 3** (ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista y dificultad con parrilla nueva.
 

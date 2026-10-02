@@ -1,17 +1,28 @@
 import { describe, expect, it } from 'vitest';
+import { CIRCUIT } from '../../config/balance';
 import { GAME_WIDTH, GAME_HEIGHT } from '../../config/gameConfig';
 import {
   computeRaceTouchLayout,
   circuitInputFromState,
   RACE_KEY_BINDINGS,
 } from '../../race/raceControls';
+import { CircuitPhysics } from '../../race/circuitPhysics';
+import type { CarState } from '../../race/circuitPhysics';
+import { TrackPath } from '../../race/trackPath';
 import { computeTouchButtonLayout } from '../../systems/TouchButton';
 import type { IInputState } from '../../systems/InputSystem';
 
 /**
  * Tests del puente input → física de la RaceScene (issue #9, V1): el mapeo
- * puro `IInputState` → `CircuitInput` (auto-acelerado), las teclas de la
- * carrera y el layout táctil heredado del modo BATALLA.
+ * puro `IInputState` → `CircuitInput` (issue #20: gas MANUAL — el throttle
+ * pasa tal cual del estado fusionado), las teclas de la carrera y el layout
+ * táctil heredado del modo BATALLA (◀ ▶ + GAS + FRENO).
+ *
+ * Issue #20 (Fase 2): además el PUENTE COMPLETO — el `CircuitInput` que
+ * produce `circuitInputFromState` entra a `CircuitPhysics.step` y mueve la
+ * velocidad en la dirección esperada (sin gas desacelera por coastDrag, con
+ * gas acelera). La física en sí vive en `circuitPhysics.test.ts`; acá sólo
+ * se valida que el jugador llega pisado hasta ella.
  */
 
 function state(partial: Partial<IInputState>): IInputState {
@@ -27,9 +38,13 @@ function state(partial: Partial<IInputState>): IInputState {
 }
 
 describe('circuitInputFromState — IInputState → CircuitInput', () => {
-  it('el acelerador viene SIEMPRE pisado (auto-acelerado, ver CIRCUIT)', () => {
-    expect(circuitInputFromState(state({})).throttle).toBe(true);
-    expect(circuitInputFromState(state({ left: true, brake: true })).throttle).toBe(true);
+  it('el throttle es la acción del jugador: pasa tal cual del estado (issue #20)', () => {
+    // Sin gas el puente NO lo pisa: la física desacelera por coastDrag.
+    expect(circuitInputFromState(state({})).throttle).toBe(false);
+    // Gas pisado (tecla W/↑ o botón GAS) llega a la física.
+    expect(circuitInputFromState(state({ throttle: true })).throttle).toBe(true);
+    // Gas + freno a la vez: el puente pasa ambos (prioriza la física del freno).
+    expect(circuitInputFromState(state({ throttle: true, brake: true })).brake).toBe(true);
   });
 
   it('mapea el giro binario: izquierda −1, derecha +1, ambos se cancelan', () => {
@@ -45,30 +60,82 @@ describe('circuitInputFromState — IInputState → CircuitInput', () => {
   });
 });
 
+describe('circuitInputFromState → CircuitPhysics — el puente completo (issue #20)', () => {
+  // Anillo amplio como pista (mismo criterio que circuitPhysics.test.ts): en
+  // tramos cortos el auto queda sobre el asfalto y la integración sólo mide
+  // el longitudinal.
+  const DT = 1 / 60;
+  const RADIUS = 10000;
+  const ring = new TrackPath(
+    Array.from({ length: 16 }, (_, i) => {
+      const theta = (2 * Math.PI * i) / 16;
+      return { x: Math.cos(theta) * RADIUS, y: Math.sin(theta) * RADIUS };
+    }),
+  );
+  const physics = new CircuitPhysics(ring, 375);
+
+  /** Avanza `seconds` con el input que produce el estado de jugador dado. */
+  function drive(v0: number, seconds: number, input: IInputState): number {
+    const s = ring.sample(100);
+    const car: CarState = { x: s.x, y: s.y, heading: s.angle, speed: v0 };
+    const circuit = circuitInputFromState(input);
+    const steps = Math.round(seconds / DT);
+    for (let i = 0; i < steps; i += 1) {
+      physics.step(car, DT, circuit);
+    }
+    return car.speed;
+  }
+
+  it('sin gas ni freno la física DESACELERA por coastDrag (fin del auto-acelerado)', () => {
+    const v0 = 400;
+    const coasted = drive(v0, 0.5, state({}));
+    expect(coasted).toBeLessThan(v0);
+    // La baja es exactamente el roce de CIRCUIT: ni la frenada a fondo ni un
+    // acelerador fantasma — coastDrag × tiempo.
+    expect(coasted).toBeCloseTo(v0 - CIRCUIT.coastDrag * 0.5, 5);
+  });
+
+  it('con gas pisado la física ACELERA hacia maxSpeed', () => {
+    const v0 = 300;
+    const accelerated = drive(v0, 0.5, state({ throttle: true }));
+    expect(accelerated).toBeGreaterThan(v0);
+    // Sube por la aceleración de CIRCUIT, con techo en la punta del jugador.
+    expect(accelerated).toBeCloseTo(
+      Math.min(v0 + CIRCUIT.acceleration * 0.5, CIRCUIT.maxSpeed),
+      5,
+    );
+  });
+});
+
 describe('RACE_KEY_BINDINGS — teclado de la carrera', () => {
-  it('girar: flechas o A/D; frenar: abajo, S o espacio', () => {
+  it('girar: flechas o A/D; frenar: abajo, S o espacio; gas: W o flecha arriba (issue #20)', () => {
     expect(RACE_KEY_BINDINGS.left).toEqual(['LEFT', 'A']);
     expect(RACE_KEY_BINDINGS.right).toEqual(['RIGHT', 'D']);
     expect(RACE_KEY_BINDINGS.brake).toContain('DOWN');
     expect(RACE_KEY_BINDINGS.brake).toContain('S');
     expect(RACE_KEY_BINDINGS.brake).toContain('SPACE');
+    expect(RACE_KEY_BINDINGS.throttle).toEqual(['W', 'UP']);
   });
 
-  it('no existen bindings de throttle/turbo/drs (el circuito es auto-acelerado)', () => {
-    expect(Object.keys(RACE_KEY_BINDINGS).sort()).toEqual(['brake', 'left', 'right']);
+  it('no existen bindings de turbo/drs (no existen en el circuito)', () => {
+    expect(Object.keys(RACE_KEY_BINDINGS).sort()).toEqual(['brake', 'left', 'right', 'throttle']);
   });
 });
 
-describe('computeRaceTouchLayout — ◀ ▶ + FRENO', () => {
-  it('reutiliza las casillas ◀ ▶ y del freno del layout del modo BATALLA', () => {
+describe('computeRaceTouchLayout — ◀ ▶ + GAS + FRENO', () => {
+  it('reutiliza las casillas ◀ ▶, GAS y del freno del layout del modo BATALLA', () => {
     const race = computeRaceTouchLayout(GAME_WIDTH, GAME_HEIGHT);
     const full = computeTouchButtonLayout(GAME_WIDTH, GAME_HEIGHT);
     expect(race.left).toEqual(full.left);
     expect(race.right).toEqual(full.right);
+    // El GAS ocupa SU casilla del modo batalla: esquina abajo-derecha, donde
+    // llega el pulgar derecho (el freno queda a su lado, hacia el centro).
+    expect(race.throttle).toEqual(full.throttle);
     expect(race.brake).toEqual(full.brake);
+    expect(race.throttle.x).toBeGreaterThan(race.brake.x);
   });
 
-  it('los tres botones quedan dentro del lienzo y sin superponerse', () => {
+  it('los cuatro botones quedan dentro del lienzo y sin superponerse', () => {
     const race = computeRaceTouchLayout(GAME_WIDTH, GAME_HEIGHT);
     const rects = Object.values(race);
     for (const rect of rects) {

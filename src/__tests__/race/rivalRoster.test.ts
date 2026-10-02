@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MULTIPLAYER, RACE_AI } from '../../config/balance';
+import { CIRCUIT, MULTIPLAYER, RACE_AI } from '../../config/balance';
 import {
   buildRivalRoster,
   rivalDriverConfig,
@@ -169,6 +169,19 @@ describe('rivalDriverConfig — preset de dificultad × personalidad', () => {
         expect(config.targetSpeedFraction).toBeLessThanOrEqual(1);
         expect(config.lineSpeedScale).toBeGreaterThanOrEqual(0);
       }
+    }
+  });
+
+  it('issue #20 (competitividad): el preset de NORMAL no supera el techo físico del jugador', () => {
+    // El cap de recta de la IA es CIRCUIT.maxSpeed × targetSpeedFraction. El
+    // criterio del issue #20: la escala de NORMAL (y de ninguna dificultad)
+    // puede ser > 1 — con el gas manual el jugador llega a la punta y la IA
+    // nunca es más rápida que SU física. Subir normal > 1 sin querer rompe
+    // acá (la personalidad ya viene clampeada por el test de arriba).
+    expect(RACE_AI.targetSpeedFraction.normal).toBeLessThanOrEqual(1);
+    for (const difficulty of DIFFICULTIES) {
+      const cap = CIRCUIT.maxSpeed * RACE_AI.targetSpeedFraction[difficulty];
+      expect(cap).toBeLessThanOrEqual(CIRCUIT.maxSpeed);
     }
   });
 

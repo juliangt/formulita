@@ -44,7 +44,7 @@
  * Contrato (igual que V0):
  * - SOLO produce `CircuitInput { throttle, brake, steer }` — NUNCA escribe
  *   posiciones: la física es la MISMA `CircuitPhysics` del jugador y el
- *   rival juega con las mismas reglas (auto-acelerado, pasto, techo).
+ *   rival juega con las mismas reglas (pisa SU propio gas, pasto, techo).
  *
  * Puro: sin Phaser, sin red, sin reloj — determinista por construcción
  * (mismo estado + misma línea + mismo RNG + mismos dt/contexto ⇒ mismo
