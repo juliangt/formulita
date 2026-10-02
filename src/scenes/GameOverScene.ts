@@ -1,16 +1,27 @@
 import Phaser from 'phaser';
-import { CIRCUIT, GAME_OVER, LEADERBOARD, RACE_FAST_LAP } from '../config/balance';
+import {
+  CIRCUIT,
+  GAME_OVER,
+  LEADERBOARD,
+  RACE_FAST_LAP,
+  RACE_VS_CPU_PODIUM,
+} from '../config/balance';
 import { prefersTouchControls } from '../core/device';
 import { getSessionEventBus } from '../core/EventBus';
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
+import { defaultGpStorage, saveGpResult } from '../race/gpRecords';
 import {
+  CPU_DIFFICULTY_LABELS,
   parseRaceMultiResults,
   parseRacePracticeResults,
+  parseRaceVsCpuResults,
+  VS_CPU_PLAYER_NAME,
   type RaceMultiResultsData,
   type RacePracticeResultsData,
+  type RaceVsCpuResultsData,
 } from '../race/results';
 import { GameScene } from './GameScene';
 import { LobbyScene } from './LobbyScene';
@@ -23,6 +34,8 @@ import { MenuButton } from '../ui/MenuButton';
 const TITLE_COLOR = '#d63c3c';
 const GOLD_COLOR = '#f7c531';
 const DIM_COLOR = '#c8ccd4';
+/** Fila propia destacada (mismo acento verde de la fila propia del podio multi). */
+const SELF_COLOR = '#8fce3c';
 
 const TITLE_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontFamily: 'monospace',
@@ -47,6 +60,14 @@ const HINT_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
   fontSize: '24px',
   color: DIM_COLOR,
 };
+
+/* #14 — rama VS CPU de resultados: dos líneas bajo el título (mensaje
+ * personal + subtítulo pista/dificultad) alrededor del Y del cartel de la
+ * rama práctica (GAME_OVER.newRecordY), misma rejilla de botones. */
+const VS_CPU_MESSAGE_OFFSET_Y = -40;
+const VS_CPU_SUBTITLE_OFFSET_Y = 40;
+const VS_CPU_MESSAGE_FONT_SIZE = 48;
+const VS_CPU_SUBTITLE_FONT_SIZE = 32;
 
 /**
  * GameOverScene — resultados de la carrera (Fase 5).
@@ -79,6 +100,8 @@ export class GameOverScene extends Phaser.Scene {
   private multiData: MultiGameOverData | null = null;
   /** V1 (issue #9) — resultados de la carrera de práctica (null = otra rama). */
   private practiceData: RacePracticeResultsData | null = null;
+  /** #14 — resultados del GRAN PREMIO vs CPU (null = otra rama). */
+  private vsCpuData: RaceVsCpuResultsData | null = null;
   /** V2 (issue #9) — clasificación final de la carrera multi (null = otra). */
   private raceMultiData: RaceMultiResultsData | null = null;
 
@@ -90,6 +113,7 @@ export class GameOverScene extends Phaser.Scene {
     this.raceData = parseGameOverData(data);
     this.multiData = parseMultiGameOverData(data);
     this.practiceData = parseRacePracticeResults(data);
+    this.vsCpuData = parseRaceVsCpuResults(data);
     this.raceMultiData = parseRaceMultiResults(data);
   }
 
@@ -120,6 +144,14 @@ export class GameOverScene extends Phaser.Scene {
     // vueltas) y botones REINTENTAR (misma pista) / MENÚ.
     if (this.practiceData) {
       this.createRaceResults(centerX);
+      return;
+    }
+
+    // #14 — GRAN PREMIO VS CPU: misma rejilla de la rama práctica, con la
+    // posición final (1º/2º en V0), la dificultad del rival y REINTENTAR
+    // con la MISMA pista + dificultad.
+    if (this.vsCpuData) {
+      this.createRaceVsCpuResults(centerX);
       return;
     }
 
@@ -375,7 +407,7 @@ export class GameOverScene extends Phaser.Scene {
     data.standings.forEach((standing, index) => {
       const y = LEADERBOARD.rowStartY + index * LEADERBOARD.rowHeight;
       const isSelf = standing.peerId === data.myPeerId;
-      const rowColor = standing.position === 1 ? GOLD_COLOR : isSelf ? '#8fce3c' : '#f2f2f2';
+      const rowColor = standing.position === 1 ? GOLD_COLOR : isSelf ? SELF_COLOR : '#f2f2f2';
       const rightText =
         standing.status === 'finished' && standing.totalMs !== null
           ? formatLapMs(standing.totalMs)
@@ -539,6 +571,188 @@ export class GameOverScene extends Phaser.Scene {
     this.scene.start(RaceScene.KEY, {
       trackId: data?.trackId,
       mode: 'practice',
+    });
+  };
+
+  /**
+   * #14 — RESULTADOS del GRAN PREMIO VS CPU: mismo layout de la rama
+   * práctica (rejilla GAME_OVER), distinto contenido: pista + vueltas +
+   * dificultad del rival como subtítulo, mensaje personal por posición,
+   * tiempo total, mejor vuelta y vueltas completadas.
+   *
+   * V4 — cierre del bucle: bajo las estadísticas va el PODIO (top 3 con los
+   * nombres de los rivales, estilo del podio multi; el ganador en oro y la
+   * fila propia en verde) y, si el jugador quedó fuera del top 3, su fila
+   * destacada debajo. Además se guardan los RÉCORDS por pista × dificultad
+   * (`race/gpRecords`) antes de dibujar: si la posición o la vuelta fueron
+   * récord, parpadea el cartel ¡NUEVO RÉCORD! (mismo tween de la rama
+   * clásica). Botones REINTENTAR (misma pista + dificultad, seed fresca) y
+   * MENÚ.
+   */
+  private createRaceVsCpuResults(centerX: number): void {
+    const data = this.vsCpuData;
+    if (!data) {
+      return;
+    }
+    const bus = getSessionEventBus(this.registry);
+
+    // V4 — récords por pista × dificultad: se aplican ANTES de dibujar (el
+    // cartel ¡NUEVO RÉCORD! depende del veredicto). Storage roto → los
+    // récords rigen igualmente para esta sesión (espejo del retorno).
+    const gpOutcome = saveGpResult(defaultGpStorage(), data.trackId, data.difficulty, {
+      position: data.position,
+      bestLapMs: data.bestLapMs,
+      totalMs: data.totalMs,
+    });
+    const isNewRecord = gpOutcome.positionRecord || gpOutcome.lapRecord;
+
+    this.add
+      .text(centerX, GAME_OVER.titleY, 'RESULTADOS', TITLE_STYLE)
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 10);
+
+    // Mensaje personal por posición (1 = ¡GANASTE!, oro; 2º en blanco).
+    const isWinner = data.position === 1;
+    this.add
+      .text(centerX, GAME_OVER.newRecordY + VS_CPU_MESSAGE_OFFSET_Y, personalResultMessage(data.position), {
+        fontFamily: 'monospace',
+        fontSize: `${VS_CPU_MESSAGE_FONT_SIZE}px`,
+        color: isWinner ? GOLD_COLOR : '#f2f2f2',
+      })
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 8);
+
+    // Subtítulo: pista, formato de la carrera y dificultad del rival.
+    this.add
+      .text(
+        centerX,
+        GAME_OVER.newRecordY + VS_CPU_SUBTITLE_OFFSET_Y,
+        `${data.trackName} · ${CIRCUIT.totalLaps} VUELTAS · RIVAL ${CPU_DIFFICULTY_LABELS[data.difficulty]}`,
+        {
+          fontFamily: 'monospace',
+          fontSize: `${VS_CPU_SUBTITLE_FONT_SIZE}px`,
+          color: DIM_COLOR,
+        },
+      )
+      .setOrigin(0.5)
+      .setStroke('#0c0c14', 6);
+
+    const statStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${GAME_OVER.statFontSize}px`,
+      color: '#f2f2f2',
+    };
+
+    this.add
+      .text(centerX, GAME_OVER.scoreY, `POSICIÓN P${data.position}/${data.totalCars}`, statStyle)
+      .setOrigin(0.5)
+      .setColor(isWinner ? GOLD_COLOR : '#f2f2f2');
+    this.add
+      .text(centerX, GAME_OVER.distanceY, `TIEMPO TOTAL ${formatLapMs(data.totalMs)}`, statStyle)
+      .setOrigin(0.5);
+    this.add
+      .text(centerX, GAME_OVER.coinsY, `MEJOR VUELTA ${formatLapMs(data.bestLapMs)}`, statStyle)
+      .setOrigin(0.5);
+
+    // V4 — cartel parpadeante de récord (mismo tween de la rama clásica).
+    if (isNewRecord) {
+      const banner = this.add
+        .text(centerX, RACE_VS_CPU_PODIUM.newRecordY, '¡NUEVO RÉCORD!', {
+          fontFamily: 'monospace',
+          fontSize: `${RACE_VS_CPU_PODIUM.newRecordFontSize}px`,
+          color: GOLD_COLOR,
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 8);
+      this.tweens.add({
+        targets: banner,
+        alpha: 0.25,
+        duration: 300,
+        yoyo: true,
+        repeat: -1,
+      });
+    }
+
+    // V4 — podio: top 3 con nombres (payload); el jugador fuera del top 3
+    // agrega SU fila destacada debajo (misma rejilla, posición del payload).
+    const playerInPodium = data.podium.some((entry) => entry.isPlayer);
+    const rows = playerInPodium
+      ? [...data.podium]
+      : [
+          ...data.podium,
+          { position: data.position, name: VS_CPU_PLAYER_NAME, isPlayer: true },
+        ];
+    const rowStyle: Phaser.Types.GameObjects.Text.TextStyle = {
+      fontFamily: 'monospace',
+      fontSize: `${RACE_VS_CPU_PODIUM.rowFontSize}px`,
+      color: '#f2f2f2',
+    };
+    rows.forEach((entry, index) => {
+      const y = RACE_VS_CPU_PODIUM.rowStartY + index * RACE_VS_CPU_PODIUM.rowHeight;
+      const rowColor =
+        entry.position === 1 ? GOLD_COLOR : entry.isPlayer ? SELF_COLOR : '#f2f2f2';
+      this.add
+        .text(LEADERBOARD.placeX, y, `P${entry.position}`, rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+      this.add
+        .text(LEADERBOARD.nameX, y, entry.name, rowStyle)
+        .setOrigin(0, 0.5)
+        .setColor(rowColor);
+    });
+
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.retryY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'REINTENTAR',
+      tint: 0x1d8f43,
+      fontSize: GAME_OVER.buttonFontSize,
+      bus,
+      onPress: this.retryRaceVsCpu,
+    });
+    new MenuButton(this, {
+      x: centerX,
+      y: GAME_OVER.menuY,
+      width: GAME_OVER.buttonWidth,
+      height: GAME_OVER.buttonHeight,
+      label: 'MENÚ',
+      tint: 0x3c6cd6,
+      fontSize: GAME_OVER.buttonFontSize,
+      bus,
+      onPress: this.goToMenu,
+    });
+
+    // Teclado: Enter/Espacio reintenta, M vuelve al menú.
+    this.input.keyboard?.on('keydown-ENTER', this.retryRaceVsCpu);
+    this.input.keyboard?.on('keydown-SPACE', this.retryRaceVsCpu);
+    this.input.keyboard?.on('keydown-M', this.goToMenu);
+
+    if (!prefersTouchControls(this.game.device)) {
+      this.add
+        .text(centerX, GAME_OVER.hintY, 'ENTER / ESPACIO  REINTENTAR   ·   M  MENÚ', HINT_STYLE)
+        .setOrigin(0.5);
+    }
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off('keydown-ENTER', this.retryRaceVsCpu);
+      this.input.keyboard?.off('keydown-SPACE', this.retryRaceVsCpu);
+      this.input.keyboard?.off('keydown-M', this.goToMenu);
+    });
+  }
+
+  /**
+   * REINTENTAR (vs CPU): RaceScene con la MISMA pista + dificultad y una
+   * seed fresca de parrilla (misma política que la salida desde el menú).
+   */
+  private readonly retryRaceVsCpu = (): void => {
+    const data = this.vsCpuData;
+    this.scene.start(RaceScene.KEY, {
+      trackId: data?.trackId,
+      mode: 'vs-cpu',
+      difficulty: data?.difficulty,
+      seed: Date.now(),
     });
   };
 

@@ -88,3 +88,47 @@ export function miniMapContour(path: TrackPath, transform: MiniMapTransform): Po
   }
   return points;
 }
+
+/* ------------------------------------------------------------------ */
+/* Presentación de los puntos de coche (issue #14, V3)                  */
+/* ------------------------------------------------------------------ */
+
+/** Escala de la partícula 4×4 usada como punto de coche (idem ui/MiniMap). */
+export const MINIMAP_DOT_SCALE = 3;
+
+/**
+ * Destacado del auto PROPIO (V3 #14): punto más grande + halo tenue detrás,
+ * para encontrarlo entre los 8 marcadores del GRAN PREMIO. Ratios sobre la
+ * escala base y tinte/alfa del halo (blanco hueso del contorno).
+ */
+const DOT_HIGHLIGHT_RATIO = 1.5;
+const DOT_HALO_RATIO = 3.2;
+const DOT_HALO_ALPHA = 0.3;
+export const MINIMAP_DOT_HALO_TINT = 0xe8e6e0;
+
+/** Cómo se dibuja un punto del minimapa (escala + halo opcional). */
+export interface MiniMapDotPresentation {
+  /** Escala del punto (`MINIMAP_DOT_SCALE` base). */
+  readonly scale: number;
+  /** Halo detrás del punto (null = sin destacado, look clásico). */
+  readonly halo: { readonly scale: number; readonly alpha: number; readonly tint: number } | null;
+}
+
+/**
+ * Presentación de un punto según si es el auto destacado (el propio). Es la
+ * decisión PURA de tamaño/halo del widget (testeable headless): sin
+ * destacado devuelve la presentación histórica (escala base, sin halo).
+ */
+export function miniMapDotPresentation(highlight: boolean): MiniMapDotPresentation {
+  if (!highlight) {
+    return { scale: MINIMAP_DOT_SCALE, halo: null };
+  }
+  return {
+    scale: MINIMAP_DOT_SCALE * DOT_HIGHLIGHT_RATIO,
+    halo: {
+      scale: MINIMAP_DOT_SCALE * DOT_HALO_RATIO,
+      alpha: DOT_HALO_ALPHA,
+      tint: MINIMAP_DOT_HALO_TINT,
+    },
+  };
+}

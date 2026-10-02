@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { RACE } from '../../config/balance';
 import {
+  MINIMAP_DOT_HALO_TINT,
+  MINIMAP_DOT_SCALE,
   computeMiniMapTransform,
   miniMapContour,
+  miniMapDotPresentation,
   worldToMiniMap,
 } from '../../race/minimap';
 import { TrackPath } from '../../race/trackPath';
@@ -127,5 +130,32 @@ describe('worldToMiniMap', () => {
     const mapped = worldToMiniMap(sample.x, sample.y, t);
     expect(mapped.x).toBeCloseTo(sample.x * t.scale + t.offsetX, 12);
     expect(mapped.y).toBeCloseTo(sample.y * t.scale + t.offsetY, 12);
+  });
+});
+
+describe('miniMapDotPresentation — destacado del auto propio (#14, V3)', () => {
+  it('sin destacado reproduce el look histórico (escala base, sin halo)', () => {
+    expect(MINIMAP_DOT_SCALE).toBe(3); // el CAR_DOT_SCALE de siempre
+    const plain = miniMapDotPresentation(false);
+    expect(plain.scale).toBe(3);
+    expect(plain.halo).toBeNull();
+  });
+
+  it('el destacado es MÁS GRANDE y trae un halo tenue detrás', () => {
+    const own = miniMapDotPresentation(true);
+    expect(own.scale).toBeGreaterThan(miniMapDotPresentation(false).scale);
+    expect(own.halo).not.toBeNull();
+    if (own.halo) {
+      expect(own.halo.scale).toBeGreaterThan(own.scale);
+      expect(own.halo.alpha).toBeGreaterThan(0);
+      expect(own.halo.alpha).toBeLessThan(1);
+      expect(own.halo.tint).toBe(MINIMAP_DOT_HALO_TINT);
+    }
+  });
+
+  it('la decisión es una función PURA del flag: determinista y sin estado', () => {
+    expect(miniMapDotPresentation(true)).toEqual(miniMapDotPresentation(true));
+    expect(miniMapDotPresentation(false)).toEqual(miniMapDotPresentation(false));
+    expect(miniMapDotPresentation(true).scale).not.toBe(miniMapDotPresentation(false).scale);
   });
 });

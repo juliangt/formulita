@@ -6,6 +6,12 @@ import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus'
 import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { TRACKS, type TrackId } from '../race/tracks';
+import {
+  CPU_DIFFICULTY_LABELS,
+  DEFAULT_CPU_DIFFICULTY,
+  parseCpuDifficulty,
+  type CpuDifficulty,
+} from '../race/results';
 import { chatMenuButtonLabel } from '../chat/dmView';
 import { getSocialChatSession } from '../chat/socialChatSession';
 import { sanitizePlayerName } from '../net/protocol';
@@ -50,7 +56,8 @@ const FS_LABEL_FULLSCREEN = 'VENTANA';
 /**
  * Layout del overlay selector de pistas (V1, issue #9): panel centrado con
  * título, una fila por pista (botón con el nombre + hint del circuito real
- * que lo inspira) y CERRAR. Mismo patrón del overlay multijugador.
+ * que lo inspira), selector de DIFICULTAD del rival (#14) y CERRAR. Mismo
+ * patrón del overlay multijugador.
  */
 const TRACK_PICKER = {
   /** Opacidad del velo oscuro sobre el menú (0–1). */
@@ -58,7 +65,7 @@ const TRACK_PICKER = {
   /** Centro Y y tamaño del panel. */
   panelY: 700,
   panelWidth: 620,
-  panelHeight: 950,
+  panelHeight: 1050,
   /** Y del título ENTRENAR y del subtítulo (centros). */
   titleY: 300,
   subtitleY: 368,
@@ -71,8 +78,19 @@ const TRACK_PICKER = {
   /** Hint del circuito inspirador: hueco bajo el botón y fuente. */
   hintGap: 12,
   hintFontSize: 16,
+  /* #14 — selector de dificultad del rival: rótulo + 3 botones pixel
+   * (FÁCIL / NORMAL / DIFÍCIL) entre las filas de pistas y CERRAR. */
+  /** Y del rótulo DIFICULTAD (centro). */
+  difficultyLabelY: 1044,
+  /** Y del centro de la fila de botones de dificultad. */
+  difficultyRowY: 1088,
+  /** Tamaño de cada botón de dificultad y offsets X desde el centro. */
+  difficultyButtonWidth: 180,
+  difficultyButtonHeight: 60,
+  difficultyButtonOffsetX: 200,
+  difficultyFontSize: 24,
   /** Botón CERRAR. */
-  closeY: 1090,
+  closeY: 1170,
   closeWidth: 300,
   closeHeight: 88,
 } as const;
@@ -126,6 +144,12 @@ export class MenuScene extends Phaser.Scene {
 
   /* V1 (issue #9) — overlay del selector de pistas de ENTRENAR. */
   private trackOverlay: Phaser.GameObjects.Container | null = null;
+
+  /* #14 — dificultad elegida para el GRAN PREMIO (default NORMAL; viaja en
+   * el init data de RaceScene aunque V0 sólo use 'normal'). */
+  private selectedDifficulty: CpuDifficulty = DEFAULT_CPU_DIFFICULTY;
+  /** Botones del selector (se reconstruyen al cambiar la selección). */
+  private difficultyButtons: MenuButton[] = [];
 
   constructor() {
     super(MenuScene.KEY);
@@ -211,14 +235,15 @@ export class MenuScene extends Phaser.Scene {
       onPress: this.openMultiplayerOverlay,
     });
 
-    // V1 (issue #9) — ENTRENAR: abre el selector de pistas y lanza la
-    // RaceScene en modo práctica local (una persona, 3 vueltas, sin red).
+    // #14 — GRAN PREMIO: abre el selector de pistas + dificultad del rival y
+    // lanza RaceScene en modo VS CPU (una persona, 3 vueltas contra 1 CPU,
+    // sin red). El botón entre JUGAR y MULTIJUGADOR: mismo layout de V1 #9.
     new MenuButton(this, {
       x: centerX,
       y: MENU.trainY,
       width: MENU.trainWidth,
       height: MENU.trainHeight,
-      label: 'ENTRENAR',
+      label: 'GRAN PREMIO',
       tint: 0x3c6cd6,
       fontSize: MENU.trainFontSize,
       bus,
@@ -449,9 +474,11 @@ export class MenuScene extends Phaser.Scene {
 
   /**
    * Overlay simple de selección de pista (patrón del overlay multijugador):
-   * las 5 pistas del registro por nombre + CERRAR. V1 NO usa miniaturas
-   * (`TrackThumb` llega con el lobby de V2): para entrenar, el nombre de la
-   * pista alcanza. La elección lanza RaceScene en modo práctica local.
+   * las 5 pistas del registro por nombre + hint, el selector de DIFICULTAD
+   * del rival (#14: FÁCIL / NORMAL / DIFÍCIL, default NORMAL) y CERRAR. V1
+   * NO usa miniaturas (`TrackThumb` llega con el lobby de V2): para entrenar,
+   * el nombre de la pista alcanza. La elección lanza RaceScene en modo
+   * VS CPU con la dificultad elegida.
    */
   private readonly openTrackPicker = (): void => {
     if (this.trackOverlay || this.multiOverlay) {
@@ -474,7 +501,7 @@ export class MenuScene extends Phaser.Scene {
 
     overlay.add(
       this.add
-        .text(centerX, TRACK_PICKER.titleY, 'ENTRENAR', {
+        .text(centerX, TRACK_PICKER.titleY, 'GRAN PREMIO', {
           fontFamily: 'monospace',
           fontSize: '56px',
           color: '#f2f2f2',
@@ -484,7 +511,7 @@ export class MenuScene extends Phaser.Scene {
     );
     overlay.add(
       this.add
-        .text(centerX, TRACK_PICKER.subtitleY, 'ELEGÍ PISTA — 3 VUELTAS', SUBTITLE_STYLE)
+        .text(centerX, TRACK_PICKER.subtitleY, 'ELEGÍ PISTA Y RIVAL — 3 VUELTAS', SUBTITLE_STYLE)
         .setOrigin(0.5),
     );
 
@@ -493,6 +520,19 @@ export class MenuScene extends Phaser.Scene {
       const y = TRACK_PICKER.rowStartY + index * TRACK_PICKER.rowStep;
       overlay.add(this.trackRow(centerX, y, track.name, track.inspiration, track.id));
     });
+
+    // #14 — selector de dificultad del rival: rótulo + 3 botones pixel; el
+    // seleccionado va en verde (el mismo tinte que JUGAR), el resto en gris.
+    overlay.add(
+      this.add
+        .text(centerX, TRACK_PICKER.difficultyLabelY, 'DIFICULTAD DEL RIVAL', {
+          fontFamily: 'monospace',
+          fontSize: '24px',
+          color: '#9aa0a8',
+        })
+        .setOrigin(0.5),
+    );
+    this.rebuildDifficultyRow(overlay, centerX, bus);
 
     overlay.add(
       new MenuButton(this, {
@@ -510,6 +550,42 @@ export class MenuScene extends Phaser.Scene {
 
     this.trackOverlay = overlay;
   };
+
+  /**
+   * (Re)construye la fila de dificultad: al elegir una opción la fila se
+   * redibuja para marcar el seleccionado. El orden de dificultad creciente
+   * es el del registro de `results.ts`.
+   */
+  private rebuildDifficultyRow(
+    overlay: Phaser.GameObjects.Container,
+    centerX: number,
+    bus: EventBus<GameEvents>,
+  ): void {
+    for (const button of this.difficultyButtons) {
+      button.destroy();
+    }
+    this.difficultyButtons = [];
+    const order: readonly CpuDifficulty[] = ['easy', 'normal', 'hard'];
+    order.forEach((difficulty, index) => {
+      const selected = difficulty === this.selectedDifficulty;
+      const button = new MenuButton(this, {
+        x: centerX + (index - 1) * TRACK_PICKER.difficultyButtonOffsetX,
+        y: TRACK_PICKER.difficultyRowY,
+        width: TRACK_PICKER.difficultyButtonWidth,
+        height: TRACK_PICKER.difficultyButtonHeight,
+        label: CPU_DIFFICULTY_LABELS[difficulty],
+        tint: selected ? 0x1d8f43 : 0x525868,
+        fontSize: TRACK_PICKER.difficultyFontSize,
+        bus,
+        onPress: () => {
+          this.selectedDifficulty = parseCpuDifficulty(difficulty);
+          this.rebuildDifficultyRow(overlay, centerX, bus);
+        },
+      });
+      this.difficultyButtons.push(button);
+      overlay.add(button.container);
+    });
+  }
 
   /** Fila de pista: botón con el nombre + hint del circuito real debajo. */
   private trackRow(
@@ -550,12 +626,25 @@ export class MenuScene extends Phaser.Scene {
     return row;
   }
 
+  /**
+   * Lanza el GRAN PREMIO (issue #14): RaceScene en modo VS CPU con la pista
+   * elegida, la dificultad del selector y una seed fresca de parrilla
+   * (`Date.now()` — la parrilla de 2 sólo necesita variedad por salida).
+   */
   private readonly startPractice = (trackId: TrackId): void => {
     this.closeTrackPicker();
-    this.scene.start(RaceScene.KEY, { trackId, mode: 'practice' });
+    this.scene.start(RaceScene.KEY, {
+      trackId,
+      mode: 'vs-cpu',
+      difficulty: this.selectedDifficulty,
+      seed: Date.now(),
+    });
   };
 
   private readonly closeTrackPicker = (): void => {
+    // Los botones de dificultad viven dentro del overlay: el destroy del
+    // contenedor los tira; acá sólo se sueltan las referencias.
+    this.difficultyButtons = [];
     this.trackOverlay?.destroy();
     this.trackOverlay = null;
   };

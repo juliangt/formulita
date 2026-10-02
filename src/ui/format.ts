@@ -52,3 +52,49 @@ export function formatLapBadge(lap: number, totalLaps: number): string {
   const current = Number.isFinite(lap) ? Math.min(Math.max(1, Math.floor(lap)), total) : 1;
   return `VUELTA ${current}/${total}`;
 }
+
+/* ------------------------------------------------------------------ */
+/* Gran Premio vs CPU (issue #14, V3)                                   */
+/* ------------------------------------------------------------------ */
+
+/** Separador de los segmentos del chip de modo. */
+const CHIP_SEPARATOR = ' · ';
+
+/**
+ * Chip de contexto del GRAN PREMIO: "GRAN PREMIO · MÓNACO · DIFÍCIL". Los
+ * segmentos vacíos (pista o dificultad ausentes) se omiten junto con su
+ * separador — nunca deja "· " colgando; sin nada, devuelve al menos el modo.
+ */
+export function formatGrandPrixChip(trackName: string, difficultyLabel: string): string {
+  const parts = ['GRAN PREMIO'];
+  const track = trackName.trim();
+  const difficulty = difficultyLabel.trim();
+  if (track.length > 0) {
+    parts.push(track);
+  }
+  if (difficulty.length > 0) {
+    parts.push(difficulty);
+  }
+  return parts.join(CHIP_SEPARATOR);
+}
+
+/**
+ * Línea de gaps del HUD vs CPU: primero el rival de ADELANTE (positivo: le
+ * perdés ese tiempo) y después el de ATRÁS (negativo: te lleva ese tiempo),
+ * en segundos a un decimal con unidad — "+1.2s -0.8s". Los valores `null`
+ * (sin vecino de ese lado o estimación no confiable) no se muestran; sin
+ * ningún vecino devuelve '' (el HUD oculta la línea).
+ */
+export function formatRaceGaps(
+  aheadSeconds: number | null,
+  behindSeconds: number | null,
+): string {
+  const parts: string[] = [];
+  if (aheadSeconds !== null && Number.isFinite(aheadSeconds)) {
+    parts.push(`+${aheadSeconds.toFixed(1)}s`);
+  }
+  if (behindSeconds !== null && Number.isFinite(behindSeconds)) {
+    parts.push(`${behindSeconds.toFixed(1)}s`);
+  }
+  return parts.join(' ');
+}
