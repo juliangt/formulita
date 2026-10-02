@@ -37,6 +37,7 @@
 
 import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
 import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
+import { relayConfigFor } from './appId';
 import type { NetEnvSource } from './appId';
 import { assignColors, isRoomFull, resolveHostPeerId } from './lobbyState';
 import type { NetClient, CreateRoomOptions, JoinRoomOptions } from './NetClient';
@@ -95,9 +96,14 @@ export type RoomFactory = (appId: string, roomId: string) => TrysteroRoom;
  * TIPOS únicamente: `Room` de Trystero es un tipo sobrecargado (acciones
  * message/request) y acá solo interesa el subconjunto estructural declarado
  * en `TrysteroRoom`, que la room real cumple en runtime.
+ *
+ * Los trackers de señalización custom (`VITE_TRYSTERO_RELAYS`, issue #8)
+ * entran como `relayConfig` via `relayConfigFor()` — `{}` si no hay lista
+ * custom (defaults de la librería). Los factories inyectados (tests) no la
+ * usan: la resolución de env vive SOLO acá.
  */
 const defaultRoomFactory: RoomFactory = (appId, roomId) =>
-  joinRoom({ appId }, roomId) as unknown as TrysteroRoom;
+  joinRoom({ appId, ...relayConfigFor() }, roomId) as unknown as TrysteroRoom;
 
 /**
  * Resolución del appId + tipo del entorno: MOVIDOS a `net/appId.ts` (C2) porque

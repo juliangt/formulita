@@ -45,7 +45,7 @@
 
 import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
 import { PRESENCE_HEARTBEAT_MS, PRESENCE_STALE_MS } from '../config/balance';
-import { resolveAppId, socialRoomId, type NetEnvSource } from './appId';
+import { relayConfigFor, resolveAppId, socialRoomId, type NetEnvSource } from './appId';
 import type { AvailablePeer, ChatClient, PresenceMeta } from './ChatClient';
 import { assignColors } from './lobbyState';
 import {
@@ -93,10 +93,13 @@ const defaultScheduler = (callback: () => void, ms: number): (() => void) => {
 /**
  * Factory default: `joinRoom` real de la estrategia torrent. El cast es de
  * TIPOS únicamente (misma justificación que en TrysteroNetClient): la room
- * real cumple el subconjunto estructural `TrysteroRoom` en runtime.
+ * real cumple el subconjunto estructural `TrysteroRoom` en runtime. Los
+ * trackers de señalización custom (`VITE_TRYSTERO_RELAYS`, issue #8) entran
+ * igual que en las salas de partida — `relayConfigFor()` — para que presencia
+ * y matchmaking usen SIEMPRE la misma lista (listas disjuntas fragmentan).
  */
 const defaultRoomFactory: RoomFactory = (appId, roomId) =>
-  joinRoom({ appId }, roomId) as unknown as TrysteroRoom;
+  joinRoom({ appId, ...relayConfigFor() }, roomId) as unknown as TrysteroRoom;
 
 /** Handlers por evento (misma forma que los demás clientes). */
 type HandlerMap = {
