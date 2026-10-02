@@ -5,9 +5,9 @@
  * El AudioManager mapea velocidad → frecuencia del dron sobre el dominio de
  * la BATALLA (`engineFrequencyForSpeed` interpola entre MIN_SPEED y la punta
  * combinada turbo × DRS). El circuito es otro mundo físico: la velocidad
- * propia vive en [0, CIRCUIT.maxSpeed] px/s (300), por debajo del piso
- * significativo del dominio de la batalla — pasarla cruda haría que el dron
- * apenas se moviera de su frecuencia mínima.
+ * propia vive en [0, CIRCUIT.maxSpeed] px/s (750 desde el issue #18), por
+ * debajo del piso significativo del dominio de la batalla — pasarla cruda
+ * haría que el dron apenas se moviera de su frecuencia mínima.
  *
  * `raceEngineSpeed` NORMALIZA: la fracción speed/maxSpeed del circuito entra
  * como la misma fracción del dominio [MIN_SPEED, MAX_SPEED], de modo que el

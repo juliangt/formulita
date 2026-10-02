@@ -65,6 +65,16 @@ export class RemoteCar {
     return this.sprite;
   }
 
+  /**
+   * Objetos de render (sprite + nombre): la RaceScene los registra como MUNDO
+   * para la separación de cámaras (issue #18) — la cámara de UI debe
+   * ignorarlos para que el zoom no los alcance y sólo los pinte
+   * `cameras.main`.
+   */
+  get renderObjects(): readonly Phaser.GameObjects.GameObject[] {
+    return [this.sprite, this.label];
+  }
+
   /** Fija posición y orientación (reconstruidas por la escena). */
   sync(x: number, y: number, angle: number): void {
     this.sprite.setPosition(x, y);

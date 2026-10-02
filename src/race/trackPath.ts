@@ -79,8 +79,13 @@ export interface TrackPathOptions {
   sectorFractions?: readonly SectorFraction[];
 }
 
-/** Paso objetivo de la polilínea densa (px): compromiso exactitud/costo. */
-const DENSE_SPACING_PX = 12;
+/**
+ * Paso objetivo de la polilínea densa (px): compromiso exactitud/costo.
+ * Issue #18: con el mundo del circuito ×2.5 el paso escala igual (12 → 30)
+ * para mantener EXACTA la misma resolución relativa de muestreo (y el mismo
+ * costo por pista); la forma de la curva no depende de este paso.
+ */
+const DENSE_SPACING_PX = 30;
 
 /** Mínimo de subdivisiones por segmento de Catmull-Rom. */
 const MIN_STEPS_PER_SEGMENT = 2;

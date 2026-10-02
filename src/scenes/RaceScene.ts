@@ -99,6 +99,12 @@ import { PauseScene } from './PauseScene';
 
 /* ------------------------------------------------------------------ */
 /* Constantes visuales del circuito (presentación, no gameplay)         */
+/* Issue #18: los px de MUNDO escalan ×2.5 con el circuito (quedan con   */
+/* la misma proporción sobre la pista y el mismo tamaño en pantalla con  */
+/* el nuevo zoom). Los px de PANTALLA (HUD, carteles) se conservan 1:1   */
+/* GRACIAS a la cámara de UI dedicada (`uiCam`): en Phaser 4 el zoom de  */
+/* cámara escala TAMBIÉN los objetos con scrollFactor(0), así que sin    */
+/* esa cámara el HUD quedaba fuera de pantalla con el zoom de #18.       */
 /* ------------------------------------------------------------------ */
 
 /** Prefijo de la textura pre-horneada por pista (`race-track-<id>`). */
@@ -111,17 +117,18 @@ const TRACK_TEXTURE_PREFIX = 'race-track-';
 const CAR_SPRITE_ANGLE_OFFSET = Math.PI / 2;
 
 /** Ancho de las franjas de corte del pasto (px, alternadas con grassAlt). */
-const GRASS_STRIPE_PX = 200;
+const GRASS_STRIPE_PX = 500;
 
 /** Largo de cada bloque de kerb a lo largo del arco (px). */
-const KERB_BLOCK_PX = 64;
+const KERB_BLOCK_PX = 160;
 /** Cuánto sobresale el kerb más allá del borde del asfalto (px). */
-const KERB_EXTRA_WIDTH_PX = 18;
-/** Curvatura mínima (1/px) que merece kerbs: radio < ~333 px. */
-const KERB_CURVATURE_THRESHOLD = 0.003;
+const KERB_EXTRA_WIDTH_PX = 45;
+/** Curvatura mínima (1/px) que merece kerbs: radio < ~833 px. Issue #18:
+ * el umbral es 1/px de mundo ⇒ se DIVIDE por la escala (0.003 → 0.0012). */
+const KERB_CURVATURE_THRESHOLD = 0.0012;
 
 /** Grosor de las líneas blancas del borde del asfalto (px). */
-const EDGE_LINE_WIDTH_PX = 4;
+const EDGE_LINE_WIDTH_PX = 10;
 /** Color de las líneas del borde (blanco hueso de la paleta kerbAlt-ish). */
 const EDGE_LINE_COLOR = 0xe8e6e0;
 
@@ -134,7 +141,7 @@ const START_LINE_SQUARES = 8;
 
 /** Marcas de sector: línea fina translúcida cruzando el asfalto. */
 const SECTOR_MARK_ALPHA = 0.28;
-const SECTOR_MARK_WIDTH_PX = 6;
+const SECTOR_MARK_WIDTH_PX = 15;
 
 /** Cartel de fin de carrera (bandera a cuadros). */
 const FINISH_LABEL = '¡BANDERA A CUADROS!';
@@ -246,8 +253,15 @@ class RaceTouchControls implements IInputSource {
     this.buttons = RACE_TOUCH_ACTIONS.map((action) => {
       const rect = layout[action];
       const visual = new PixelButton(scene, rect, styles[action]);
-      // La cámara de la escena scrollea: el HUD táctil vive en pantalla.
+      // La cámara del mundo scrollea: el HUD táctil vive en pantalla fija.
       visual.container.setScrollFactor(0);
+      // Dos cámaras (issue #18): el HUD táctil renderiza SOLO en la cámara de
+      // UI — la del mundo lo ignora (mismo truco que `hud()`: `ignore` marca
+      // los hijos del container y el bit del PROPIO container es el que mira
+      // el hit-test). El toque en sí NO pasa por cámaras: `TouchButton.contains`
+      // compara px de pantalla crudos, así que sigue registrando igual.
+      scene.cameras.main.ignore(visual.container);
+      visual.container.cameraFilter |= scene.cameras.main.id;
       return new TouchButton({
         action,
         rect,
@@ -341,9 +355,16 @@ class RaceTouchControls implements IInputSource {
  *   goma, kerbs rojo/blanco en las zonas de curvatura alta, líneas blancas
  *   de borde, meta a cuadros en s=0 y marcas sutiles de sector. Cero
  *   `Graphics` dinámicos por frame.
- * - CÁMARA: única y fija en zoom `RACE.cameraZoom`, norte arriba, sigue al
- *   auto con lerp y queda clampada al mundo; todo el HUD usa
- *   `setScrollFactor(0)`.
+ * - CÁMARA: dos cámaras (issue #18, QA del PR #25). `cameras.main` (zoom
+ *   `RACE.cameraZoom`, norte arriba, sigue al auto con lerp, clampada al
+ *   mundo) renderiza SOLO el mundo; el HUD vive SOLO en `uiCam`, una cámara
+ *   de UI dedicada con zoom 1: en Phaser 4 el zoom escala también los
+ *   objetos con `setScrollFactor(0)` (renderizan en centro + zoom·(p−centro)),
+ *   así que con el zoom de #18 todo el HUD quedaba fuera de pantalla. Cada
+ *   cámara ignora lo de la otra (`hud()` al crear HUD,
+ *   `uiCam.ignore(worldObjects)` al cerrar create) y el input sigue
+ *   funcionando porque Phaser resuelve el hit-test por cámara con el mismo
+ *   filtro de render.
  * - INPUT: mismo stack que el modo BATALLA (`IInputState` fusionado por
  *   `InputSystem`) con fuentes propias de carrera (teclado auto-acelerado y
  *   ◀ ▶ + FRENO táctil); el puente a la física es el puro
@@ -415,8 +436,9 @@ class RaceTouchControls implements IInputSource {
    * rivales y SFX de largada + adelantamiento (detección pura con
    * enfriamiento en `race/racePositionSwap`, sonando por el bus como
    * `race-go`/`race-overtake`). Práctica y multi: cero cambios, salvo el
-   * destacado del minimapa en multi (opt-in genérico). La cámara NO cambia:
-   * su zoom fijo ya elegido prioriza legibilidad móvil (decisión V3).
+   * destacado del minimapa en multi (opt-in genérico). La cámara conserva SU
+   * mecánica (zoom fijo + lerp; decisión V3): el valor del zoom lo actualizó
+   * el issue #18 (ver `RACE.cameraZoom`).
    */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';
@@ -433,6 +455,27 @@ export class RaceScene extends Phaser.Scene {
 
   /* Render del mundo + auto. */
   private carSprite!: Phaser.GameObjects.Image;
+
+  /**
+   * Cámara de UI (zoom 1, viewport completo, sin scroll ni follow): el HUD
+   * se renderiza SOLO acá. En Phaser 4 el zoom de cámara escala TAMBIÉN los
+   * objetos con `scrollFactor(0)` (renderizan en `centro + zoom·(p−centro)`):
+   * con el zoom de #18 todo el HUD quedaba fuera de pantalla (issue #19 ya
+   * describía la desalineación a zoom menor). El mundo vive SOLO en
+   * `cameras.main` y el HUD SOLO acá — cada cámara ignora lo de la otra
+   * (`hud()` en cada creación de HUD, `uiCam.ignore(worldObjects)` al cerrar
+   * create). Pública para los tests de regresión de la separación.
+   */
+  uiCam!: Phaser.Cameras.Scene2D.Camera;
+
+  /**
+   * Objetos del MUNDO (pista, auto propio, confeti, rivales/remotos): create()
+   * los recolecta acá para que `uiCam` los ignore de una sola pasada al
+   * cerrar. Se completa SIEMPRE dentro de create() (los RemoteCar nacen en
+   * setupVsCpu/setupMultiRace; los que caen a mitad de carrera sólo se
+   * destruyen) y se reinicia en cada create (el restart reutiliza la escena).
+   */
+  private worldObjects: Phaser.GameObjects.GameObject[] = [];
 
   /** Bus de sesión (audio del motor, botones de HUD). Resuelto en create. */
   private bus!: EventBus<GameEvents>;
@@ -589,6 +632,9 @@ export class RaceScene extends Phaser.Scene {
       rival.car.destroy();
     }
     this.rivals = [];
+    // Separación de cámaras: el registro de MUNDO arranca fresco (el restart
+    // reutiliza la instancia y los objetos viejos ya están destruidos).
+    this.worldObjects = [];
     this.rivalRoster = [];
     this.cpuDifficulty = this.sceneInit.difficulty ?? DEFAULT_CPU_DIFFICULTY;
     // V3 (#14) — detector fresco de cambios de posición (idempotencia del
@@ -642,11 +688,17 @@ export class RaceScene extends Phaser.Scene {
     };
 
     // Mundo estático: la pista pre-horneada en UNA imagen + el auto encima.
-    this.add.image(0, 0, this.ensureTrackTexture()).setOrigin(0, 0).setDepth(0);
+    // Todo lo que nace de acá en adelante es MUNDO (se registra en
+    // `worldObjects` para que la cámara de UI lo ignore); el HUD usa `hud()`.
+    const trackImage = this.add
+      .image(0, 0, this.ensureTrackTexture())
+      .setOrigin(0, 0)
+      .setDepth(0);
     this.carSprite = this.add
       .sprite(this.carState.x, this.carState.y, TEXTURE_KEYS.playerCar)
       .setDepth(10);
     this.syncCarSprite();
+    this.worldObjects.push(trackImage, this.carSprite);
 
     // V4 — confeti del cruce de meta final: burst multicolor one-shot sobre
     // el auto (tint = paleta de la sala, cero colores mágicos nuevos).
@@ -661,6 +713,7 @@ export class RaceScene extends Phaser.Scene {
         emitting: false,
       })
       .setDepth(RACE_CONFETTI.depth);
+    this.worldObjects.push(this.confettiEmitter);
 
     // Cámara: norte arriba, zoom fijo, sigue con lerp, clampada al mundo.
     this.cameras.main.setBounds(
@@ -671,6 +724,11 @@ export class RaceScene extends Phaser.Scene {
     );
     this.cameras.main.setZoom(RACE.cameraZoom);
     this.cameras.main.startFollow(this.carSprite, false, RACE.cameraLerp, RACE.cameraLerp);
+
+    // Cámara de UI (zoom 1 default, viewport completo, transparente): el HUD
+    // se renderiza SOLO acá para que el zoom de la cámara del mundo no lo
+    // escale (en Phaser 4 el zoom alcanza también a los scrollFactor(0)).
+    this.uiCam = this.cameras.add(0, 0, width, height);
 
     // Evento de fin: LapTracker avisa al completar la última vuelta válida.
     // En práctica congela el mundo y va a resultados; en multi difunde el
@@ -722,6 +780,12 @@ export class RaceScene extends Phaser.Scene {
       this.game.events.on(Phaser.Core.Events.BLUR, this.pauseGame);
       this.events.on(Phaser.Scenes.Events.RESUME, this.handleSceneResume);
     }
+
+    // Separación de cámaras (issue #18): el mundo (pista, autos, confeti y
+    // los rivales/remotos nacidos en los setups de arriba) renderiza SOLO en
+    // `cameras.main`; `uiCam` lo ignora de una pasada. El camino inverso está
+    // en `hud()`, llamado en cada creación de HUD.
+    this.uiCam.ignore(this.worldObjects);
 
     // HUD con el estado inicial (la cuenta aún no arrancó los relojes).
     this.raceHud.setLap(this.lapTracker.currentLap, CIRCUIT.totalLaps);
@@ -932,6 +996,9 @@ export class RaceScene extends Phaser.Scene {
       if (slot.x !== undefined && slot.y !== undefined) {
         car.sync(slot.x, slot.y, slot.angle ?? 0);
       }
+      // MUNDO para la separación de cámaras (issue #18): el sprite y su
+      // nombre se quedan en cameras.main — uiCam debe ignorarlos.
+      this.worldObjects.push(...car.renderObjects);
       this.rivals.push({
         rival,
         state,
@@ -1112,6 +1179,9 @@ export class RaceScene extends Phaser.Scene {
       if (slot?.x !== undefined && slot?.y !== undefined) {
         car.sync(slot.x, slot.y, slot.angle ?? 0);
       }
+      // MUNDO para la separación de cámaras (issue #18): el sprite y su
+      // nombre se quedan en cameras.main — uiCam debe ignorarlos.
+      this.worldObjects.push(...car.renderObjects);
       this.remotes.set(player.peerId, car);
       this.remoteBuffers.set(player.peerId, new SnapshotBuffer<RaceRemoteSample>());
       this.remoteProgress.set(player.peerId, { lap: 0, s: slot?.s ?? 0 });
@@ -1531,6 +1601,7 @@ export class RaceScene extends Phaser.Scene {
       onPress: () => this.openSpectatorChat(),
     });
     this.spectatorChatButton.container.setScrollFactor(0);
+    this.hud(this.spectatorChatButton.container);
     this.hudWidgets.push(this.spectatorChatButton);
   }
 
@@ -1556,16 +1627,23 @@ export class RaceScene extends Phaser.Scene {
 
   /** Cartel de bandera a cuadros (+ subtítulo de espectador en multi). */
   private showFinishBanner(subtitle?: string): void {
-    const finishLabel = this.add
-      .text(this.scale.width / 2, this.scale.height / 2 - FINISH_LABEL_OFFSET_Y, FINISH_LABEL, {
-        fontFamily: 'monospace',
-        fontSize: `${FINISH_LABEL_FONT_SIZE}px`,
-        color: '#f7c531',
-      })
-      .setOrigin(0.5)
-      .setStroke('#0c0c14', 10)
-      .setDepth(60)
-      .setScrollFactor(0);
+    const finishLabel = this.hud(
+      this.add
+        .text(
+          this.scale.width / 2,
+          this.scale.height / 2 - FINISH_LABEL_OFFSET_Y,
+          FINISH_LABEL,
+          {
+            fontFamily: 'monospace',
+            fontSize: `${FINISH_LABEL_FONT_SIZE}px`,
+            color: '#f7c531',
+          },
+        )
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 10)
+        .setDepth(60)
+        .setScrollFactor(0),
+    );
 
     this.tweens.add({
       targets: finishLabel,
@@ -1577,21 +1655,23 @@ export class RaceScene extends Phaser.Scene {
     });
 
     if (subtitle) {
-      this.add
-        .text(
-          this.scale.width / 2,
-          this.scale.height / 2 - FINISH_LABEL_OFFSET_Y + SPECTATOR_SUBTITLE_OFFSET_Y,
-          subtitle,
-          {
-            fontFamily: 'monospace',
-            fontSize: `${SPECTATOR_SUBTITLE_FONT_SIZE}px`,
-            color: '#c8ccd4',
-          },
-        )
-        .setOrigin(0.5)
-        .setStroke('#0c0c14', 6)
-        .setDepth(60)
-        .setScrollFactor(0);
+      this.hud(
+        this.add
+          .text(
+            this.scale.width / 2,
+            this.scale.height / 2 - FINISH_LABEL_OFFSET_Y + SPECTATOR_SUBTITLE_OFFSET_Y,
+            subtitle,
+            {
+              fontFamily: 'monospace',
+              fontSize: `${SPECTATOR_SUBTITLE_FONT_SIZE}px`,
+              color: '#c8ccd4',
+            },
+          )
+          .setOrigin(0.5)
+          .setStroke('#0c0c14', 6)
+          .setDepth(60)
+          .setScrollFactor(0),
+      );
     }
   }
 
@@ -1642,22 +1722,24 @@ export class RaceScene extends Phaser.Scene {
    * escala y fade). Se destruye solo al terminar el fade.
    */
   private showLapBanner(lap: number): void {
-    const banner = this.add
-      .text(
-        this.scale.width / 2,
-        this.scale.height / 2,
-        `¡${formatLapBadge(lap, CIRCUIT.totalLaps)}!`,
-        {
-          fontFamily: 'monospace',
-          fontSize: `${RACE_LAP_BANNER.fontSize}px`,
-          color: '#f7c531',
-        },
-      )
-      .setOrigin(0.5)
-      .setStroke('#0c0c14', 12)
-      .setDepth(60)
-      .setScrollFactor(0)
-      .setScale(RACE_LAP_BANNER.popScale);
+    const banner = this.hud(
+      this.add
+        .text(
+          this.scale.width / 2,
+          this.scale.height / 2,
+          `¡${formatLapBadge(lap, CIRCUIT.totalLaps)}!`,
+          {
+            fontFamily: 'monospace',
+            fontSize: `${RACE_LAP_BANNER.fontSize}px`,
+            color: '#f7c531',
+          },
+        )
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 12)
+        .setDepth(60)
+        .setScrollFactor(0)
+        .setScale(RACE_LAP_BANNER.popScale),
+    );
 
     this.tweens.add({
       targets: banner,
@@ -1830,10 +1912,30 @@ export class RaceScene extends Phaser.Scene {
   /* HUD, countdown y pausa                                            */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Registra un objeto de HUD: la cámara del MUNDO (`cameras.main`) no debe
+   * renderizarlo — el HUD vive SOLO en `uiCam` (zoom 1), así que el zoom de
+   * #18 no lo escala ni lo manda fuera de pantalla. Devuelve el mismo objeto
+   * para usarlo junto a la creación. El camino inverso (el mundo ignorado por
+   * `uiCam`) está al cierre de create().
+   *
+   * Detalle: `ignore()` en un Container marca sólo a sus HIJOS (recursión
+   * `isParent`), pero el hit-test de input (`inputCandidate`) consulta
+   * `willRender` del PROPIO objeto interactivo — así que el bit del container
+   * va a mano, además del `ignore`.
+   */
+  private hud<T extends Phaser.GameObjects.GameObject>(object: T): T {
+    const main = this.cameras.main;
+    main.ignore(object);
+    object.cameraFilter |= main.id;
+    return object;
+  }
+
   /** HUD de pantalla fija (scrollFactor 0): vueltas, tiempos y minimapa. */
   private createHud(width: number, height: number): void {
     this.raceHud = new RaceHud(this, { depth: RACE_HUD.depth });
     this.raceHud.container.setScrollFactor(0);
+    this.hud(this.raceHud.container);
     this.hudWidgets.push(this.raceHud);
 
     this.miniMap = new MiniMap(this, this.path, {
@@ -1846,6 +1948,7 @@ export class RaceScene extends Phaser.Scene {
       highlightId: this.isVsCpu() || this.isMultiRace() ? PLAYER_PEER_ID : undefined,
     });
     this.miniMap.container.setScrollFactor(0);
+    this.hud(this.miniMap.container);
     this.hudWidgets.push(this.miniMap);
 
     // Botón de mute abajo al centro (misma posición que GameScene; el hueco
@@ -1859,6 +1962,7 @@ export class RaceScene extends Phaser.Scene {
       depth: MUTE_BUTTON.gameDepth,
     });
     muteButton.container.setScrollFactor(0);
+    this.hud(muteButton.container);
     this.hudWidgets.push(muteButton);
   }
 
@@ -1882,6 +1986,7 @@ export class RaceScene extends Phaser.Scene {
       onPress: () => this.pauseGame(),
     });
     pauseButton.container.setScrollFactor(0);
+    this.hud(pauseButton.container);
     this.hudWidgets.push(pauseButton);
 
     this.pauseKey = this.input.keyboard?.addKey('P') ?? null;
@@ -1894,16 +1999,18 @@ export class RaceScene extends Phaser.Scene {
 
   /** Texto gigante del countdown (por encima de todo, en pantalla fija). */
   private createCountdownText(width: number, height: number): void {
-    this.countdownText = this.add
-      .text(width / 2, height / 2, '3', {
-        fontFamily: 'monospace',
-        fontSize: `${COUNTDOWN.fontSize}px`,
-        color: '#f2f2f2',
-      })
-      .setOrigin(0.5)
-      .setStroke('#0c0c14', 14)
-      .setDepth(60)
-      .setScrollFactor(0);
+    this.countdownText = this.hud(
+      this.add
+        .text(width / 2, height / 2, '3', {
+          fontFamily: 'monospace',
+          fontSize: `${COUNTDOWN.fontSize}px`,
+          color: '#f2f2f2',
+        })
+        .setOrigin(0.5)
+        .setStroke('#0c0c14', 14)
+        .setDepth(60)
+        .setScrollFactor(0),
+    );
   }
 
   /** Repinta el label del countdown con el pop de escala del cambio. */

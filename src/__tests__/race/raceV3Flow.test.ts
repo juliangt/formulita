@@ -70,11 +70,11 @@ interface DriveProfile {
 }
 
 /** Beto: a fondo físico — gana. */
-const BETO: DriveProfile = { speed: CIRCUIT.maxSpeed, lateral: -20 };
-/** Ana: ritmo alto — segunda. */
-const ANA: DriveProfile = { speed: 250, lateral: 20 };
-/** Carla: muy lenta — no termina dentro del horizonte del test. */
-const CARLA: DriveProfile = { speed: 60, lateral: 0 };
+const BETO: DriveProfile = { speed: CIRCUIT.maxSpeed, lateral: -50 };
+/** Ana: ritmo alto — segunda (issue #18: 250 × 2.5 con el mundo). */
+const ANA: DriveProfile = { speed: 625, lateral: 50 };
+/** Carla: muy lenta — no termina dentro del horizonte del test (×2.5). */
+const CARLA: DriveProfile = { speed: 150, lateral: 0 };
 
 /** Reloj lógico compartido (la red fake entrega síncrono y en orden). */
 function sharedClock(): { now: () => number; advance: (ms: number) => void } {
@@ -515,7 +515,7 @@ describe('QA issue #9 V3 — robustez de la carrera con 3 clientes', () => {
     const { clock, clients } = setupRace();
     const [ana, , carla] = clients;
 
-    // Un tramo legítimo de Carla (6 px/tick a 60 px/s).
+    // Un tramo legítimo de Carla (15 px/tick a 150 px/s, escala #18).
     runTicks(clock, clients, 10);
     const before = { ...ana.remoteProgress.get(carla.peerId)! };
     const bufferSize = ana.buffers.get(carla.peerId)!.size;

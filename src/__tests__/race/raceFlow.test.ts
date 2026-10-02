@@ -19,12 +19,12 @@ import { TrackPath } from '../../race/trackPath';
 
 /** Paso de simulación (s): el juego corre a ~60 fps. */
 const DT = 1 / 60;
-/** Distancia de mirada del pure pursuit (px). */
-const LOOKAHEAD_PX = 90;
-/** Distancias de anticipación del frenado (px). */
-const BRAKE_LOOKAHEADS_PX = [60, 150] as const;
-/** Margen del frenado: frena apenas la punta supere el máximo de curva. */
-const BRAKE_MARGIN_PXS = 4;
+/** Distancia de mirada del pure pursuit (px; ×2.5 con el mundo del #18). */
+const LOOKAHEAD_PX = 225;
+/** Distancias de anticipación del frenado (px; ×2.5 con el mundo del #18). */
+const BRAKE_LOOKAHEADS_PX = [150, 375] as const;
+/** Margen del frenado: frena apenas la punta supere el máximo de curva (px/s). */
+const BRAKE_MARGIN_PXS = 10;
 /** Zona muerta del giro (rad): con giro binario evita el zigzag. */
 const STEER_DEADZONE_RAD = 0.06;
 /** Tope de simulación (pasos): 15 minutos de carrera simulada. */
@@ -194,10 +194,11 @@ describe('flujo completo de carrera (física + vueltas + ranking, headless)', ()
 
     // Acelerando a fondo sobre asfalto: nunca supera maxSpeed. La tangente
     // del circuito sintético es casi recta: siguiéndola la deriva lateral es
-    // de unos pocos px, siempre dentro del asfalto.
+    // de unos pocos px, siempre dentro del asfalto (el umbral escala ×2.5
+    // con la punta del #18: la deriva cuantiza con speed × dt).
     for (let i = 0; i < 60 * 5; i += 1) {
       physics.step(state, DT, { throttle: true, brake: false, steer: 0 });
-      expect(Math.abs(square.project(state.x, state.y).lateral)).toBeLessThan(10);
+      expect(Math.abs(square.project(state.x, state.y).lateral)).toBeLessThan(25);
     }
     expect(state.speed).toBeLessThanOrEqual(CIRCUIT.maxSpeed + 1e-6);
     expect(state.speed).toBeGreaterThan(CIRCUIT.maxSpeed * 0.95);

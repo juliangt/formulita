@@ -13,32 +13,34 @@ import type { TrackDefinition } from '../../race/tracks';
  * QA issue #14 V1 — la línea de carrera (`race/ai/racingLine.ts`), SIN
  * Phaser: geometría pura determinista que comparten los 7 rivales.
  *
- * - Muestreo: anillo equiespaciado (~10 px de arco) que cubre el MISMO
- *   perímetro que el eje, con envoltura circular sana.
+ * - Muestreo: anillo equiespaciado (~25 px de arco desde el issue #18, que
+ *   escaló el mundo ×2.5) que cubre el MISMO perímetro que el eje, con
+ *   envoltura circular sana.
  * - targetSpeed por punto: velocidad máxima SOSTENIBLE según la curvatura
  *   local (misma resolución analítica de `turnRateAtSpeed` que la validación
  *   de pistas de #9), con factor de seguridad y recortada a maxSpeed. En las
- *   5 pistas queda en (0, maxSpeed], siempre muy por encima de la mitad de la
- *   referencia (ninguna curva del CPU es un muro): mínimos medidos 186
- *   (Suzuka) a 223 (Monza/Spa) contra referenceSpeed/2 = 90.
+ *   5 pistas queda en (0, maxSpeed], siempre muy por encima de la mitad de
+ *   la referencia (ninguna curva del CPU es un muro): mínimos medidos 465
+ *   (Suzuka) a 558 (Monza/Spa) contra referenceSpeed/2 = 225.
  * - Trazada: offset hacia el INTERIOR de cada curva (corte de apex) y al
  *   centro en recta, SIEMPRE dentro del asfalto con margen al borde
- *   (máximos medidos: 41–51 px contra topes de 44–61 px) y SIN zigzag
- *   (deltas entre puntos consecutivos medidos ≤ 5.7 px por paso de 10 px).
+ *   (máximos medidos: 103–128 px contra topes de 110–153 px) y SIN zigzag
+ *   (deltas entre puntos consecutivos medidos ≤ 14 px por paso de 25 px).
  * - Determinista: la misma (pista, ancho) devuelve exactamente la misma
  *   línea, punto por punto.
  */
 
 /** Paso objetivo entre puntos de la línea (px de arco; constante del módulo). */
-const STEP_PX = 10;
+const STEP_PX = 25;
 
 /** Tolerancia flotante para comparaciones geométricas. */
 const EPS = 1e-6;
 
-/** Círculo sintético perfecto: radio, ancho de asfalto y centro. */
-const CIRCLE_RADIUS_PX = 150;
-const CIRCLE_WIDTH_PX = 120;
-const CIRCLE_CENTER = { x: 1400, y: 1400 };
+/** Círculo sintético perfecto: radio, ancho de asfalto y centro (#18: la
+ * escala ×2.5 mantiene el fixture en el mismo régimen relativo del módulo). */
+const CIRCLE_RADIUS_PX = 375;
+const CIRCLE_WIDTH_PX = 300;
+const CIRCLE_CENTER = { x: 3500, y: 3500 };
 const CIRCLE_WAYPOINTS = 24;
 
 /** Cuadrado sintético gigante: el tramo medio de cada lado es recta perfecta. */
@@ -111,7 +113,8 @@ describe('buildRacingLine — targetSpeed sostenible por curvatura (5 pistas)', 
         maxTs = Math.max(maxTs, ts);
       }
       expect(maxTs).toBeCloseTo(CIRCUIT.maxSpeed, 0);
-      // Medido: 186–223 px/s según pista — muy por encima de un muro.
+      // Medido: 465–558 px/s según pista (escala ×2.5 del issue #18) — muy
+      // por encima de un muro.
       expect(minTs).toBeGreaterThan(CIRCUIT.referenceSpeed / 2);
       expect(minTs).toBeLessThan(CIRCUIT.maxSpeed * 0.85);
     });
@@ -215,7 +218,7 @@ describe('buildRacingLine — determinismo', () => {
   it('cada pista produce SU línea (los offsets dependen de SU curvatura)', () => {
     const monaco = buildRacingLine(buildTrackPath(getTrack('monaco')), getTrack('monaco').widthPx);
     const monza = buildRacingLine(buildTrackPath(getTrack('monza')), getTrack('monza').widthPx);
-    expect(monaco.pointCount).toBe(monza.pointCount); // mismo perímetro ~7250
+    expect(monaco.pointCount).toBe(monza.pointCount); // mismo perímetro ~18125
     // …pero los offsets difieren: cada trazada es función de SU curvatura.
     const differ = Array.from({ length: monaco.pointCount }, (_, i) =>
       monaco.pointAtIndex(i).offset !== monza.pointAtIndex(i).offset,

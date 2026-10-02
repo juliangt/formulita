@@ -51,8 +51,11 @@ const TEST_SEED = 20260101;
 /** Ventana anti-stuck (pasos): 5 s de sim por bloque. */
 const STUCK_WINDOW_STEPS = 300;
 
-/** Progreso mínimo esperado en una ventana de 5 s (px; a ~180 px/s son 900). */
-const STUCK_MIN_PROGRESS_PX = 50;
+/**
+ * Progreso mínimo esperado en una ventana de 5 s (px; a ~450 px/s —la
+ * referencia escalada del issue #18— son 2250).
+ */
+const STUCK_MIN_PROGRESS_PX = 125;
 
 /** % máximo de tiempo fuera del asfalto (medido: 0.0% en todas las sims). */
 const OFF_TRACK_MAX_RATIO = 0.02;
@@ -224,7 +227,7 @@ describe('AiDriver — contrato puro del piloto (línea de carrera)', () => {
 
   it('no muta el estado: sólo LEE {x, y, heading, speed} y devuelve input', () => {
     const slot = assignGridOrder([{ peerId: 'a' }], 1, path)[0];
-    const state: CarState = { x: slot.x!, y: slot.y!, heading: slot.angle!, speed: 100 };
+    const state: CarState = { x: slot.x!, y: slot.y!, heading: slot.angle!, speed: 250 };
     const snapshot = { ...state };
     const input = driver.drive(state);
     expect(state).toEqual(snapshot);
@@ -280,7 +283,7 @@ describe('AiDriver — contrato puro del piloto (línea de carrera)', () => {
   it('corrige el error angular: girando hacia el punto de mira, el error baja', () => {
     const start = path.sample(0);
     // Desalineado medio radian respecto de la tangente, sobre el eje.
-    const state: CarState = { x: start.x, y: start.y, heading: start.angle + 0.5, speed: 150 };
+    const state: CarState = { x: start.x, y: start.y, heading: start.angle + 0.5, speed: 375 };
     const input = driver.drive(state);
     // El volante es bang-bang: con medio radian de error, gira a fondo.
     expect(input.steer).not.toBe(0);
@@ -294,7 +297,7 @@ describe('AiDriver — contrato puro del piloto (línea de carrera)', () => {
   it('respeta la zona muerta: alineado con una recta perfecta, volante recto', () => {
     // Cuadrado gigante (misma técnica del full-flow de #9): el tramo medio de
     // cada lado es una recta PERFECTA — la línea converge al eje y el punto
-    // de mira (120 px adelante sobre la línea) queda exactamente adelante.
+    // de mira (300 px adelante sobre la línea, #18) queda exactamente adelante.
     const SIDE = 200_000;
     const square = new TrackPath([
       { x: 0, y: 0 },
@@ -309,7 +312,7 @@ describe('AiDriver — contrato puro del piloto (línea de carrera)', () => {
       x: straight.x,
       y: straight.y,
       heading: straight.angle,
-      speed: 150,
+      speed: 375,
     };
     expect(squareLine.pointAtS(SIDE / 2 + RACE_AI.lookAheadPx).targetSpeed)
       .toBe(CIRCUIT.maxSpeed);
@@ -327,7 +330,7 @@ describe('AiDriver — contrato puro del piloto (línea de carrera)', () => {
       x: start.x + Math.cos(normal) * halfWidth * 0.75,
       y: start.y + Math.sin(normal) * halfWidth * 0.75,
       heading: start.angle,
-      speed: 120,
+      speed: 300,
     };
     const physics = new CircuitPhysics(path, track.widthPx);
     let lateral = Math.abs(path.project(state.x, state.y).lateral);
@@ -639,9 +642,9 @@ describe('Carrera vs CPU con parrilla de 8 — ranking y clasificación (issue #
   it('jugador rápido: gana él y los rivales clasifican detrás (2º..8º)', () => {
     // V2: los presets 'hard' son RÁPIDOS (speedPct 0.97 + personalidad por
     // encima de la línea + goma), tanto que un jugador plano AL TECHO físico
-    // (300 px/s) puede perder contra el rival de pole. El caso que el test
-    // fija es "un jugador claramente más veloz que CUALQUIER CPU gana": el
-    // auto scripteado corre por encima del techo de los rivales.
+    // (750 px/s desde el #18) puede perder contra el rival de pole. El caso
+    // que el test fija es "un jugador claramente más veloz que CUALQUIER CPU
+    // gana": el auto scripteado corre por encima del techo de los rivales.
     const result = simulateRace(track, TEST_SEED, 'hard', CIRCUIT.maxSpeed * 1.15);
     expect(result.standings).toHaveLength(1 + RACE_AI.rivalCount);
     expect(result.playerPosition).toBe(1);
