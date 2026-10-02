@@ -14,8 +14,11 @@
  * - Retroceder sobre la meta no cuenta ni reinicia: sólo la envoltura hacia
  *   adelante es un cruce. Re-pisar sectores hacia atrás no avanza el puntero.
  * - La vuelta 1 arranca en el primer update (semáforo en verde); la parrilla
- *   está detrás de la línea, así que el primer cruce completo la vuelta 1 si
- *   se pisaron los 8 sectores (incluye el trecho de parrilla).
+ *   está DETRÁS de la línea, así que el PRIMER cruce (parrilla → meta) NO
+ *   completa vuelta: el auto arranca en el último sector con el puntero
+ *   esperando el sector 0, llega con 0 sectores pisados y el cruce sólo
+ *   REINICIA el intento — es la puesta en marcha de la vuelta 1. Cada vuelta
+ *   válida exige pisar los 8 sectores EN ORDEN después de ese primer cruce.
  *
  * Timing: vuelta actual, última vuelta y mejor vuelta, en ms, acumulados con
  * los `deltaMs` de cada update. Los eventos `onLapCompleted`/`onRaceFinished`

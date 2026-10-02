@@ -808,8 +808,15 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
-  /** Llegó `race-over` del ganador: su clasificación manda sobre la local. */
-  private handleRaceOver(_peerId: string, payload: unknown): void {
+  /**
+   * Llegó `race-over` del ganador: su clasificación manda sobre la local.
+   * Mismo gate de roster que el `rfin` (un remitente fuera del roster
+   * congelado no puede concluir la carrera de todos).
+   */
+  private handleRaceOver(peerId: string, payload: unknown): void {
+    if (!this.rosterPlayers.some((player) => player.peerId === peerId)) {
+      return; // Remitente desconocido (no está en el roster congelado): ignorar.
+    }
     const parsed = parseRaceOverPayload(payload);
     if (!parsed) {
       return;
@@ -843,7 +850,10 @@ export class RaceScene extends Phaser.Scene {
   /**
    * Barrido de staleness ~1 vez por segundo (mismo patrón que GameScene):
    * todo rival a más de PLAYER_STALE_MS sin `rstate` (pestaña muerta, red
-   * caída sin leave) sale del mundo y clasifica como `disconnected`.
+   * caída sin leave) sale del mundo y clasifica como `disconnected`. Quien ya
+   * terminó dejó de emitir `rstate` POR DISEÑO (`broadcastRaceState` corta con
+   * `selfFinished`): no es un peer caído — su coche queda estacionado tras la
+   * meta y su clasificación ya es `finished` por su `rfin`.
    */
   private sweepStaleTick(deltaMs: number): void {
     this.staleSweepAccumulatorS += deltaMs / 1000;
@@ -852,6 +862,9 @@ export class RaceScene extends Phaser.Scene {
     }
     this.staleSweepAccumulatorS = 0;
     for (const peerId of this.staleTracker.sweep(this.time.now)) {
+      if (this.finishedPeers.has(peerId)) {
+        continue; // Terminó y dejó de transmitir: no es staleness.
+      }
       this.disconnectedPeers.add(peerId);
       this.removeRemoteCar(peerId);
     }
@@ -935,14 +948,25 @@ export class RaceScene extends Phaser.Scene {
     const mine = standings.find((standing) => standing.peerId === myPeerId);
     this.raceHud.setPosition(mine?.position ?? 1, standings.length);
 
-    // Espectador (V3 pulido): sigue al líder ACTUAL del ranking vivo — y si
-    // el líder nominal se fue (stale/leave, coche ya destruido), el primero
-    // del ranking que siga en pista. Los desconectados conservan su fila en
-    // el ranking (su último progreso), pero ya no tienen cámara que darles.
+    // Espectador (V3 pulido): sigue al mejor clasificado que SIGA EN CARRERA
+    // — el líder nominal del ranking puede ser un coche que YA terminó
+    // (estacionado tras la meta, progreso más alto) o el propio (congelado
+    // desde el rfin: seguirlo es mirar la pantalla quieta). Si nadie rueda ya
+    // (todos terminaron o cayeron), el mejor coche presente; si no hay
+    // ninguno, el propio. Los desconectados conservan su fila en el ranking
+    // (su último progreso), pero ya no tienen coche que darles.
     if (this.selfFinished) {
-      const leader = standings.find(
-        (standing) => standing.peerId === myPeerId || this.remotes.has(standing.peerId),
-      );
+      const leader =
+        standings.find(
+          (standing) =>
+            standing.peerId !== myPeerId &&
+            !this.finishedPeers.has(standing.peerId) &&
+            this.remotes.has(standing.peerId),
+        ) ??
+        standings.find(
+          (standing) =>
+            standing.peerId !== myPeerId && this.remotes.has(standing.peerId),
+        );
       if (leader) {
         this.followLeader(leader.peerId, myPeerId);
       }
