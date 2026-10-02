@@ -25,3 +25,21 @@
 export function isSpectatorChatVisible(selfEliminated: boolean, isMultiplayer: boolean): boolean {
   return isMultiplayer && selfEliminated;
 }
+
+/**
+ * Variante CARRERA (issue #9, V3): en el circuito el mundo también sigue
+ * después de que UNO termina — quien cruzó la bandera a cuadros espera a los
+ * demás en modo espectador y el chat de sala le vale IGUAL que al eliminado
+ * de la BATALLA (la puerta adicional que pide el issue: "terminó la
+ * carrera"). Mismo criterio cerrado de #2: mientras CONDUCÍS no hay chat.
+ *
+ * RaceScene la usa como gate al terminar su propia carrera (tras difundir el
+ * `rfin` propio), así el "nunca para el que conduce" queda garantizado por
+ * construcción Y por test.
+ */
+export function isRaceSpectatorChatVisible(
+  selfFinished: boolean,
+  isMultiplayer: boolean,
+): boolean {
+  return isMultiplayer && selfFinished;
+}

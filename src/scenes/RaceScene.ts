@@ -10,9 +10,14 @@ import {
   RACE_FINISH_GRACE_MS,
   RACE_HUD,
   RACE_MULTI,
+  SPECTATOR_OVERLAY,
   STATE_HZ,
   TOUCH_HUD,
 } from '../config/balance';
+import { isRaceSpectatorChatVisible } from '../chat/spectatorChat';
+import { getSessionChatStore } from '../chat/chatSession';
+import { receiveRoomChat } from '../chat/roomChat';
+import { ROOM_THREAD_ID } from '../chat/ChatStore';
 import { EventBus, getSessionEventBus, type GameEvents } from '../core/EventBus';
 import {
   circuitInputFromState,
@@ -42,6 +47,8 @@ import {
   unrollProgress,
   type RaceRemoteSample,
 } from '../race/raceRemote';
+import { RacePlausibility } from '../race/racePlausibility';
+import { RaceStaleTracker } from '../race/raceStale';
 import {
   parseRaceFinishPayload,
   parseRaceOverPayload,
@@ -66,6 +73,7 @@ import { MenuButton } from '../ui/MenuButton';
 import { MuteButton } from '../ui/MuteButton';
 import { PixelButton, type PixelButtonStyle } from '../ui/PixelButton';
 import { RaceHud } from '../ui/RaceHud';
+import { ChatScene } from './ChatScene';
 import { GameOverScene } from './GameOverScene';
 import { PauseScene } from './PauseScene';
 
@@ -128,6 +136,22 @@ const SPECTATOR_SUBTITLE = 'MODO ESPECTADOR — SIGUIENDO AL LÍDER';
 const SPECTATOR_SUBTITLE_FONT_SIZE = 30;
 /** Altura del subtítulo de espectador bajo el cartel de fin (px). */
 const SPECTATOR_SUBTITLE_OFFSET_Y = 70;
+
+/**
+ * V3 — botón CHAT del espectador de carrera: centrado bajo el subtítulo del
+ * cartel de fin, con el MISMO ritmo que el overlay de espectador de la
+ * BATALLA (SPECTATOR_OVERLAY: cartel → subtítulo → botón a +88 px).
+ */
+const SPECTATOR_CHAT_BUTTON_GAP_PX = 88;
+/** Tinte del botón CHAT (idem overlay de espectador de GameScene). */
+const SPECTATOR_CHAT_TINT = 0xb04ee0;
+
+/**
+ * Período del barrido de staleness (s, patrón sweepStaleTick de GameScene):
+ * el umbral REAL es PLAYER_STALE_MS (RaceStaleTracker); esto sólo fija cada
+ * cuánto se pregunta — no hace falta por frame.
+ */
+const STALE_SWEEP_INTERVAL_S = 1;
 
 /** Normaliza un ángulo a (−π, π] (la tangente de TrackPath vive ahí). */
 function normalizeAngle(angle: number): number {
@@ -288,6 +312,15 @@ class RaceTouchControls implements IInputSource {
  * terminan todos o vence `RACE_FINISH_GRACE_MS`, y el ganador difunde
  * `race-over` con `finalClassification`. Quien terminó specta siguiendo al
  * líder. En multi NO hay pausa (la red no se pausa, igual que GameScene).
+ *
+ * V3 (issue #9) — robustez: el progreso ajeno pasa un filtro de
+ * plausibilidad contra el tope físico (`race/racePlausibility`; un avance
+ * imposible se ignora, un retroceso se acepta — no gana nada), los peers que
+ * dejan de mandar `rstate` salen del mundo a `PLAYER_STALE_MS` y clasifican
+ * como `disconnected` (`race/raceStale`, patrón MatchTracker de #1), y el
+ * chat de espectador de #2 se extiende a "terminó la propia carrera"
+ * (`isRaceSpectatorChatVisible`): quien cruzó la bandera lee y escribe en la
+ * sala mientras sigue al líder actual del ranking vivo.
  */
 export class RaceScene extends Phaser.Scene {
   static readonly KEY = 'Race';
@@ -350,7 +383,8 @@ export class RaceScene extends Phaser.Scene {
   private remoteProgress = new Map<string, { lap: number; s: number }>();
   /** `rfin` recibidos/propios por peer (tiempos exactos de los terminados). */
   private finishedPeers = new Map<string, { totalMs: number; bestLapMs: number }>();
-  /** Peers que se fueron de la sala sin terminar (clasificación final). */
+  /** Peers fuera de la carrera sin terminar (leave o stale V3): en la
+   *  clasificación final van como `disconnected` con su último progreso. */
   private disconnectedPeers = new Set<string>();
   /** Primer `rfin` visto (ganador + instante local del arranque de gracia). */
   private firstFinish: { peerId: string; at: number } | null = null;
@@ -370,6 +404,23 @@ export class RaceScene extends Phaser.Scene {
   private lastProjection: TrackProjection = { s: 0, lateral: 0, angle: 0 };
   /** Peer cuyo sprite sigue la cámara (switch del espectador). */
   private followingPeerId: string | null = null;
+
+  /* ---------------------------------------------------------------- */
+  /* V3 — robustez (plausibilidad, staleness, chat de espectador)      */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Filtro de plausibilidad del progreso ajeno (por peer, contra el tope
+   * físico de `CIRCUIT`): un avance imposible se ignora y espera el próximo
+   * `rstate` — sin árbitro P2P, es la única confianza validable.
+   */
+  private plausibility = new RacePlausibility();
+  /** Presencia de peers: quién dejó de mandar `rstate` (PLAYER_STALE_MS). */
+  private staleTracker = new RaceStaleTracker();
+  /** Acumulador del barrido de staleness (~1 vez por segundo, patrón #1). */
+  private staleSweepAccumulatorS = 0;
+  /** Botón CHAT del espectador de carrera (sólo tras el `rfin` propio). */
+  private spectatorChatButton: MenuButton | null = null;
 
   constructor() {
     super(RaceScene.KEY);
@@ -530,11 +581,12 @@ export class RaceScene extends Phaser.Scene {
     this.raceHud.setTimings(this.lapTracker.currentLapMs, this.lapTracker.totalMs);
 
     // Multijugador: broadcast propio a STATE_HZ, rivales interpolados,
-    // ranking vivo y condiciones de cierre de la carrera.
+    // ranking vivo, staleness y condiciones de cierre de la carrera.
     if (this.isMultiRace()) {
       this.broadcastRaceState(projection, delta);
       this.syncRemoteCars();
       this.updateLiveRanking(delta);
+      this.sweepStaleTick(delta);
       this.checkRaceEnd();
     }
   }
@@ -588,6 +640,10 @@ export class RaceScene extends Phaser.Scene {
     const players = this.rosterPlayers;
     const slotsByPeer = new Map(this.gridSlots.map((slot) => [slot.peerId, slot]));
 
+    // V3: filtros frescos (la instancia de escena sobrevive a los restarts).
+    this.plausibility = new RacePlausibility();
+    this.staleTracker = new RaceStaleTracker();
+
     for (const player of players) {
       if (player.peerId === this.myPeerId) {
         continue;
@@ -600,6 +656,9 @@ export class RaceScene extends Phaser.Scene {
       this.remotes.set(player.peerId, car);
       this.remoteBuffers.set(player.peerId, new SnapshotBuffer<RaceRemoteSample>());
       this.remoteProgress.set(player.peerId, { lap: 0, s: slot?.s ?? 0 });
+      // Presencia inicial (base del stale para quien NUNCA mande `rstate`,
+      // igual criterio que el startedAt de MatchTracker).
+      this.staleTracker.record(player.peerId, this.time.now);
     }
 
     this.netClient = takeSessionNetClient(this.registry);
@@ -612,6 +671,15 @@ export class RaceScene extends Phaser.Scene {
       client.onRaceFinish((peerId, payload) => this.handleRaceFinish(peerId, payload)),
       client.onRaceOver((peerId, payload) => this.handleRaceOver(peerId, payload)),
       client.onPeerLeave((peerId) => this.handlePeerLeftRace(peerId)),
+      // Chat de sala (V3): sigue llegando durante TODA la carrera — entra al
+      // store de sesión y el espectador (quien terminó) lo lee/escribe desde
+      // el overlay. Mismo cableado que el espectador de la BATALLA (#2).
+      client.onChat((fromPeerId, payload) => {
+        const store = getSessionChatStore(this.registry);
+        if (store) {
+          receiveRoomChat(store, client.getRoster(), fromPeerId, payload, Date.now());
+        }
+      }),
     );
   }
 
@@ -626,6 +694,9 @@ export class RaceScene extends Phaser.Scene {
     }
     this.remotes.clear();
     this.remoteBuffers.clear();
+    this.plausibility.clear();
+    this.staleTracker.clear();
+    this.spectatorChatButton = null;
     // La RaceScene heredó el cliente del lobby (handoff por registry): al
     // apagarse (resultados, salida), la sala muere con la carrera.
     this.netClient?.destroy();
@@ -637,6 +708,11 @@ export class RaceScene extends Phaser.Scene {
    * (misma función que el emisor — defensa en profundidad contra un peer
    * corrupto) y alimenta el buffer como progreso DESENROLLADO (monótono, no
    * salta en la meta) más el último (lap, s) crudo para el ranking.
+   *
+   * V3 — antes de tocar nada, el progreso pasa el filtro de plausibilidad
+   * (`race/racePlausibility`): un avance físicamente imposible se IGNORA
+   * (buffer, ranking y presencia ni se enteran) y se espera el próximo
+   * `rstate`; un sample aceptado refresca la presencia del peer (staleness).
    */
   private handleRaceState(peerId: string, payload: {
     s: number;
@@ -652,9 +728,14 @@ export class RaceScene extends Phaser.Scene {
       this.path.totalLength,
       this.trackDef.widthPx / 2,
     );
+    const progress = unrollProgress(clean.lap, clean.s, this.path.totalLength);
+    if (!this.plausibility.accept(peerId, progress, this.time.now)) {
+      return; // Avance imposible: se ignora, se espera el próximo rstate.
+    }
+    this.staleTracker.record(peerId, this.time.now);
     this.remoteBuffers.get(peerId)?.push({
       t: this.time.now,
-      progress: unrollProgress(clean.lap, clean.s, this.path.totalLength),
+      progress,
       o: clean.o,
     });
     this.remoteProgress.set(peerId, { lap: clean.lap, s: clean.s });
@@ -682,12 +763,43 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Un peer se fue de la sala: su coche se CONGELA (deja de recibir `rstate`)
-   * y entra a la clasificación final como `disconnected`. La limpieza del
-   * sprite stale es V3; acá sólo importa que el cierre no se rompa.
+   * Un peer se fue de la sala (V3): su coche se DESTRUYE (desaparece del
+   * mundo y del minimapa) y entra a la clasificación final como
+   * `disconnected` con su último progreso conocido (`remoteProgress` queda).
    */
   private handlePeerLeftRace(peerId: string): void {
     this.disconnectedPeers.add(peerId);
+    this.staleTracker.markStale(peerId);
+    this.removeRemoteCar(peerId);
+  }
+
+  /**
+   * V3 — quita el coche de un peer del mundo SIN borrar su último progreso:
+   * el sprite sale de remotes (mundo + minimapa) y su buffer de
+   * interpolación se vacía, pero `remoteProgress` queda para que
+   * `finalClassification` lo clasifique por su último avance.
+   */
+  private removeRemoteCar(peerId: string): void {
+    this.remotes.get(peerId)?.destroy();
+    this.remotes.delete(peerId);
+    this.remoteBuffers.delete(peerId);
+  }
+
+  /**
+   * Barrido de staleness ~1 vez por segundo (mismo patrón que GameScene):
+   * todo rival a más de PLAYER_STALE_MS sin `rstate` (pestaña muerta, red
+   * caída sin leave) sale del mundo y clasifica como `disconnected`.
+   */
+  private sweepStaleTick(deltaMs: number): void {
+    this.staleSweepAccumulatorS += deltaMs / 1000;
+    if (this.staleSweepAccumulatorS < STALE_SWEEP_INTERVAL_S) {
+      return;
+    }
+    this.staleSweepAccumulatorS = 0;
+    for (const peerId of this.staleTracker.sweep(this.time.now)) {
+      this.disconnectedPeers.add(peerId);
+      this.removeRemoteCar(peerId);
+    }
   }
 
   /**
@@ -768,8 +880,17 @@ export class RaceScene extends Phaser.Scene {
     const mine = standings.find((standing) => standing.peerId === myPeerId);
     this.raceHud.setPosition(mine?.position ?? 1, standings.length);
 
-    if (this.selfFinished && standings.length > 0) {
-      this.followLeader(standings[0].peerId, myPeerId);
+    // Espectador (V3 pulido): sigue al líder ACTUAL del ranking vivo — y si
+    // el líder nominal se fue (stale/leave, coche ya destruido), el primero
+    // del ranking que siga en pista. Los desconectados conservan su fila en
+    // el ranking (su último progreso), pero ya no tienen cámara que darles.
+    if (this.selfFinished) {
+      const leader = standings.find(
+        (standing) => standing.peerId === myPeerId || this.remotes.has(standing.peerId),
+      );
+      if (leader) {
+        this.followLeader(leader.peerId, myPeerId);
+      }
     }
   }
 
@@ -889,6 +1010,61 @@ export class RaceScene extends Phaser.Scene {
     );
     this.inputSystem.detach();
     this.showFinishBanner(SPECTATOR_SUBTITLE);
+    // V3 (issue #9) — "terminó la carrera" es puerta del chat de espectador:
+    // quien cruzó la bandera lee y escribe en el chat de sala mientras los
+    // demás corren (la gate pura `isRaceSpectatorChatVisible` es la misma
+    // decisión 2A del issue #2, extendida al circuito).
+    this.createSpectatorChatButton();
+  }
+
+  /**
+   * Botón CHAT del espectador de carrera (V3): existe SÓLO tras el `rfin`
+   * propio en multi — por construcción un conductor nunca lo ve (el método
+   * sólo corre desde el evento de fin). Mismo estilo/ritmo que el botón del
+   * overlay de espectador de GameScene (#2), anclado bajo el subtítulo del
+   * cartel de fin. Vive en `hudWidgets`: el SHUTDOWN lo destruye.
+   */
+  private createSpectatorChatButton(): void {
+    if (!isRaceSpectatorChatVisible(this.selfFinished, this.isMultiRace())) {
+      return;
+    }
+    this.spectatorChatButton = new MenuButton(this, {
+      x: this.scale.width / 2,
+      y:
+        this.scale.height / 2 -
+        FINISH_LABEL_OFFSET_Y +
+        SPECTATOR_SUBTITLE_OFFSET_Y +
+        SPECTATOR_CHAT_BUTTON_GAP_PX,
+      width: SPECTATOR_OVERLAY.chatButtonWidth,
+      height: SPECTATOR_OVERLAY.chatButtonHeight,
+      label: 'CHAT',
+      tint: SPECTATOR_CHAT_TINT,
+      fontSize: SPECTATOR_OVERLAY.chatButtonFontSize,
+      bus: this.sessionBus(),
+      onPress: () => this.openSpectatorChat(),
+    });
+    this.spectatorChatButton.container.setScrollFactor(0);
+    this.hudWidgets.push(this.spectatorChatButton);
+  }
+
+  /**
+   * V3 — abre el overlay de chat ENCIMA de la carrera (patrón de GameScene:
+   * launch sin pausar; la carrera sigue sin el espectador). Tab SALA sobre
+   * el hilo `room` de la sesión con envío por el NetClient heredado. Sin
+   * transporte (degradación defensiva) no hay nada que abrir.
+   */
+  private openSpectatorChat(): void {
+    if (!this.netClient) {
+      return;
+    }
+    if (!this.scene.get(ChatScene.KEY)) {
+      this.scene.add(ChatScene.KEY, ChatScene, false);
+    }
+    this.scene.launch(ChatScene.KEY, {
+      thread: ROOM_THREAD_ID,
+      tab: 'room',
+      sendChat: (text: string) => this.netClient?.sendChat(text),
+    });
   }
 
   /** Cartel de bandera a cuadros (+ subtítulo de espectador en multi). */
