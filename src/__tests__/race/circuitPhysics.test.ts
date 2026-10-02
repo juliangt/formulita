@@ -10,8 +10,10 @@ import { TrackPath } from '../../race/trackPath';
 
 /**
  * Tests de la física arcade de circuito (issue #9, V0): clamp de velocidad,
- * pasto que recorta el techo, giro que decae con la velocidad, freno, avance
- * auto-acelerado y defensas contra dt inválido. dt inyectado, sin Phaser.
+ * pasto que recorta el techo, giro que decae con la velocidad, freno, el
+ * default "a fondo" de `step` (para sims headless: el input del jugador pasa
+ * por `raceControls`, issue #20) y defensas contra dt inválido. dt
+ * inyectado, sin Phaser.
  *
  * Se usa un anillo amplio como pista: en los tramos cortos que simulan los
  * tests el auto se mantiene sobre el asfalto, así el clamp de velocidad se
@@ -66,7 +68,7 @@ function tick(state: CarState, seconds: number, input = defaultCircuitInput()): 
 }
 
 describe('CircuitPhysics — velocidad', () => {
-  it('auto-acelera: sin input explícito el acelerador viene pisado', () => {
+  it('el default de step es el input "a fondo" (defaultCircuitInput, para sims headless)', () => {
     const state = stateAtS(100);
     physics.step(state, DT);
     expect(state.speed).toBeGreaterThan(0);

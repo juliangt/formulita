@@ -11,9 +11,10 @@ import { afterEach, describe, expect, it } from 'vitest';
  * cámaras YA está cubierta por `raceCameraSplit.test.ts` (acá NO se repite);
  * lo nuevo de #19 es la GEOMETRÍA y el FLUJO:
  *
- * 1. Hit-test de ◀ ▶ FRENO en px de pantalla con el pipeline REAL de Phaser:
- *    un toque en el centro del rect dibujado presiona ESE botón y uno a 10 px
- *    fuera no presiona nada (el hitPadding de dedos imprecisos es 8 < 10).
+ * 1. Hit-test de ◀ ▶ GAS FRENO en px de pantalla con el pipeline REAL de
+ *    Phaser: un toque en el centro del rect dibujado presiona ESE botón y
+ *    uno a 10 px fuera no presiona nada (el hitPadding de dedos imprecisos
+ *    es 8 < 10).
  * 2. Geometría pausa-vs-minimapa: el rect clicable real del botón II (leído
  *    del hitArea que Phaser registró) NO intersecta el panel real del
  *    minimapa — "quedó debajo del minimapa" no puede volver.
@@ -51,7 +52,7 @@ interface RaceSceneInternals {
   miniMap: { container: Phaser.GameObjects.Container };
   hudWidgets: { container?: Phaser.GameObjects.Container }[];
   touch: {
-    /** Botones ◀ ▶ FRENO (TouchButton: action/rect/isPressed públicos). */
+    /** Botones ◀ ▶ GAS FRENO (TouchButton: action/rect/isPressed públicos). */
     buttons: {
       action: string;
       rect: { x: number; y: number; width: number; height: number };
@@ -213,10 +214,12 @@ describe('RaceScene — HUD táctil del circuito (issue #19)', () => {
     const { scene, internals } = boot;
 
     // MISMA fuente de geometría que RaceTouchControls (cero duplicación):
-    // el layout puro sobre el lienzo real de la escena (720×1280).
+    // el layout puro sobre el lienzo real de la escena (720×1280). Issue #20:
+    // el circuito ya no es auto-acelerado — el cluster derecho suma el botón
+    // GAS en SU casilla del modo batalla (4 botones: ◀ ▶ + GAS + FRENO).
     const { width, height } = scene.scale;
     const layout = computeRaceTouchLayout(width, height);
-    expect(internals.touch.buttons.length).toBe(3);
+    expect(internals.touch.buttons.length).toBe(4);
 
     for (const button of internals.touch.buttons) {
       const rect = layout[button.action as keyof typeof layout];

@@ -112,6 +112,9 @@ function simulateRace(def: TrackDefinition, path: TrackPath): RaceResult {
       }
     }
 
+    // El piloto sintético pisa el gas (issue #20: el throttle es una acción
+    // explícita del CircuitInput — acá la lleva pisada, como un jugador que
+    // acelera, y regula con freno + giro).
     physics.step(state, DT, { throttle: true, brake, steer });
     tracker.update(path.project(state.x, state.y).s, DT * 1000);
     steps += 1;
