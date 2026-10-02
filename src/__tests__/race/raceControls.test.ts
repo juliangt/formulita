@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { CIRCUIT } from '../../config/balance';
 import { GAME_WIDTH, GAME_HEIGHT } from '../../config/gameConfig';
 import {
   computeRaceTouchLayout,
   circuitInputFromState,
   RACE_KEY_BINDINGS,
 } from '../../race/raceControls';
+import { CircuitPhysics } from '../../race/circuitPhysics';
+import type { CarState } from '../../race/circuitPhysics';
+import { TrackPath } from '../../race/trackPath';
 import { computeTouchButtonLayout } from '../../systems/TouchButton';
 import type { IInputState } from '../../systems/InputSystem';
 
@@ -13,6 +17,12 @@ import type { IInputState } from '../../systems/InputSystem';
  * puro `IInputState` → `CircuitInput` (issue #20: gas MANUAL — el throttle
  * pasa tal cual del estado fusionado), las teclas de la carrera y el layout
  * táctil heredado del modo BATALLA (◀ ▶ + GAS + FRENO).
+ *
+ * Issue #20 (Fase 2): además el PUENTE COMPLETO — el `CircuitInput` que
+ * produce `circuitInputFromState` entra a `CircuitPhysics.step` y mueve la
+ * velocidad en la dirección esperada (sin gas desacelera por coastDrag, con
+ * gas acelera). La física en sí vive en `circuitPhysics.test.ts`; acá sólo
+ * se valida que el jugador llega pisado hasta ella.
  */
 
 function state(partial: Partial<IInputState>): IInputState {
@@ -47,6 +57,53 @@ describe('circuitInputFromState — IInputState → CircuitInput', () => {
   it('pasa el freno tal cual (la física le da prioridad sobre el gas)', () => {
     expect(circuitInputFromState(state({ brake: true })).brake).toBe(true);
     expect(circuitInputFromState(state({})).brake).toBe(false);
+  });
+});
+
+describe('circuitInputFromState → CircuitPhysics — el puente completo (issue #20)', () => {
+  // Anillo amplio como pista (mismo criterio que circuitPhysics.test.ts): en
+  // tramos cortos el auto queda sobre el asfalto y la integración sólo mide
+  // el longitudinal.
+  const DT = 1 / 60;
+  const RADIUS = 10000;
+  const ring = new TrackPath(
+    Array.from({ length: 16 }, (_, i) => {
+      const theta = (2 * Math.PI * i) / 16;
+      return { x: Math.cos(theta) * RADIUS, y: Math.sin(theta) * RADIUS };
+    }),
+  );
+  const physics = new CircuitPhysics(ring, 375);
+
+  /** Avanza `seconds` con el input que produce el estado de jugador dado. */
+  function drive(v0: number, seconds: number, input: IInputState): number {
+    const s = ring.sample(100);
+    const car: CarState = { x: s.x, y: s.y, heading: s.angle, speed: v0 };
+    const circuit = circuitInputFromState(input);
+    const steps = Math.round(seconds / DT);
+    for (let i = 0; i < steps; i += 1) {
+      physics.step(car, DT, circuit);
+    }
+    return car.speed;
+  }
+
+  it('sin gas ni freno la física DESACELERA por coastDrag (fin del auto-acelerado)', () => {
+    const v0 = 400;
+    const coasted = drive(v0, 0.5, state({}));
+    expect(coasted).toBeLessThan(v0);
+    // La baja es exactamente el roce de CIRCUIT: ni la frenada a fondo ni un
+    // acelerador fantasma — coastDrag × tiempo.
+    expect(coasted).toBeCloseTo(v0 - CIRCUIT.coastDrag * 0.5, 5);
+  });
+
+  it('con gas pisado la física ACELERA hacia maxSpeed', () => {
+    const v0 = 300;
+    const accelerated = drive(v0, 0.5, state({ throttle: true }));
+    expect(accelerated).toBeGreaterThan(v0);
+    // Sube por la aceleración de CIRCUIT, con techo en la punta del jugador.
+    expect(accelerated).toBeCloseTo(
+      Math.min(v0 + CIRCUIT.acceleration * 0.5, CIRCUIT.maxSpeed),
+      5,
+    );
   });
 });
 
