@@ -235,6 +235,30 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 - Formato y validación: `wss://a, wss://b` — se ignoran entradas vacías o sin `wss://`/`ws://`; si la variable tiene contenido pero ninguna URL válida, el multijugador **falla rápido** con error visible (no degrada en silencio a los defaults, que fragmentaría el matchmaking). Con lista custom se usan TODAS las URLs (la redundancia de la librería solo aplica a sus defaults).
 - **Producción (Pages)**: para que llegue al deploy hay que agregarla al paso de build de `.github/workflows/deploy.yml` junto a `VITE_TRYSTERO_APP_ID` (`VITE_TRYSTERO_RELAYS: ${{ vars.VITE_TRYSTERO_RELAYS }}`); en dev alcanza con `.env.local`.
 
+### Analítica (PostHog Cloud EU, issue #27)
+
+La analítica está **APAGADA por default** y es opt-in del administrador del deploy (no del jugador): hay que crear el proyecto y pegar el token, como se describe abajo. Mientras no haya token, no se pide ni un byte del SDK.
+
+**Qué se mide** (y nada más — `autocapture: false`, sólo eventos explícitos):
+
+| Evento | Properties | Cuándo |
+| --- | --- | --- |
+| Pageview | — (el default del snippet) | al cargar la página |
+| `partida_iniciada` | `modo` (`entrenar` \| `gran_premio` \| `multijugador`), `pista` (sólo gran premio y carrera multi), `dificultad` (sólo gran premio: `easy`/`normal`/`hard`) | al arrancar una partida desde el menú o desde el lobby |
+| `vuelta_completada` | `pista`, `duracion_ms` | cada vuelta válida del jugador local en RaceScene (gran premio y carrera multi; nunca por rival) |
+
+**Qué NO se mide — cero PII**: nombres de jugador, contenido de chat, peer IDs ni datos de presencia jamás viajan en las properties (el código fuente es el contrato: [`src/telemetry/analytics.ts`](./src/telemetry/analytics.ts) es el único punto de contacto, y los ganchos viven en `MenuScene`, `LobbyScene` y `RaceScene`).
+
+**Sin cookies ni storage ⇒ sin banner de consentimiento**: el proyecto se usa en modo **cookieless `always`** — PostHog no le pega un ID anónimo al visitante; cada evento se identifica server-side con un hash IRREVERSIBLE del request con **sal diaria**, así que no hay retención de identidad entre sesiones. El juego no escribe cookies ni `localStorage`/`sessionStorage` por telemetría, y por eso no necesita banner. Todo el flujo va por **PostHog Cloud EU** (API y assets en la UE).
+
+**Activación (paso manual, una sola vez)**:
+
+1. Crear el proyecto en **<https://eu.posthog.com>** con el modo **"Cookieless server hash mode"** habilitado (y, si querés máxima sobriedad, GeoIP deshabilitado en la configuración del proyecto).
+2. Pegar el **Project API token** en [`index.html`](./index.html), en la constante `POSTHOG_TOKEN` del snippet de telemetría. El token es público por diseño (viaja en el HTML estático). **Vacío = analítica apagada** (ni siquiera se carga el SDK).
+3. En desarrollo local (`npm run dev`) no hace falta nada: el snippet además está gateado por hostname y en `localhost`/`file://` no carga nada.
+
+La telemetría es **fire-and-forget**: `trackEvent` nunca lanza ni bloquea el juego — con el SDK bloqueado (uBlock), sin red o a medio cargar, el juego corre idéntico.
+
 ### Publicación (GitHub Pages)
 
 Los workflows corren **solo manualmente** — pestaña **Actions** → elegir workflow → **Run workflow** — sin disparadores automáticos por push ni PR:
@@ -303,12 +327,13 @@ Decisiones clave:
 
 ## Tests
 
-- 92 archivos / 1313 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- 108 archivos / 1546 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
 - **Modo solo**: lógica pura de todos los sistemas (velocidad, turbo, DRS, spawn con pasabilidad + pool, dificultad, puntaje, countdown, pausa, input con multi-touch, derrape, persistencia, audio con fakes de Web Audio) + tests de integración sin runtime de Phaser (input → steering, SpawnScheduler × Difficulty, colisiones → economía, carrera → guardado → recarga).
 - **Multijugador**: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`) — roster/colores/anfitrión, pista determinista por seed, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes que exige el MISMO ranking en los tres.
 - **Chat social**: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo), TrysteroChatClient contra hub fake (presencia opt-in, heartbeat, stale, DM/invite) y flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`), 100% determinista con reloj/timers inyectados.
 - **Carrera en circuito**: pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación, plausibilidad y staleness, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi.
 - **Gran Premio**: roster de 7 rivales determinista por seed, presets de dificultad en orden estricto (fácil < normal < difícil, probados sobre simulación headless a 60 Hz), línea de carrera, payload de resultados con parseo defensivo y récords por pista × dificultad (round-trip, JSON corrupto, storage roto → memoria, claves aisladas).
+- **Telemetría (#27)**: wrapper no-op seguro de [`src/telemetry/analytics.ts`](./src/telemetry/analytics.ts), snippet gateado de `index.html` y ganchos de juego (`partida_iniciada` en menú y lobby, `vuelta_completada` en RaceScene con un LapTracker real de por medio) asertados contra un `window.posthog.capture` espiado, con igualdad EXACTA de properties (sin PII).
 
 ---
 

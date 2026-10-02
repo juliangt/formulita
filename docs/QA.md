@@ -108,3 +108,14 @@ Flujo social con 3 dispositivos (uno iOS, uno Android, uno desktop):
 - [ ] El badge del botón EN LÍNEA del menú (issue #22: heredado del viejo botón CHAT) cuenta los no leídos de sala + DMs y se limpia al abrir cada hilo; el nombre editado en TU NOMBRE es el mismo en la sala y en el chat.
 - [ ] Sesión de ~10 minutos de chat (sala + DMs + bloqueos) sin errores ni warnings de consola en ningún dispositivo.
 - [ ] Cerrar la pestaña y volver: no queda rastro de mensajes ni hilos (efímero); solo el toggle de disponibilidad se recuerda.
+
+## Analítica (telemetría PostHog, issue #27)
+
+El default del repo es analítica APAGADA (token vacío en `index.html`); esta sección se verifica con un proyecto PostHog EU configurado y el sitio servido de producción o LAN (nunca `localhost`: el snippet está gateado por hostname).
+
+- [ ] Con el token vacío (default): en Network NO se pide ningún recurso de `eu.i.posthog.com` / `eu-assets.i.posthog.com`, ni en producción ni en dev.
+- [ ] Con token configurado: al cargar la página llega UN pageview; tocar JUGAR registra `partida_iniciada { modo: 'entrenar' }`; GRAN PREMIO → elegir pista y dificultad registra `{ modo: 'gran_premio', pista, dificultad }`.
+- [ ] Multijugador: INICIAR en CARRERA registra `{ modo: 'multijugador', pista }` en cada cliente (uno por dispositivo); en BATALLA, `{ modo: 'multijugador' }` SIN la property `pista`.
+- [ ] Cada vuelta válida del jugador (gran premio o carrera multi) registra `vuelta_completada { pista, duracion_ms }` con un tiempo plausible (~30–120 s); no hay eventos por rival.
+- [ ] Privacidad en vivo: en el stream de eventos de PostHog NO aparecen nombres de jugador, mensajes de chat ni peer IDs; en Application → Storage no aparecen cookies ni claves nuevas de localStorage/sessionStorage por telemetría.
+- [ ] Con uBlock/SDK bloqueado o sin red: el juego corre idéntico (la telemetría es fire-and-forget, nunca tira errores visibles).
