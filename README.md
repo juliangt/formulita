@@ -165,6 +165,8 @@ Vueltas por un circuito cerrado, como la F1 de verdad: parrilla de salida detrá
 
 Pista **determinista por seed de sala + reloj virtual** de generación (misma distancia ⇒ mismas oleadas en todos), rivales como **autos fantasma interpolados** (estado propio a 10 Hz, render a t−100 ms, semitransparentes y atravesables) y **stats congeladas** al crash/fin, de modo que cada cliente computa el MISMO leaderboard/podio sin negociar nada por la red. En carrera, cada cliente aplica además un **filtro de plausibilidad local** (un avance físicamente imposible se ignora) — no hay servidor árbitro.
 
+**Compatibilidad de pistas entre versiones**: el `start` del anfitrión viaja con el `trackId` como string. Un cliente que recibe el id de una pista que su versión no conoce (p. ej. `galvez` hacia un cliente anterior al issue #26) la degrada **en silencio** a la primera del registro (**MÓNACO**): la carrera arranca igual, pero ese cliente corre otra pista. Detectar el desfasaje en el lobby antes de INICIAR es un follow-up no bloqueante.
+
 ### Límites de la v1
 
 - **Sin reconexión**: te caés, recargás o cerrás = eliminado/ABANDONÓ, con las stats hasta ese momento.
