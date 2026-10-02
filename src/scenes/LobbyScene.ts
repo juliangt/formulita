@@ -51,6 +51,7 @@ import { handoffNetClient } from '../net/netClientSession';
 import { randomRoomSeed } from '../net/roomRng';
 import { resolveAppId, TrysteroNetClient } from '../net/TrysteroNetClient';
 import { buildTrackPath, getTrackById, TRACKS, type TrackId } from '../race/tracks';
+import { trackEvent } from '../telemetry/analytics';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { applyMobileInputAttributes } from '../ui/ChatPanel';
 import { TrackThumb } from '../ui/TrackThumb';
@@ -737,6 +738,12 @@ export class LobbyScene extends Phaser.Scene {
     }
     const raceInit = parseRaceInit(payload);
     if (raceInit?.gameMode === 'race' && raceInit.trackId) {
+      // Issue #27 — telemetría (fire-and-forget, sin PII): en CARRERA cada
+      // cliente reporta SU arranque local (una emisión por cliente: lo corre
+      // el anfitrión vía tryStart y cada invitado vía onStart). La pista es
+      // el TrackId elegido por el anfitrión; NUNCA viajan nombres, peerIds
+      // ni presencia (esos viven en el payload y no se tocan acá).
+      trackEvent('partida_iniciada', { modo: 'multijugador', pista: raceInit.trackId });
       this.scene.start(RaceScene.KEY, {
         mode: 'race',
         trackId: raceInit.trackId,
@@ -747,6 +754,10 @@ export class LobbyScene extends Phaser.Scene {
       });
       return;
     }
+    // Issue #27 — BATALLA (o start viejo sin `gameMode` degradado): sin
+    // circuito, la property `pista` se OMITE (ni null ni undefined: no está
+    // en el objeto, PostHog no necesita la key ausente).
+    trackEvent('partida_iniciada', { modo: 'multijugador' });
     this.scene.start(GameScene.KEY, {
       mode: 'multi',
       seed: payload.seed,

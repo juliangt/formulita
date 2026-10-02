@@ -16,6 +16,7 @@ import { onlineMenuButtonLabel } from '../chat/dmView';
 import { getSocialChatSession } from '../chat/socialChatSession';
 import { sanitizePlayerName } from '../net/protocol';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
+import { trackEvent } from '../telemetry/analytics';
 import { applyMobileInputAttributes } from '../ui/ChatPanel';
 import { ChatScene } from './ChatScene';
 import { GameScene } from './GameScene';
@@ -359,6 +360,10 @@ export class MenuScene extends Phaser.Scene {
     if (this.onlineOverlay || this.trackOverlay) {
       return;
     }
+    // Issue #27 — telemetría (fire-and-forget, sin PII): el JUGAR del menú
+    // es el modo INFINITO/práctica libre (GameScene, sin circuito ni vueltas),
+    // reportado como 'entrenar'. Sin pista ni dificultad: acá no aplican.
+    trackEvent('partida_iniciada', { modo: 'entrenar' });
     this.scene.start(GameScene.KEY);
   };
 
@@ -720,6 +725,15 @@ export class MenuScene extends Phaser.Scene {
    */
   private readonly startPractice = (trackId: TrackId): void => {
     this.closeTrackPicker();
+    // Issue #27 — telemetría (fire-and-forget, sin PII): el GRAN PREMIO es
+    // el modo 'gran_premio' (RaceScene vs CPU). `dificultad` viaja con el id
+    // EXACTO de `CpuDifficulty` ('easy' | 'normal' | 'hard', default
+    // 'normal' — el mismo que se le pasa a RaceScene en el init data).
+    trackEvent('partida_iniciada', {
+      modo: 'gran_premio',
+      pista: trackId,
+      dificultad: this.selectedDifficulty,
+    });
     this.scene.start(RaceScene.KEY, {
       trackId,
       mode: 'vs-cpu',

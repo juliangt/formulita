@@ -32,7 +32,7 @@ import {
 } from '../race/raceControls';
 import { assignGridOrder, type GridSlot } from '../race/gridOrder';
 import { CircuitPhysics, type CarState } from '../race/circuitPhysics';
-import { LapTracker } from '../race/lapTracker';
+import { LapTracker, type LapCompletedEvent } from '../race/lapTracker';
 import {
   finalClassification,
   rankCars,
@@ -88,6 +88,7 @@ import { buildRivalRoster, rivalDriverConfig, type Rival } from '../race/ai/riva
 import { mulberry32 } from '../net/roomRng';
 import { TEXTURE_KEYS } from '../systems/TextureFactory';
 import { formatLapBadge } from '../ui/format';
+import { trackEvent } from '../telemetry/analytics';
 import { MiniMap } from '../ui/MiniMap';
 import { MenuButton } from '../ui/MenuButton';
 import { MuteButton } from '../ui/MuteButton';
@@ -746,7 +747,10 @@ export class RaceScene extends Phaser.Scene {
 
     // V4 — cartel pop al completar una vuelta válida que NO sea la última
     // (la última ya tiene su cartel de BANDERA A CUADROS + confeti).
+    // Issue #27 — telemetría: cada vuelta válida del JUGADOR LOCAL reporta
+    // `vuelta_completada` (ver `trackLapCompleted`).
     this.lapTracker.onLapCompleted = (event) => {
+      this.trackLapCompleted(event);
       if (event.lap < CIRCUIT.totalLaps) {
         this.showLapBanner(event.lap);
       }
@@ -1717,6 +1721,25 @@ export class RaceScene extends Phaser.Scene {
       this.carState.x,
       this.carState.y,
     );
+  }
+
+  /**
+   * Issue #27 — telemetría (fire-and-forget, sin PII): una vuelta válida del
+   * JUGADOR LOCAL en RaceScene (GRAN PREMIO vs CPU y CARRERA multijugador —
+   * ambos pasan por esta escena). `pista` es el TrackId de ESTA escena
+   * (init data parseado por `parseRaceSceneInit`, con degradación defensiva
+   * a la pista default si llegara basura). OJO: `this.lapTracker` es SÓLO el
+   * del jugador local — cada rival/multi remoto tiene su PROPIO LapTracker
+   * (ver runtimes en `setupVsCpu`/`setupMultiRace`) y esos NO cablean
+   * `onLapCompleted`: no hay evento por rival, ni lo va a haber.
+   * `trackEvent` nunca lanza: no hay try/catch acá (telemetría herida ≠
+   * carrera herida).
+   */
+  private trackLapCompleted(event: LapCompletedEvent): void {
+    trackEvent('vuelta_completada', {
+      pista: this.sceneInit.trackId,
+      duracion_ms: event.lapMs,
+    });
   }
 
   /**
