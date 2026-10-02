@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MenuScene } from '../scenes/MenuScene';
+import { ChatScene } from '../scenes/ChatScene';
 import { LobbyScene } from '../scenes/LobbyScene';
 import { PLAYER_PROFILE_REGISTRY_KEY, type PlayerProfile } from '../data/PlayerProfileRepository';
 import { syncDomContainerToCanvas, type DomSyncGame } from '../core/domContainerSync';
 
 /**
- * Tests de REGRESIÓN del issue #21 — flujo multijugador del menú + matemática
- * del letterbox del contenedor DOM.
+ * Tests de REGRESIÓN del issue #21 (adaptados a la subpantalla EN LÍNEA del
+ * issue #22) — flujo online del menú + matemática del letterbox del
+ * contenedor DOM.
  *
  * Dos comportamientos medidos en el issue:
  *
@@ -14,6 +16,9 @@ import { syncDomContainerToCanvas, type DomSyncGame } from '../core/domContainer
  *    `return` silencioso (botones que parecían muertos). Ahora muestra el
  *    texto "INGRESÁ TU NOMBRE" en la escena y se apaga apenas se escribe.
  *    Con nombre: arranca LobbyScene con `{ mode, name }`.
+ *    Issue #22 — el botón CHAT de la subpantalla EN LÍNEA comparte el MISMO
+ *    contrato de identidad: sin nombre muestra el aviso y NO abre el chat;
+ *    con nombre guarda el perfil y lanza ChatScene (tab PÚBLICO).
  *
  * 2. LETTERBOX (el corazón): en un viewport 390×844 el canvas queda en
  *    (0, 113) de 390×693, pero Phaser 4.2.1 dejaba el contenedor DOM afuera
@@ -25,11 +30,12 @@ import { syncDomContainerToCanvas, type DomSyncGame } from '../core/domContainer
  * CÓMO SE TESTEA LA ESCENA: como en el resto del repo (chatPanel.test.ts lo
  * documenta, menuButton.test.ts lo aplica) los objetos Phaser NO son
  * instanciables con layout en happy-dom. Acá se usa la clase MenuScene REAL
- * (sus closures `openMultiplayerOverlay`/`goLobby`/`closeMultiplayerOverlay`
- * son el comportamiento bajo test) con plomería estructural fake: `add`,
- * `scale`, `tweens`, `scene.start` espiado y el repositorio de perfil
- * pre-inyectado en el registry (los botones del overlay son MenuButton reales
- * sobre contenedores fake y se activan emitiendo `pointerdown`).
+ * (sus closures `openOnlineOverlay`/`goLobby`/`goChat`/
+ * `closeOnlineOverlay` son el comportamiento bajo test) con plomería
+ * estructural fake: `add`, `scale`, `tweens`, `scene.start`/`scene.launch`
+ * espiados y el repositorio de perfil pre-inyectado en el registry (los
+ * botones del overlay son MenuButton reales sobre contenedores fake y se
+ * activan emitiendo `pointerdown`).
  */
 
 /* ------------------------------------------------------------------ */
@@ -215,10 +221,10 @@ function makeFakeDomElement(tag: string): FakeDomElement {
 
 /** Acceso a los miembros privados del overlay que los tests asertan. */
 interface OverlayInternals {
-  openMultiplayerOverlay(): void;
-  multiOverlay: FakeContainer | null;
-  multiNameInput: FakeDomElement | null;
-  multiNameWarning: FakeText | null;
+  openOnlineOverlay(): void;
+  onlineOverlay: FakeContainer | null;
+  onlineNameInput: FakeDomElement | null;
+  onlineNameWarning: FakeText | null;
 }
 
 interface MenuHarness {
@@ -231,6 +237,7 @@ interface MenuHarness {
   domInput(): FakeDomElement;
   findText(content: string): FakeText | undefined;
   sceneStart: ReturnType<typeof vi.fn>;
+  sceneLaunch: ReturnType<typeof vi.fn>;
   savedProfiles: PlayerProfile[];
   overlayContainer(): FakeContainer;
   tweensAdded: Record<string, unknown>[];
@@ -248,6 +255,7 @@ function createMenuHarness(options: { storedName?: string } = {}): MenuHarness {
   const savedProfiles: PlayerProfile[] = [];
   const tweensAdded: Record<string, unknown>[] = [];
   const sceneStart = vi.fn();
+  const sceneLaunch = vi.fn();
 
   const add = {
     container: (x: number, y: number): FakeContainer => makeFakeContainer(containers, x, y),
@@ -277,7 +285,14 @@ function createMenuHarness(options: { storedName?: string } = {}): MenuHarness {
       get: (key: string): unknown => registryData.get(key),
       set: (key: string, value: unknown): unknown => registryData.set(key, value),
     },
-    scene: { start: sceneStart, launch: vi.fn(), get: vi.fn(() => null) },
+    scene: {
+      start: sceneStart,
+      launch: sceneLaunch,
+      // openChatOverlay pregunta si ChatScene ya está registrada; null la
+      // obliga a pasar por scene.add (que el flujo real de Phaser resuelve).
+      get: vi.fn(() => null),
+      add: vi.fn(),
+    },
     tweens: {
       killTweensOf: vi.fn(),
       add: (config: Record<string, unknown>): Record<string, unknown> => {
@@ -290,7 +305,7 @@ function createMenuHarness(options: { storedName?: string } = {}): MenuHarness {
   const internals = scene as unknown as OverlayInternals;
 
   return {
-    openOverlay: () => internals.openMultiplayerOverlay(),
+    openOverlay: () => internals.openOnlineOverlay(),
     press: (label) => {
       const button = containers.find((candidate) =>
         candidate.list.some(
@@ -316,6 +331,7 @@ function createMenuHarness(options: { storedName?: string } = {}): MenuHarness {
     },
     findText: (content) => texts.find((candidate) => candidate.text === content),
     sceneStart,
+    sceneLaunch,
     savedProfiles,
     overlayContainer: () => {
       // El overlay es el primer contenedor creado (depth 100).
@@ -338,10 +354,48 @@ function openOverlayAndGetWarning(harness: MenuHarness): FakeText {
 }
 
 /* ------------------------------------------------------------------ */
+/* #22 — la entrada EN LÍNEA abre la subpantalla compartida            */
+/* ------------------------------------------------------------------ */
+
+describe('MenuScene → subpantalla EN LÍNEA (issue #22)', () => {
+  it('la subpantalla se abre con título EN LÍNEA, identidad precargada y las 4 acciones', () => {
+    const harness = createMenuHarness({ storedName: 'Ana' });
+
+    harness.openOverlay();
+
+    expect(harness.findText('EN LÍNEA')).toBeDefined();
+    expect(harness.findText('TU NOMBRE')).toBeDefined();
+    // La identidad precargada del perfil llega al input (una sola vez).
+    expect(harness.nameInput().value).toBe('Ana');
+    // CREAR SALA / UNIRSE (lobby), CHAT (chat) y CERRAR: los 4 botones están
+    // (sus labels son textos de la escena).
+    for (const label of ['CREAR SALA', 'UNIRSE', 'CHAT', 'CERRAR']) {
+      expect(harness.findText(label), `falta el botón ${label}`).toBeDefined();
+    }
+    // CERRAR cierra la subpantalla sin navegar ni lanzar nada.
+    harness.press('CERRAR');
+    expect(harness.sceneStart).not.toHaveBeenCalled();
+    expect(harness.sceneLaunch).not.toHaveBeenCalled();
+    expect(harness.overlayContainer().destroyed).toBe(true);
+  });
+
+  it('abrir dos veces no duplica la subpantalla', () => {
+    const harness = createMenuHarness();
+    harness.openOverlay();
+    const first = harness.overlayContainer();
+
+    harness.openOverlay();
+
+    expect(first.destroyed).toBe(false);
+    expect(harness.findText('EN LÍNEA')).toBeDefined();
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* goLobby sin nombre (issue #21: feedback en vez de `return` mudo)    */
 /* ------------------------------------------------------------------ */
 
-describe('MenuScene → overlay multijugador: CREAR SALA sin nombre', () => {
+describe('MenuScene → EN LÍNEA: CREAR SALA sin nombre', () => {
   it('input vacío: NO arranca LobbyScene y SÍ muestra "INGRESÁ TU NOMBRE"', () => {
     const harness = createMenuHarness();
     const warning = openOverlayAndGetWarning(harness);
@@ -385,7 +439,7 @@ describe('MenuScene → overlay multijugador: CREAR SALA sin nombre', () => {
 /* goLobby con nombre (el flujo feliz que el issue no debía romper)    */
 /* ------------------------------------------------------------------ */
 
-describe('MenuScene → overlay multijugador: con nombre arranca LobbyScene', () => {
+describe('MenuScene → EN LÍNEA: con nombre arranca LobbyScene', () => {
   it('CREAR SALA: scene.start(Lobby, { mode: "create", name }) con el nombre sanitizado', () => {
     const harness = createMenuHarness();
     harness.openOverlay();
@@ -412,6 +466,61 @@ describe('MenuScene → overlay multijugador: con nombre arranca LobbyScene', ()
 
     expect(harness.sceneStart).toHaveBeenCalledTimes(1);
     expect(harness.sceneStart).toHaveBeenCalledWith(LobbyScene.KEY, { mode: 'join', name: 'Beto' });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* #22 — CHAT con identidad compartida (el nombre de la sala ES el     */
+/* del chat: se guarda en el perfil antes de lanzar ChatScene)         */
+/* ------------------------------------------------------------------ */
+
+describe('MenuScene → EN LÍNEA: botón CHAT', () => {
+  it('sin nombre: muestra "INGRESÁ TU NOMBRE" y NO lanza ChatScene', () => {
+    const harness = createMenuHarness();
+    const warning = openOverlayAndGetWarning(harness);
+
+    harness.press('CHAT');
+
+    expect(warning.visible).toBe(true);
+    expect(warning.alpha).toBe(1);
+    expect(harness.tweensAdded.length).toBe(1);
+    expect(harness.tweensAdded[0].targets).toBe(warning);
+    expect(harness.tweensAdded[0].delay).toBe(2200);
+    // Ni chat ni lobby: el nombre es requisito de TODO lo online.
+    expect(harness.sceneLaunch).not.toHaveBeenCalled();
+    expect(harness.sceneStart).not.toHaveBeenCalled();
+    expect(harness.savedProfiles).toEqual([]);
+  });
+
+  it('nombre de solo espacios también cuenta como sin nombre (sanitize)', () => {
+    const harness = createMenuHarness();
+    const warning = openOverlayAndGetWarning(harness);
+    harness.nameInput().value = '   ';
+
+    harness.press('CHAT');
+
+    expect(warning.visible).toBe(true);
+    expect(harness.sceneLaunch).not.toHaveBeenCalled();
+  });
+
+  it('con nombre: guarda el perfil y lanza ChatScene en tab PÚBLICO', () => {
+    const harness = createMenuHarness();
+    harness.openOverlay();
+    harness.nameInput().value = '  Ana  ';
+    harness.nameInput().dispatchEvent(new Event('input'));
+
+    harness.press('CHAT');
+
+    // Identidad compartida: el MISMO nombre que usaría la sala queda
+    // persistido (la tab PÚBLICO de ChatScene anuncia el nombre del perfil).
+    expect(harness.savedProfiles).toEqual([{ name: 'Ana' }]);
+    expect(harness.sceneLaunch).toHaveBeenCalledTimes(1);
+    expect(harness.sceneLaunch).toHaveBeenCalledWith(ChatScene.KEY, { tab: 'public' });
+    // El lobby NO arranca: CHAT no es una salida al multijugador.
+    expect(harness.sceneStart).not.toHaveBeenCalled();
+    // La subpantalla se cierra ANTES del launch: input y contenedor muertos.
+    expect(harness.domInput().destroyed).toBe(true);
+    expect(harness.overlayContainer().destroyed).toBe(true);
   });
 });
 

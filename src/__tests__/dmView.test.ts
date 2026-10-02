@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  badgeButtonLabel,
   blockedSystemNote,
   chatMenuButtonLabel,
   dmBlockButtonLabel,
@@ -11,14 +12,16 @@ import {
   inviteBannerText,
   invitedSystemNote,
   inviteJoinTarget,
+  onlineMenuButtonLabel,
   unblockedSystemNote,
 } from '../chat/dmView';
 
 /**
  * Tests de la lógica PURA de la vista de DM/invitaciones (C3): labels,
- * avisos de sistema, estado de envío bloqueado, badge del botón CHAT del
- * menú y el destino del UNIRSE de una invitación. Sin Phaser y sin red —
- * lo que ChatScene pinta sale TODO de acá.
+ * avisos de sistema, estado de envío bloqueado, badge de los botones del
+ * menú (CHAT y, desde el issue #22, EN LÍNEA) y el destino del UNIRSE de
+ * una invitación. Sin Phaser y sin red — lo que ChatScene pinta sale TODO
+ * de acá.
  */
 
 describe('dmView — header y labels del hilo de DM', () => {
@@ -119,5 +122,19 @@ describe('dmView — badge del botón CHAT del menú', () => {
     expect(chatMenuButtonLabel(7)).toBe('CHAT · 7');
     // Negativo no puede pasar (totalUnread >= 0), pero no rompe el label.
     expect(chatMenuButtonLabel(-1)).toBe('CHAT');
+  });
+});
+
+describe('dmView — badge del botón EN LÍNEA del menú (issue #22)', () => {
+  it('mismo contrato del badge, sobre la base EN LÍNEA', () => {
+    expect(onlineMenuButtonLabel(0)).toBe('EN LÍNEA');
+    expect(onlineMenuButtonLabel(1)).toBe('EN LÍNEA · 1');
+    expect(onlineMenuButtonLabel(7)).toBe('EN LÍNEA · 7');
+    expect(onlineMenuButtonLabel(-1)).toBe('EN LÍNEA');
+  });
+
+  it('badgeButtonLabel es el generador común de ambos labels', () => {
+    expect(badgeButtonLabel('CHAT', 3)).toBe('CHAT · 3');
+    expect(badgeButtonLabel('EN LÍNEA', 0)).toBe('EN LÍNEA');
   });
 });

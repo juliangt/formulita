@@ -4,9 +4,10 @@
  * Hermano de `presenceView.ts` (C2) para todo lo decidible del hilo de DM y
  * del banner de invitaciones: labels de botones, textos de los avisos de
  * sistema del hilo, el estado de envío bloqueado (desconectado/bloqueado),
- * el destino del botón UNIRSE de una invitación y el badge de no leídos del
- * botón CHAT del menú. Todo son funciones puras (sin Phaser, sin red) para
- * testearlas directo; el wiring de botones/textos queda en ChatScene.
+ * el destino del botón UNIRSE de una invitación y el badge de no leídos de
+ * los botones de menú (issue #22: hoy sobre EN LÍNEA, el subbotón CHAT de la
+ * subpantalla conserva el helper). Todo son funciones puras (sin Phaser, sin
+ * red) para testearlas directo; el wiring de botones/textos queda en ChatScene.
  */
 
 import { isValidRoomWord, sanitizePlayerName, sanitizeRoomWord } from '../net/protocol';
@@ -132,13 +133,34 @@ export function inviteJoinTarget(keyword: string, profileName: string): InviteJo
 /* ------------------------------------------------------------------ */
 
 /**
- * Label del botón CHAT del menú según el total de no leídos de la sesión
- * (`ChatStore.totalUnread`: sala + DMs). 0 mantiene el label pelado; N>0
- * agrega el conteo visible para que el badge se note sin abrir el chat.
+ * Label de un botón de menú con badge de no leídos (`ChatStore.totalUnread`:
+ * sala + DMs). 0 mantiene el label pelado; N>0 agrega el conteo visible para
+ * que el badge se note sin entrar. El `!(x > 0)` (en vez de `x <= 0`) es
+ * deliberado: undefined/NaN no cumplen ninguna de las dos comparaciones y
+ * caen al label base — un store a medio inicializar nunca debe pintar
+ * "CHAT · undefined" en el menú.
+ */
+export function badgeButtonLabel(base: string, totalUnread: number): string {
+  if (!(totalUnread > 0)) {
+    return base;
+  }
+  return `${base} · ${totalUnread}`;
+}
+
+/**
+ * Label del botón CHAT del menú (hoy es el subbotón CHAT de la subpantalla
+ * EN LÍNEA del issue #22).
  */
 export function chatMenuButtonLabel(totalUnread: number): string {
-  if (totalUnread <= 0) {
-    return 'CHAT';
-  }
-  return `CHAT · ${totalUnread}`;
+  return badgeButtonLabel('CHAT', totalUnread);
+}
+
+/**
+ * Label del botón EN LÍNEA del menú (issue #22): hereda el badge de no
+ * leídos que antes mostraba el botón CHAT — es la única superficie SIEMPRE
+ * visible (el subbotón CHAT de la subpantalla sólo existe con ella abierta),
+ * así que el aviso de mensajes pendientes vive ahí.
+ */
+export function onlineMenuButtonLabel(totalUnread: number): string {
+  return badgeButtonLabel('EN LÍNEA', totalUnread);
 }
