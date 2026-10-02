@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { createGameConfig, GAME_HEIGHT, GAME_WIDTH } from './config/gameConfig';
+import { isDebugMode } from './config/debugFlags';
 
 /** Contenedor DOM donde Phaser monta el canvas. */
 const GAME_CONTAINER_ID = 'game';
@@ -62,9 +63,19 @@ function bootstrap(): Phaser.Game {
   }
   const game = new Phaser.Game(createGameConfig(container));
   installViewportSync(game);
-  installTransformGuard(game);
-  installBuildTag();
+  // El modo debug (issue #16) se resuelve UNA vez al arrancar y solo gobierna
+  // los artefactos de diagnóstico (tag de build + anillo de tap). El refresh
+  // de escala — el fix de iOS — corre SIEMPRE, con o sin debug.
+  const debug = isDebugMode();
+  installTransformGuard(game, { echo: debug });
+  installBuildTag(debug);
   return game;
+}
+
+/** Opciones de `installTransformGuard`. */
+export interface TransformGuardOptions {
+  /** Eco visual del tap: solo con el modo debug ON (issue #16). */
+  echo: boolean;
 }
 
 /**
@@ -79,31 +90,21 @@ function bootstrap(): Phaser.Game {
  * Acá se envuelve `InputManager.transformPointer` — el ÚNICO punto por el
  * que pasa todo input (mouse/touch, down/move/up) — para que CADA evento:
  * 1. refresque el rect y la escala con `game.scale.refresh()` (lectura en
- *    vivo de getBoundingClientRect, cero caché), y
- * 2. deje un anillo en pantalla exactamente donde el juego registró el
- *    toque (proyección del mapeo de vuelta a CSS px). Si el anillo no
- *    aparece debajo del dedo, el desvío queda a la vista — diagnóstico sin
- *    conjeturas. (ECO DE DIAGNÓSTICO: quitar cuando el input esté estable.)
+ *    vivo de getBoundingClientRect, cero caché). Esto SIEMPRE corre: es el
+ *    fix de iOS, no depende del modo debug, y
+ * 2. si el modo debug está ON (`options.echo`, issue #16), deje un anillo en
+ *    pantalla exactamente donde el juego registró el toque (proyección del
+ *    mapeo de vuelta a CSS px). Si el anillo no aparece debajo del dedo, el
+ *    desvío queda a la vista — diagnóstico sin conjeturas. Con debug OFF el
+ *    div del anillo NI SIQUIERA se crea: un test de DOM puede verificar su
+ *    ausencia directamente.
  */
-function installTransformGuard(game: Phaser.Game): void {
+function installTransformGuard(game: Phaser.Game, options: TransformGuardOptions): void {
   const inputManager = game.input;
   const baseTransform = inputManager.transformPointer.bind(inputManager);
 
-  const echo = document.createElement('div');
-  echo.style.cssText = [
-    'position:fixed',
-    'width:18px',
-    'height:18px',
-    'border:2px solid rgba(255,255,255,0.9)',
-    'border-radius:50%',
-    'box-shadow:0 0 5px rgba(0,0,0,0.7)',
-    'pointer-events:none',
-    'z-index:30',
-    'opacity:0',
-    'transform:translate(-50%,-50%)',
-    'transition:opacity 0.25s ease-out',
-  ].join(';');
-  document.body.appendChild(echo);
+  // El eco existe SOLO con debug ON: con OFF no hay div en el DOM.
+  const echo: HTMLDivElement | null = options.echo ? createEchoRing() : null;
 
   let echoTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -120,19 +121,26 @@ function installTransformGuard(game: Phaser.Game): void {
     }
     baseTransform(pointer, pageX, pageY, wasMove);
 
+    // Con debug OFF acá termina el wrapper: el refresh de arriba ya corrió
+    // (fix de iOS, jamás detrás del flag); solo el eco es diagnóstico.
+    if (!echo) {
+      return;
+    }
+    // Alias ya estrechado a HTMLDivElement: usable sin guarda dentro del timer.
+    const ring = echo;
     if (wasMove || !Number.isFinite(pointer.x) || !Number.isFinite(pointer.y)) {
       return;
     }
     try {
       const rect = game.canvas.getBoundingClientRect();
-      echo.style.left = `${rect.left + (pointer.x / GAME_WIDTH) * rect.width}px`;
-      echo.style.top = `${rect.top + (pointer.y / GAME_HEIGHT) * rect.height}px`;
-      echo.style.opacity = '1';
+      ring.style.left = `${rect.left + (pointer.x / GAME_WIDTH) * rect.width}px`;
+      ring.style.top = `${rect.top + (pointer.y / GAME_HEIGHT) * rect.height}px`;
+      ring.style.opacity = '1';
       if (echoTimer !== undefined) {
         clearTimeout(echoTimer);
       }
       echoTimer = setTimeout(() => {
-        echo.style.opacity = '0';
+        ring.style.opacity = '0';
       }, 250);
     } catch {
       // El eco es solo diagnóstico: su fallo no toca el input.
@@ -141,13 +149,38 @@ function installTransformGuard(game: Phaser.Game): void {
 }
 
 /**
- * Marcador de build visible (DIAGNÓSTICO — quitar al estabilizar el input
- * móvil): muestra el hash del bundle servido en una esquina, para poder
- * confirmar SIN ambigüedad qué versión corre cada dispositivo. En dev muestra
- * "dev" (import.meta.url no lleva hash). pointer-events: none → no interfiere.
+ * Crea el div del anillo de diagnóstico y lo cuelga del body. Solo se llama
+ * con debug ON; su fallo no toca el input (el caller ya está en try/catch).
  */
-function installBuildTag(): void {
-  if (typeof document === 'undefined') {
+function createEchoRing(): HTMLDivElement {
+  const echo = document.createElement('div');
+  echo.style.cssText = [
+    'position:fixed',
+    'width:18px',
+    'height:18px',
+    'border:2px solid rgba(255,255,255,0.9)',
+    'border-radius:50%',
+    'box-shadow:0 0 5px rgba(0,0,0,0.7)',
+    'pointer-events:none',
+    'z-index:30',
+    'opacity:0',
+    'transform:translate(-50%,-50%)',
+    'transition:opacity 0.25s ease-out',
+  ].join(';');
+  document.body.appendChild(echo);
+  return echo;
+}
+
+/**
+ * Marcador de build visible SOLO con el modo debug ON (?debug=1|true en la
+ * URL o `DEBUG_STORAGE_KEY` en localStorage — issue #16; antes quedaba
+ * siempre a la vista, DIAGNÓSTICO del debugging del input móvil): muestra el
+ * hash del bundle servido en una esquina, para poder confirmar SIN ambigüedad
+ * qué versión corre cada dispositivo. En dev muestra "dev" (import.meta.url
+ * no lleva hash). pointer-events: none → no interfiere.
+ */
+function installBuildTag(debug: boolean): void {
+  if (typeof document === 'undefined' || !debug) {
     return;
   }
   const hash = import.meta.url.split('/').pop()?.match(/index-([\w-]+)\.js/)?.[1] ?? 'dev';
