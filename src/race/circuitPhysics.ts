@@ -72,8 +72,12 @@ export function turnRateAtSpeed(speed: number): number {
 /**
  * dt máximo aceptado por paso (anti-espiral de la muerte), igual criterio
  * que SpeedSystem: hitches se acotan; no finito o ≤ 0 es no-op.
+ *
+ * Constante COMPARTIDA (issue #35): es el techo de delta de los sistemas
+ * puros — cualquier consumidor de tiempo fuera de src/systems (LapTracker)
+ * importa ésta en lugar de duplicar el número.
  */
-const MAX_DT = 0.25;
+export const MAX_DT = 0.25;
 
 export class CircuitPhysics {
   constructor(

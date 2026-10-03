@@ -30,7 +30,7 @@ import {
   RACE_TOUCH_ACTIONS,
   type RaceTouchAction,
 } from '../race/raceControls';
-import { assignGridOrder, type GridSlot } from '../race/gridOrder';
+import { assignGridOrder, ownGridSlot, type GridSlot } from '../race/gridOrder';
 import { CircuitPhysics, type CarState } from '../race/circuitPhysics';
 import { LapTracker, type LapCompletedEvent } from '../race/lapTracker';
 import {
@@ -56,6 +56,11 @@ import {
 } from '../race/results';
 import { raceEngineSpeed } from '../race/raceAudio';
 import { computeRaceGaps } from '../race/raceGap';
+import {
+  allPeersResolved,
+  shouldAcceptRaceOver,
+  shouldBroadcastRaceOver,
+} from '../race/raceClose';
 import { PositionSwapDetector } from '../race/racePositionSwap';
 import {
   sampleFromProgress,
@@ -63,10 +68,13 @@ import {
   type RaceRemoteSample,
 } from '../race/raceRemote';
 import { RacePlausibility } from '../race/racePlausibility';
+import { decideLateAdmission } from '../race/raceLateAdmission';
+import { scheduleRaceStateBroadcast } from '../race/raceBroadcast';
 import { RaceStaleTracker } from '../race/raceStale';
 import {
   parseRaceFinishPayload,
   parseRaceOverPayload,
+  parseRaceStatePayload,
   roundRaceFinishPayload,
   roundRaceStatePayload,
   type PlayerInfo,
@@ -539,7 +547,24 @@ export class RaceScene extends Phaser.Scene {
   /** Peers fuera de la carrera sin terminar (leave o stale V3): en la
    *  clasificación final van como `disconnected` con su último progreso. */
   private disconnectedPeers = new Set<string>();
-  /** Primer `rfin` visto (ganador + instante local del arranque de gracia). */
+  /**
+   * #35 — "Joiner invisible": peers admitidos DINÁMICAMENTE durante la
+   * carrera (recibieron el start pero su meta no llegó al anfitrión antes de
+   * congelar el roster, así que no viajan en `players`). La identidad sale
+   * del roster vivo local (ver `decideLateAdmission`): alimenta buffers,
+   * ranking y clasificación final.
+   */
+  private admittedPeers = new Map<string, PlayerInfo>();
+  /**
+   * #35 — peers que aparecieron en la sala DESPUÉS del create de la escena
+   * (`onPeerJoin` durante la carrera): jamás recibieron el start, así que la
+   * admisión dinámica los rechaza siempre — la puerta sólo abre para quien
+   * ya estaba en la malla al arrancar.
+   */
+  private postStartJoins = new Set<string>();
+  /** Primer `rfin` visto: abre la ventana de gracia del cierre (#35: la
+   *  AUTORIDAD del race-over ya no se deriva de acá — es el finisher de
+   *  peerId menor, ver `race/raceClose`). */
   private firstFinish: { peerId: string; at: number } | null = null;
   /** Clasificación recibida por `race-over` (manda sobre la local). */
   private raceOverStandings: RaceFinalStanding[] | null = null;
@@ -662,6 +687,8 @@ export class RaceScene extends Phaser.Scene {
     this.finishedPeers.clear();
     this.remoteProgress.clear();
     this.disconnectedPeers.clear();
+    this.admittedPeers.clear();
+    this.postStartJoins.clear();
 
     // Parrilla determinista detrás de la meta: práctica = un solo corredor
     // en la pole; multi = TODO el roster (misma seed ⇒ misma parrilla en
@@ -680,10 +707,8 @@ export class RaceScene extends Phaser.Scene {
           )
         : assignGridOrder([{ peerId: PLAYER_PEER_ID }], PRACTICE_GRID_SEED, this.path);
     const ownSlot = this.isMultiRace()
-      ? (this.gridSlots.find((slot) => slot.peerId === this.myPeerId) ??
-        this.gridSlots[0])
-      : (this.gridSlots.find((slot) => slot.peerId === PLAYER_PEER_ID) ??
-        this.gridSlots[0]);
+      ? ownGridSlot(this.gridSlots, this.myPeerId, this.path)
+      : ownGridSlot(this.gridSlots, PLAYER_PEER_ID, this.path);
     this.carState = {
       x: ownSlot.x ?? this.path.sample(0).x,
       y: ownSlot.y ?? this.path.sample(0).y,
@@ -799,6 +824,10 @@ export class RaceScene extends Phaser.Scene {
     this.raceHud.setTimings(this.lapTracker.currentLapMs, this.lapTracker.totalMs);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      // #35 — el chat de espectador muere con la carrera (patrón LobbyScene):
+      // si la carrera terminó con el overlay abierto, su velo interactivo
+      // quedaría encima de los resultados bloqueando los botones.
+      this.scene.stop(ChatScene.KEY);
       this.inputSystem.detach();
       this.touch.destroy();
       for (const widget of this.hudWidgets) {
@@ -1207,6 +1236,10 @@ export class RaceScene extends Phaser.Scene {
       client.onRaceFinish((peerId, payload) => this.handleRaceFinish(peerId, payload)),
       client.onRaceOver((peerId, payload) => this.handleRaceOver(peerId, payload)),
       client.onPeerLeave((peerId) => this.handlePeerLeftRace(peerId)),
+      // #35 — frontera de la admisión dinámica: todo peer que APAREZCA en la
+      // sala desde ahora entra a la carrera después del start (no recibió el
+      // start) y queda excluido para siempre de la admisión.
+      client.onPeerJoin((peerId) => this.postStartJoins.add(peerId)),
       // Chat de sala (V3): sigue llegando durante TODA la carrera — entra al
       // store de sesión y el espectador (quien terminó) lo lee/escribe desde
       // el overlay. Mismo cableado que el espectador de la BATALLA (#2).
@@ -1240,27 +1273,28 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Llegó `rstate` de un rival: el payload se RE-normaliza con la pista local
-   * (misma función que el emisor — defensa en profundidad contra un peer
-   * corrupto) y alimenta el buffer como progreso DESENROLLADO (monótono, no
-   * salta en la meta) más el último (lap, s) crudo para el ranking.
+   * Llegó `rstate` de un rival: el payload se VALIDA (forma — issue #35, un
+   * `rstate` null/no numérico se descarta sin romper el callback) y se
+   * RE-normaliza con la pista local (misma función que el emisor — defensa
+   * en profundidad contra un peer corrupto) y alimenta el buffer como
+   * progreso DESENROLLADO (monótono, no salta en la meta) más el último
+   * (lap, s) crudo para el ranking.
    *
    * V3 — antes de tocar nada, el progreso pasa el filtro de plausibilidad
    * (`race/racePlausibility`): un avance físicamente imposible se IGNORA
    * (buffer, ranking y presencia ni se enteran) y se espera el próximo
    * `rstate`; un sample aceptado refresca la presencia del peer (staleness).
    */
-  private handleRaceState(peerId: string, payload: {
-    s: number;
-    o: number;
-    v: number;
-    lap: number;
-  }): void {
-    if (!this.remoteBuffers.has(peerId)) {
-      return; // Peer desconocido (no está en el roster congelado): ignorar.
+  private handleRaceState(peerId: string, payload: unknown): void {
+    if (!this.remoteBuffers.has(peerId) && !this.tryAdmitRemotePeer(peerId)) {
+      return; // Peer desconocido (ni roster congelado ni sala): ignorar.
+    }
+    const received = parseRaceStatePayload(payload);
+    if (!received) {
+      return; // rstate malformado (issue #35): descartado en silencio.
     }
     const clean = roundRaceStatePayload(
-      payload,
+      received,
       this.path.totalLength,
       this.trackDef.widthPx / 2,
     );
@@ -1280,7 +1314,20 @@ export class RaceScene extends Phaser.Scene {
   /** Llegó `rfin`: ese peer terminó sus 3 vueltas con estos tiempos. */
   private handleRaceFinish(peerId: string, payload: unknown): void {
     const clean = parseRaceFinishPayload(payload);
-    if (!clean || !this.rosterPlayers.some((player) => player.peerId === peerId)) {
+    if (!clean) {
+      return;
+    }
+    if (
+      !this.rosterPlayers.some((player) => player.peerId === peerId) &&
+      !this.admittedPeers.has(peerId) &&
+      !this.tryAdmitRemotePeer(peerId)
+    ) {
+      return; // Remitente fuera del roster congelado y de la sala: ignorar.
+    }
+    // T3 (issue #35) — primer rfin gana: el reenvío del mismo peer (o de un
+    // eco tardío) NO pisa su tiempo, así nadie reordena el podio con
+    // reenvíos cada vez menores después del primer finish.
+    if (this.finishedPeers.has(peerId)) {
       return;
     }
     this.finishedPeers.set(peerId, clean);
@@ -1290,16 +1337,72 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Llegó `race-over` del ganador: su clasificación manda sobre la local.
-   * Mismo gate de roster que el `rfin` (un remitente fuera del roster
-   * congelado no puede concluir la carrera de todos).
+  /**
+   * #35 — admisión acotada del "joiner invisible": un peer que recibió el
+   * start pero cuya meta no llegó al anfitrión antes de congelar el roster no
+   * viaja en `players`; si su meta SÍ es conocida por ESTE cliente (estaba en
+   * la malla al arrancar) y no apareció en la sala después del start, se le
+   * admite dinámicamente: buffer + RemoteCar + ranking + clasificación.
+   * Decisión pura en `decideLateAdmission`; sin transporte no hay roster vivo
+   * que consultar y nadie se admite.
+   */
+  private tryAdmitRemotePeer(peerId: string): boolean {
+    if (!this.netClient || this.remoteBuffers.has(peerId)) {
+      return false;
+    }
+    const player = decideLateAdmission(
+      peerId,
+      this.rosterPlayers,
+      this.netClient.getRoster(),
+      this.postStartJoins,
+    );
+    if (!player) {
+      return false;
+    }
+    // Nace en la meta (su primer `rstate` lo ubica apenas interpola; si sólo
+    // se le recibió el `rfin`, queda estacionado tras la línea, igual que un
+    // terminado).
+    const car = new RemoteCar(this, player);
+    const start = sampleFromProgress(this.path, 0, 0);
+    car.sync(start.x, start.y, start.angle);
+    this.worldObjects.push(...car.renderObjects);
+    this.remotes.set(peerId, car);
+    this.remoteBuffers.set(peerId, new SnapshotBuffer<RaceRemoteSample>());
+    this.remoteProgress.set(peerId, { lap: 0, s: 0 });
+    // Presencia inicial (base del stale, igual criterio que la parrilla).
+    this.staleTracker.record(peerId, this.time.now);
+    this.admittedPeers.set(peerId, player);
+    return true;
+  }
+
+  /**
+   * Llegó `race-over`: su clasificación manda sobre la local. Gate de
+   * remitente: roster congelado más los peers admitidos dinámicamente (#35,
+   * un joiner invisible legítimo puede ser el ganador). #35 — y sólo se
+   * acepta UNO, del remitente que es la autoridad (finisher de peerId menor
+   * entre MIS finishers conocidos): un duplicado o un no-authority no pisa la
+   * clasificación ya aceptada. TRADEOFF: con una vista local transitoriamente
+   * incompleta se puede rechazar un race-over legítimo — la conclusión local
+   * determinista y la gracia de respaldo cubren el caso (ver `race/raceClose`).
    */
   private handleRaceOver(peerId: string, payload: unknown): void {
-    if (!this.rosterPlayers.some((player) => player.peerId === peerId)) {
-      return; // Remitente desconocido (no está en el roster congelado): ignorar.
+    if (
+      !this.rosterPlayers.some((player) => player.peerId === peerId) &&
+      !this.admittedPeers.has(peerId)
+    ) {
+      return; // Remitente desconocido (ni roster congelado ni admitido): ignorar.
     }
     const parsed = parseRaceOverPayload(payload);
     if (!parsed) {
+      return;
+    }
+    if (
+      !shouldAcceptRaceOver(
+        peerId,
+        [...this.finishedPeers.keys()],
+        this.raceOverStandings !== null,
+      )
+    ) {
       return;
     }
     this.raceOverStandings = parsed.standings;
@@ -1361,23 +1464,30 @@ export class RaceScene extends Phaser.Scene {
     if (this.selfFinished || !this.netClient) {
       return;
     }
-    this.stateAccumulatorMs += deltaMs;
-    const intervalMs = 1000 / STATE_HZ;
-    while (this.stateAccumulatorMs >= intervalMs) {
-      this.stateAccumulatorMs -= intervalMs;
-      this.netClient.sendRaceState(
-        roundRaceStatePayload(
-          {
-            s: projection.s,
-            o: projection.lateral,
-            v: this.carState.speed,
-            lap: this.lapTracker.lapsCompleted,
-          },
-          this.path.totalLength,
-          this.trackDef.widthPx / 2,
-        ),
-      );
+    // Saturación (issue #35): el delta acumulado NUNCA itera — un tramo
+    // gigante (background en multi, sin auto-pausa) emite UN único rstate
+    // fresco y descarta el sobrante (patrón de GameScene; raceBroadcast.ts).
+    const schedule = scheduleRaceStateBroadcast(
+      this.stateAccumulatorMs,
+      deltaMs,
+      1000 / STATE_HZ,
+    );
+    this.stateAccumulatorMs = schedule.accumulatorMs;
+    if (schedule.sendCount === 0) {
+      return;
     }
+    this.netClient.sendRaceState(
+      roundRaceStatePayload(
+        {
+          s: projection.s,
+          o: projection.lateral,
+          v: this.carState.speed,
+          lap: this.lapTracker.lapsCompleted,
+        },
+        this.path.totalLength,
+        this.trackDef.widthPx / 2,
+      ),
+    );
   }
 
   /**
@@ -1472,11 +1582,14 @@ export class RaceScene extends Phaser.Scene {
 
   /**
    * Condiciones de cierre de la carrera multi, EN ORDEN:
-   * 1) llegó `race-over` del ganador → sus standings mandan;
-   * 2) terminaron todos → el ganador difunde su clasificación y cierra;
-   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra el
-   *    ganador (difundiendo) o cada cliente con SU clasificación local
-   *    (defensa: ganador desaparecido — las reglas determinísticas hacen
+   * 1) llegó `race-over` de la autoridad → sus standings mandan;
+   * 2) todos los peers del roster están resueltos → concluye. #35: los
+   *    desconectados (leave/stale) cuentan como resueltos — jamás mandarán
+   *    `rfin`, así que exigirlos esperaba la gracia completa con rivales
+   *    caídos aunque los vivos ya hubieran terminado;
+   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra la
+   *    autoridad (difundiendo) o cada cliente con SU clasificación local
+   *    (defensa: autoridad desaparecida — las reglas determinísticas hacen
    *    que la clasificación local coincida con la que habría difundido).
    */
   private checkRaceEnd(): void {
@@ -1487,10 +1600,12 @@ export class RaceScene extends Phaser.Scene {
       this.concludeRace(this.raceOverStandings);
       return;
     }
-    const allFinished = this.rosterPlayers.every((player) =>
-      this.finishedPeers.has(player.peerId),
+    const allResolved = allPeersResolved(
+      this.rosterPlayers.map((player) => player.peerId),
+      [...this.finishedPeers.keys()],
+      [...this.disconnectedPeers],
     );
-    if (allFinished) {
+    if (allResolved) {
       this.broadcastRaceOverIfWinner();
       this.concludeRace(this.buildFinalClassification());
       return;
@@ -1504,9 +1619,18 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
-  /** El ganador (primer `rfin`) difunde `race-over` UNA vez. */
+  /**
+   * La AUTORIDAD difunde `race-over` UNA vez: el finisher de peerId menor
+   * (tiebreak del ranking), no el primer `rfin` visto localmente — con
+   * cruces casi simultáneos cada máquina se creía ganadora y difundía
+   * standings distintas (#35). Con un único finisher difunde él: sin cambio
+   * de comportamiento.
+   */
   private broadcastRaceOverIfWinner(): void {
-    if (this.raceOverSent || this.firstFinish?.peerId !== this.myPeerId) {
+    if (
+      this.raceOverSent ||
+      !shouldBroadcastRaceOver([...this.finishedPeers.keys()], this.myPeerId)
+    ) {
       return;
     }
     this.raceOverSent = true;
@@ -1517,10 +1641,15 @@ export class RaceScene extends Phaser.Scene {
    * Clasificación final local con `finalClassification` (determinista):
    * terminados con SU `rfin` (totalMs ASC) → en carrera por progreso →
    * desconectados al final. Las mismas entradas producen el mismo orden en
-   * todos los clientes.
+   * todos los clientes. #35: los peers admitidos dinámicamente (joiner
+   * invisible) clasifican igual que los del roster congelado — el orden no
+   * cambia para los demás (el desempate canónico es peerId).
    */
   private buildFinalClassification(): RaceFinalStanding[] {
-    const cars: FinalCar[] = this.rosterPlayers.map((player) => {
+    const cars: FinalCar[] = [
+      ...this.rosterPlayers,
+      ...this.admittedPeers.values(),
+    ].map((player) => {
       const peerId = player.peerId;
       const progress = this.lastKnownProgress(peerId);
       const finish = this.finishedPeers.get(peerId);
@@ -1700,7 +1829,9 @@ export class RaceScene extends Phaser.Scene {
           this.trackDef.id,
           standings,
           this.myPeerId,
-          this.rosterPlayers,
+          // #35 — los admitidos dinámicos viajan también (nombres/colores del
+          // podio de resultados; un joiner invisible no vuelve a ser "PILOTO").
+          [...this.rosterPlayers, ...this.admittedPeers.values()],
           // V4 — vuelta rápida de la carrera: el mejor `bestLapMs` de los
           // `rfin` (elección determinista en `fastestRaceLap`).
           fastestRaceLap(

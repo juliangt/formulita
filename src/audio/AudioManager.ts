@@ -310,6 +310,19 @@ const MASTER_VOLUME = 0.9;
 const MUTE_RAMP_SECONDS = 0.05;
 const ENGINE_ATTACK_SECONDS = 0.3;
 const ENGINE_RELEASE_SECONDS = 0.25;
+/**
+ * Ventana de gracia del release (fade + margen hasta el stop real): un
+ * `startEngine` dentro de esta ventana readopta el grafo en fade en vez de
+ * crear uno nuevo superpuesto (qaT9, issue #35). Fuera de la ventana los
+ * osciladores ya se frenaron y no hay nada que readoptar.
+ */
+const ENGINE_RELEASE_WINDOW_SECONDS = ENGINE_RELEASE_SECONDS + 0.05;
+/**
+ * Stop "lejos" con el que un dron readoptado reemplaza su stop pendiente:
+ * por spec de Web Audio el ÚLTIMO `stop()` es el que vale; el próximo
+ * `stopEngine` lo vuelve a pautar en su momento real.
+ */
+const ENGINE_REARM_STOP_SECONDS = 3600;
 // (El corte del lowpass del dron vive en `AUDIO`: `engineFilterHz` desktop y
 // `engineFilterHzMobile` móvil, issue #4 H4.)
 /** Umbral de reprogramación de frecuencia del dron (Hz, anti-spam de eventos). */
@@ -421,6 +434,19 @@ export class AudioManager implements ISfxEngine {
   private engineSub: OscillatorNodeLike | null = null;
   private engineFilter: BiquadFilterNodeLike | null = null;
   private engineGain: GainNodeLike | null = null;
+  /**
+   * Dron en fade de release (entre stopEngine y el stop real programado): si
+   * `startEngine` llega dentro de la ventana, este grafo se READOPTA en vez
+   * de superponer uno nuevo (qaT9, issue #35).
+   */
+  private releasingEngine: {
+    osc: OscillatorNodeLike;
+    sub: OscillatorNodeLike;
+    filter: BiquadFilterNodeLike;
+    gain: GainNodeLike;
+    /** Instante del contexto en que los osciladores se frenan. */
+    stopAt: number;
+  } | null = null;
   /** Última velocidad y turbo reportados (vía bus). */
   private latestSpeed = 0;
   private turboActive = false;
@@ -962,6 +988,8 @@ export class AudioManager implements ISfxEngine {
     this.detachUnlockListeners();
     this.detachRecoveryListeners();
     this.stopEngine();
+    // El grafo en fade muere con el contexto: nada que readoptar después.
+    this.releasingEngine = null;
     const ctx = this.context;
     this.context = null;
     this.masterGain = null;
@@ -998,7 +1026,8 @@ export class AudioManager implements ISfxEngine {
   /**
    * Arranca el dron (dos osciladores → lowpass → ganancia → master). La
    * ganancia entra con un ataque suave. Idempotente: si ya suena, no hace
-   * nada. También desbloquea por si el primer gesto fue tecla de arranque.
+   * nada (y si hay uno en fade de release, lo readopta en vez de superponer
+   * otro). También desbloquea por si el primer gesto fue tecla de arranque.
    */
   startEngine(): void {
     if (this.engineOsc || this.engineSub) {
@@ -1010,6 +1039,11 @@ export class AudioManager implements ISfxEngine {
       return;
     }
     const { ctx, master } = graph;
+    // Un dron en fade sigue audible: readoptarlo evita dos drones superpuestos
+    // cuando la pausa y la reanudación caen en la misma ventana (< 0.30 s).
+    if (this.adoptReleasingEngine(ctx)) {
+      return;
+    }
     try {
       const t = ctx.currentTime;
       const filter = ctx.createBiquadFilter();
@@ -1060,8 +1094,59 @@ export class AudioManager implements ISfxEngine {
   }
 
   /**
+   * Readopta el dron que está en fade de release (qaT9, issue #35): cancela
+   * el fade, vuelve a subir la ganancia con el ataque normal, reemplaza el
+   * stop ya programado por uno "lejos" (el último stop gana por spec) y
+   * restaura las referencias vivas. Devuelve `true` si readoptó. Fuera de la
+   * ventana (osciladores ya frenados) descarta el pendiente y devuelve
+   * `false` para que `startEngine` cree grafo nuevo.
+   */
+  private adoptReleasingEngine(ctx: AudioContextLike): boolean {
+    const pending = this.releasingEngine;
+    if (!pending) {
+      return false;
+    }
+    if (ctx.currentTime >= pending.stopAt) {
+      this.releasingEngine = null;
+      return false;
+    }
+    this.releasingEngine = null;
+    try {
+      const t = ctx.currentTime;
+      pending.gain.gain.cancelScheduledValues(t);
+      // Re-ataque desde el valor ACTUAL del fade (evita saltos de ganancia).
+      pending.gain.gain.setValueAtTime(Math.max(ALMOST_ZERO, pending.gain.gain.value), t);
+      pending.gain.gain.exponentialRampToValueAtTime(
+        this.engineVolumeProfile,
+        t + ENGINE_ATTACK_SECONDS,
+      );
+      // El stop del release ya estaba agendado: se reemplaza por uno lejos.
+      const rearmAt = t + ENGINE_REARM_STOP_SECONDS;
+      pending.osc.stop(rearmAt);
+      pending.sub.stop(rearmAt);
+    } catch {
+      // Re-armar falló: los osciladores viejos frenan solos (inaudibles, la
+      // ganancia ya cayó) y `startEngine` sigue con grafo nuevo.
+      return false;
+    }
+    this.engineOsc = pending.osc;
+    this.engineSub = pending.sub;
+    this.engineFilter = pending.filter;
+    this.engineGain = pending.gain;
+    // El filtro arranca en el brillo que corresponda al turbo vigente (mismo
+    // re-sincronizado de estado que hace la creación desde cero).
+    pending.filter.frequency.value = this.turboActive
+      ? this.engineFilterTurboProfile
+      : this.engineFilterProfile;
+    this.filterTurboActive = this.turboActive;
+    return true;
+  }
+
+  /**
    * Para el dron con un release suave (el motor se "apaga"). Los nodos se
-   * frenan un poco después del fade; las referencias se sueltan ya.
+   * frenan un poco después del fade; las referencias se sueltan ya, pero el
+   * grafo queda en `releasingEngine` por si `startEngine` llega dentro de la
+   * ventana (readopción, qaT9).
    */
   stopEngine(): void {
     const { engineOsc, engineSub, engineFilter, engineGain } = this;
@@ -1079,16 +1164,18 @@ export class AudioManager implements ISfxEngine {
     }
     try {
       const t = ctx.currentTime;
-      const stopAt = t + ENGINE_RELEASE_SECONDS + 0.05;
+      const stopAt = t + ENGINE_RELEASE_WINDOW_SECONDS;
       engineGain.gain.cancelScheduledValues(t);
       // Arranca el fade desde el valor ACTUAL (evita un click de salto a 0).
       engineGain.gain.setValueAtTime(Math.max(ALMOST_ZERO, engineGain.gain.value), t);
       engineGain.gain.exponentialRampToValueAtTime(ALMOST_ZERO, t + ENGINE_RELEASE_SECONDS);
       engineOsc.stop(stopAt);
       engineSub.stop(stopAt);
+      this.releasingEngine = { osc: engineOsc, sub: engineSub, filter: engineFilter, gain: engineGain, stopAt };
     } catch {
       // Si el stop programado falla, los osciladores quedan huérfanos pero
       // inaudibles (su ganancia ya no tiene dueño con volumen).
+      this.releasingEngine = null;
     }
   }
 

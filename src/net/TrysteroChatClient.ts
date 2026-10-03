@@ -309,7 +309,15 @@ export class TrysteroChatClient implements ChatClient {
     if (peerId === this.selfPeerId) {
       return; // eco del propio anuncio: nada que aprender de mí
     }
-    this.metas.set(peerId, { ...meta, name: sanitizePlayerName(meta.name) });
+    // Forma mínima del wire (issue #35): objeto con `name` string — una meta
+    // malformada se descarta en silencio (sin lanzar ni ensuciar lastSeen).
+    if (typeof meta !== 'object' || meta === null || typeof meta.name !== 'string') {
+      return;
+    }
+    this.metas.set(peerId, {
+      name: sanitizePlayerName(meta.name),
+      color: typeof meta.color === 'number' && Number.isFinite(meta.color) ? meta.color : 0,
+    });
     // La meta es señal de vida además de identidad.
     this.lastSeen.set(peerId, this.now());
     this.emitPeers();
@@ -393,6 +401,16 @@ export class TrysteroChatClient implements ChatClient {
     if (fromPeerId === this.selfPeerId) {
       return; // eco del propio envío
     }
+    // Forma mínima del wire (issue #35): objeto con `targetPeerId` string —
+    // un payload malformado se descarta sin lanzar (el texto no-string cae
+    // después, vacío tras sanitizar).
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      typeof payload.targetPeerId !== 'string'
+    ) {
+      return;
+    }
     if (payload.targetPeerId !== this.selfPeerId) {
       return; // dirigido a otro peer: ni lo proceso
     }
@@ -439,6 +457,11 @@ export class TrysteroChatClient implements ChatClient {
   private receiveInviteMessage(fromPeerId: string, payload: InvitePayload): void {
     if (fromPeerId === this.selfPeerId) {
       return; // eco del propio envío
+    }
+    // Forma mínima del wire (issue #35): objeto con `keyword` string — un
+    // invite malformado se descarta sin lanzar.
+    if (typeof payload !== 'object' || payload === null || typeof payload.keyword !== 'string') {
+      return;
     }
     const keyword = sanitizeRoomWord(payload.keyword);
     if (!isValidRoomWord(keyword)) {

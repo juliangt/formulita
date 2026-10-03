@@ -39,7 +39,7 @@ import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
 import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
 import { relayConfigFor } from './appId';
 import type { NetEnvSource } from './appId';
-import { assignColors, isRoomFull, resolveHostPeerId } from './lobbyState';
+import { assignColors, isRoomFull, isStartFromHost, resolveHostPeerId } from './lobbyState';
 import type { NetClient, CreateRoomOptions, JoinRoomOptions } from './NetClient';
 import {
   isValidRoomWord,
@@ -268,14 +268,32 @@ export class TrysteroNetClient implements NetClient {
 
     // Acción de meta: cada peer anuncia {name, color, isCreator}. El color
     // del wire es informativo (se recalcula del roster en todos lados).
+    // Forma mínima del wire (issue #35): objeto con `name` string — una meta
+    // malformada se descarta en silencio (sin lanzar en el callback de
+    // Trystero, sin peer fantasma ni roster corrupto).
     this.metaAction = room.makeAction<PeerMeta>('meta');
     this.metaAction.onMessage = (meta, context) => {
-      this.metas.set(context.peerId, { ...meta, name: sanitizePlayerName(meta.name) });
+      if (typeof meta !== 'object' || meta === null || typeof meta.name !== 'string') {
+        return;
+      }
+      this.metas.set(context.peerId, {
+        name: sanitizePlayerName(meta.name),
+        color: typeof meta.color === 'number' && Number.isFinite(meta.color) ? meta.color : 0,
+        isCreator: meta.isCreator === true,
+      });
       this.emitRoster();
     };
 
     const startAction = room.makeAction<StartPayload>('start');
-    startAction.onMessage = (payload) => {
+    startAction.onMessage = (payload, context) => {
+      // T3 (issue #35) — autoridad del arranque en RECEPCIÓN: sólo el
+      // anfitrión resuelto sobre el roster LOCAL puede difundir start (el
+      // guard de isHost() de la emisión no alcanza: es un cálculo local que
+      // otro peer no puede verificar). Descarte SILENCIOSO: avisar por error
+      // le daría al atacante un canal para ensuciar el estado del lobby.
+      if (!isStartFromHost(this.rosterEntries(), context.peerId)) {
+        return;
+      }
       for (const handler of this.handlers.start) {
         handler(payload);
       }
@@ -304,9 +322,14 @@ export class TrysteroNetClient implements NetClient {
     };
 
     // Chat de sala (C1): broadcast {text} sanitizado; el remitente viaja en
-    // el contexto (peerId) que Trystero entrega al recibir.
+    // el contexto (peerId) que Trystero entrega al recibir. Forma mínima del
+    // wire (issue #35): {text: string} — un payload malformado se descarta
+    // antes de llegar al store (que igual re-sanitiza el string).
     const chatAction = room.makeAction<ChatPayload>('chat');
     chatAction.onMessage = (payload, context) => {
+      if (typeof payload !== 'object' || payload === null || typeof payload.text !== 'string') {
+        return;
+      }
       for (const handler of this.handlers.chat) {
         handler(context.peerId, payload);
       }

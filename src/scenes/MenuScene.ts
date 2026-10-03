@@ -356,8 +356,10 @@ export class MenuScene extends Phaser.Scene {
   private readonly startGame = (): void => {
     // Con una subpantalla abierta (EN LÍNEA o selector de pistas), Enter/
     // Espacio son del input de esa pantalla: no arrancan una carrera sola
-    // atravesada.
-    if (this.onlineOverlay || this.trackOverlay) {
+    // atravesada. #35 — el chat (que se abre DESPUÉS de cerrar la
+    // subpantalla) también cuenta: con su input DOM sin foco, Enter/Espacio
+    // llegan acá y arrancarían una carrera DEBAJO del overlay.
+    if (this.onlineOverlay || this.trackOverlay || this.scene.isActive(ChatScene.KEY)) {
       return;
     }
     // Issue #27 — telemetría (fire-and-forget, sin PII): el JUGAR del menú

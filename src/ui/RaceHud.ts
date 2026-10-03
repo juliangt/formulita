@@ -180,7 +180,11 @@ export class RaceHud {
    * no se llama y queda oculto).
    */
   setPosition(position: number, total: number): void {
-    const label = `P${Math.max(1, Math.floor(position))}/${Math.max(1, Math.floor(total))}`;
+    // Mismo patrón defensivo de format.ts: `Math.max(1, NaN)` es NaN, no 1 —
+    // un no finito cae al neutro del badge (P1).
+    const safePosition = Number.isFinite(position) ? Math.floor(position) : 1;
+    const safeTotal = Number.isFinite(total) ? Math.floor(total) : 1;
+    const label = `P${Math.max(1, safePosition)}/${Math.max(1, safeTotal)}`;
     if (label !== this.lastPosition) {
       this.lastPosition = label;
       this.positionText.setText(label).setVisible(true);

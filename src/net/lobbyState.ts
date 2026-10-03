@@ -88,14 +88,28 @@ export function isRoomFull(count: number): boolean {
 }
 
 /**
+ * ¿Es `senderPeerId` el anfitrión de ESTE roster? Es la única fuente
+ * legítima del arranque en AMBOS sentidos (T3, issue #35): la EMISIÓN
+ * (`canStart`) y la RECEPCIÓN del payload `start` (TrysteroNetClient
+ * descarta en silencio el start de cualquier otro peer — malicioso o de una
+ * vista de metas divergente). TRADEOFF documentado: si el creador se fue y
+ * el host migrado difunde antes de que mi roster local lo refleje, mi gate
+ * rechaza un start legítimo — es preferible a aceptar dos "anfitriones" y
+ * partir la sala en dos carreras con seeds distintas.
+ */
+export function isStartFromHost(roster: readonly RosterEntry[], senderPeerId: string): boolean {
+  return resolveHostPeerId(roster) === senderPeerId;
+}
+
+/**
  * ¿Puede `selfPeerId` iniciar la carrera? Solo el ANFITRIÓN decide, y con
  * al menos `minPlayersToStart` jugadores en la sala (partidas de 2 a 10):
- * el anfitrión se resuelve del roster con `resolveHostPeerId` (mismo
+ * el anfitrión se resuelve del roster con `isStartFromHost` (mismo
  * cálculo en todos los clientes).
  */
 export function canStart(roster: readonly RosterEntry[], selfPeerId: string): boolean {
   if (roster.length < MULTIPLAYER.minPlayersToStart) {
     return false;
   }
-  return resolveHostPeerId(roster) === selfPeerId;
+  return isStartFromHost(roster, selfPeerId);
 }

@@ -372,6 +372,10 @@ export class GameScene extends Phaser.Scene {
     // del SpawnSystem, de los listeners globales de guardado/pausa y del
     // handler de RESUME.
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      // #35 — el chat de espectador muere con la carrera (patrón LobbyScene):
+      // si la partida terminó con el overlay abierto, su velo interactivo
+      // quedaría encima de los resultados bloqueando los botones.
+      this.scene.stop(ChatScene.KEY);
       this.inputSystem.detach();
       this.touchSource.destroy();
       for (const widget of this.hudWidgets) {

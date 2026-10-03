@@ -1350,6 +1350,28 @@ export const CHAT_MAX_LEN = 200;
 export const CHAT_SEND_COOLDOWN_MS = 1500;
 
 /**
+ * Tope de historial por hilo (issue #35, qaT8): llegado el tope, cada mensaje
+ * nuevo recorta los MÁS VIEJOS (FIFO). Sin este techo, un peer que inunda el
+ * chat hace crecer el historial (y su memoria) sin límite — el throttle de
+ * envío sólo gobierna el envío propio, no la ENTRADA. El recorte cae también
+ * del conteo de no leídos: un mensaje recortado ya no se puede leer.
+ */
+export const CHAT_HISTORY_MAX = 100;
+
+/**
+ * Rate-limit de RECEPCIÓN por peer emisor (issue #35, qaT8): token bucket que
+ * cubre el flood de ENTRADA, que el throttle de envío propio no alcanza. Cada
+ * peer arranca con `CHAT_FLOOD_BURST` mensajes de ráfaga y recarga 1 mensaje
+ * cada `CHAT_FLOOD_REFILL_MS` (ritmo sostenido acotado); lo que llega sin
+ * presupuesto se DESCARTA en silencio (sin historial, sin no leídos y sin
+ * hilo nuevo). El bucket es por EMISOR, compartido entre room y sus DM: un
+ * mismo peer no reparte su flood entre hilos. Los mensajes propios (eco local)
+ * nunca pasan por acá.
+ */
+export const CHAT_FLOOD_BURST = 5;
+export const CHAT_FLOOD_REFILL_MS = 1000;
+
+/**
  * Intervalo del heartbeat de presencia (ms, C2): cada cliente difunde un
  * `ping` vacío a la sala pública de presencia cada 5 s para anunciar que
  * sigue conectado (la sala pública no tiene estado de carrera que sirva de
