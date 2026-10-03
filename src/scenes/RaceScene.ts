@@ -9,6 +9,7 @@ import {
   MULTIPLAYER,
   RACE,
   RACE_CONFETTI,
+  RACE_CONTACT,
   RACE_FINISH_GRACE_MS,
   RACE_HUD,
   RACE_LAP_BANNER,
@@ -32,6 +33,13 @@ import {
 } from '../race/raceControls';
 import { assignGridOrder, type GridSlot } from '../race/gridOrder';
 import { CircuitPhysics, type CarState } from '../race/circuitPhysics';
+import { resolveCarContacts } from '../race/carContacts';
+import {
+  accumulateWear,
+  speedCapFor,
+  wearFromDistance,
+  wearFromImpact,
+} from '../race/tireWear';
 import { LapTracker, type LapCompletedEvent } from '../race/lapTracker';
 import {
   finalClassification,
@@ -225,6 +233,11 @@ interface RivalRuntime {
   finished: boolean;
   /** Tiempos exactos al terminar (para la clasificación final). */
   finish: { totalMs: number; bestLapMs: number } | null;
+  /**
+   * #39 — goma gastada (0–1). Sólo crece con el toggle DESGASTE activo;
+   * con el toggle apagado queda en 0 toda la carrera (cero costo).
+   */
+  wear: number;
 }
 
 /**
@@ -605,6 +618,17 @@ export class RaceScene extends Phaser.Scene {
    * reutiliza la instancia de escena y el estado debe arrancar limpio.
    */
   private positionSwapDetector!: PositionSwapDetector;
+  /**
+   * #39 — contactos entre autos del vs CPU (colisiones + desgaste). El
+   * `wearEnabled` viene del toggle DESGASTE del picker (init data); el
+   * enfriamiento del feedback (SFX/shake) es por carrera: el restart
+   * reutiliza la instancia de escena.
+   */
+  private wearEnabled = false;
+  /** #39 — goma gastada del AUTO PROPIO (0–1; congelada sin toggle). */
+  private playerWear = 0;
+  /** #39 — `time.now` del último feedback de contacto (enfriamiento). */
+  private lastContactFeedbackMs = -Infinity;
 
   constructor() {
     super(RaceScene.KEY);
@@ -641,6 +665,10 @@ export class RaceScene extends Phaser.Scene {
     this.worldObjects = [];
     this.rivalRoster = [];
     this.cpuDifficulty = this.sceneInit.difficulty ?? DEFAULT_CPU_DIFFICULTY;
+    // #39 — contacto y desgaste frescos por carrera (idempotencia del restart).
+    this.wearEnabled = this.sceneInit.wear === true;
+    this.playerWear = 0;
+    this.lastContactFeedbackMs = -Infinity;
     // V3 (#14) — detector fresco de cambios de posición (idempotencia del
     // restart: sin línea base heredada de la carrera anterior).
     this.positionSwapDetector = new PositionSwapDetector(RACE_VS_CPU.positionSfxCooldownMs);
@@ -849,7 +877,9 @@ export class RaceScene extends Phaser.Scene {
     // En multi, quien terminó su carrera deja de conducir (espectador).
     if (!this.selfFinished) {
       const input = circuitInputFromState(this.inputSystem.getState());
-      this.carPhysics.step(this.carState, dt, input);
+      // #39 — con el toggle DESGASTE, la goma gastada recorta la punta.
+      const cap = this.wearEnabled ? speedCapFor(this.playerWear) : undefined;
+      this.carPhysics.step(this.carState, dt, input, cap);
       // V4 — el dron del motor sigue la velocidad del auto (arranca con el
       // GO!; se apaga en pausa/fin/shutdown por el bus de sesión).
       this.bus.emit('speed', raceEngineSpeed(this.carState.speed));
@@ -1017,6 +1047,7 @@ export class RaceScene extends Phaser.Scene {
         lastLateral: 0,
         finished: false,
         finish: null,
+        wear: 0,
       });
     }
   }
@@ -1056,7 +1087,10 @@ export class RaceScene extends Phaser.Scene {
           cars: others,
           playerGapPx: playerProgress - rivalProgress,
         });
-        runtime.physics.step(runtime.state, dt, input);
+        // #39 — mismo tope por desgaste que el jugador: la goma gastada del
+        // rival también recorta SU punta (contacto y goma son simétricos).
+        const cap = this.wearEnabled ? speedCapFor(runtime.wear) : undefined;
+        runtime.physics.step(runtime.state, dt, input, cap);
         const projection = this.path.project(runtime.state.x, runtime.state.y);
         runtime.lastS = projection.s;
         runtime.lastLateral = projection.lateral;
@@ -1064,6 +1098,12 @@ export class RaceScene extends Phaser.Scene {
       }
       runtime.car.sync(runtime.state.x, runtime.state.y, runtime.state.heading);
     }
+
+    // #39 — CONTACTOS: los 8 autos comparten el mundo y ya no se atraviesan.
+    // El jugador (si siguió corriendo) ya dio SU paso de este frame; acá se
+    // resuelven los pares, se acumula el desgaste (con toggle) y se emite el
+    // feedback del golpe más fuerte que involucró al jugador.
+    this.resolveVsCpuContacts(dt);
 
     // Ranking vivo (sólo consume progreso: lap + s, mismo contrato que multi).
     this.rankAccumulatorMs += deltaMs;
@@ -1101,6 +1141,94 @@ export class RaceScene extends Phaser.Scene {
     if (swap !== null) {
       this.bus.emit('race-overtake', undefined);
     }
+  }
+
+  /**
+   * #39 — contactos y desgaste del vs CPU, un frame:
+   *
+   * - **Contactos** (`resolveCarContacts`, puro): los 8 autos (jugador en el
+   *   índice 0 + rivales) se separan y se empujan — nadie atraviesa a nadie.
+   *   El impulso ya aplicó empujón/desvío/frenada dentro del resolver; acá
+   *   sólo se cosecha.
+   * - **Desgaste** (sólo con el toggle DESGASTE): la distancia rodada del
+   *   frame + el impacto de cada golpe engordan la goma gastada de cada auto;
+   *   el tope de velocidad resultante actúa en el paso del frame SIGUIENTE.
+   * - **Feedback**: el golpe más fuerte del frame que involucró al JUGADOR
+   *   suena (`race-contact` → SFX `damage`) y sacude la cámara si fue fuerte,
+   *   con enfriamiento de `RACE_CONTACT.feedbackCooldownMs` (mientras dos
+   *   autos van pegados, el bus no recibe ráfagas).
+   *
+   * El jugador terminado (bandera a cuadros, mundo congelado para él) y las
+   * carreras sin rivales no resuelven nada.
+   */
+  private resolveVsCpuContacts(dt: number): void {
+    if (this.selfFinished || this.rivals.length === 0) {
+      return;
+    }
+    const states: CarState[] = [this.carState, ...this.rivals.map((r) => r.state)];
+    const contacts = resolveCarContacts(states);
+
+    // Desgaste por GOLPE: ambos autos del par pagan (simétrico, como la
+    // física). Con el toggle apagado esto queda en cero por construcción.
+    if (this.wearEnabled) {
+      // Por distancia: el jugador rodó speed·dt (si corrió) y cada rival
+      // vivo también. Los rivales terminados están congelados: no rodan.
+      this.playerWear = accumulateWear(
+        this.playerWear,
+        wearFromDistance(this.carState.speed * dt),
+      );
+      for (const runtime of this.rivals) {
+        if (!runtime.finished) {
+          runtime.wear = accumulateWear(
+            runtime.wear,
+            wearFromDistance(runtime.state.speed * dt),
+          );
+        }
+      }
+      for (const contact of contacts) {
+        const wear = wearFromImpact(contact.impact);
+        // El jugador paga si participó del golpe (índice 0 en `states`).
+        this.playerWear = accumulateWear(
+          this.playerWear,
+          contact.a === 0 || contact.b === 0 ? wear : 0,
+        );
+        // Los rivales pagan SIEMPRE (ambos autos del par, simétrico).
+        const rivalA = this.rivals[contact.a - 1];
+        const rivalB = this.rivals[contact.b - 1];
+        if (rivalA) {
+          rivalA.wear = accumulateWear(rivalA.wear, wear);
+        }
+        if (rivalB) {
+          rivalB.wear = accumulateWear(rivalB.wear, wear);
+        }
+      }
+    }
+
+    // Feedback del golpe más fuerte que involucró al JUGADOR (índice 0),
+    // con enfriamiento — un roce continuo no ametralla SFX ni shake.
+    let playerHit: number | null = null;
+    for (const contact of contacts) {
+      if (contact.a !== 0 && contact.b !== 0) {
+        continue;
+      }
+      if (playerHit === null || contact.impact > playerHit) {
+        playerHit = contact.impact;
+      }
+    }
+    if (
+      playerHit !== null &&
+      playerHit >= RACE_CONTACT.minImpactSfx &&
+      this.time.now - this.lastContactFeedbackMs >= RACE_CONTACT.feedbackCooldownMs
+    ) {
+      this.lastContactFeedbackMs = this.time.now;
+      this.bus.emit('race-contact', undefined);
+      if (playerHit >= RACE_CONTACT.minImpactShake) {
+        this.cameras.main.shake(RACE_CONTACT.shakeMs, RACE_CONTACT.shakeIntensity);
+      }
+    }
+
+    // Indicador de goma (sólo con toggle; `null` lo mantiene oculto).
+    this.raceHud.setWear(this.wearEnabled ? (1 - this.playerWear) * 100 : null);
   }
 
   /**
