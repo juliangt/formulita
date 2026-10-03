@@ -67,6 +67,7 @@ import { RaceStaleTracker } from '../race/raceStale';
 import {
   parseRaceFinishPayload,
   parseRaceOverPayload,
+  parseRaceStatePayload,
   roundRaceFinishPayload,
   roundRaceStatePayload,
   type PlayerInfo,
@@ -1244,27 +1245,28 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Llegó `rstate` de un rival: el payload se RE-normaliza con la pista local
-   * (misma función que el emisor — defensa en profundidad contra un peer
-   * corrupto) y alimenta el buffer como progreso DESENROLLADO (monótono, no
-   * salta en la meta) más el último (lap, s) crudo para el ranking.
+   * Llegó `rstate` de un rival: el payload se VALIDA (forma — issue #35, un
+   * `rstate` null/no numérico se descarta sin romper el callback) y se
+   * RE-normaliza con la pista local (misma función que el emisor — defensa
+   * en profundidad contra un peer corrupto) y alimenta el buffer como
+   * progreso DESENROLLADO (monótono, no salta en la meta) más el último
+   * (lap, s) crudo para el ranking.
    *
    * V3 — antes de tocar nada, el progreso pasa el filtro de plausibilidad
    * (`race/racePlausibility`): un avance físicamente imposible se IGNORA
    * (buffer, ranking y presencia ni se enteran) y se espera el próximo
    * `rstate`; un sample aceptado refresca la presencia del peer (staleness).
    */
-  private handleRaceState(peerId: string, payload: {
-    s: number;
-    o: number;
-    v: number;
-    lap: number;
-  }): void {
+  private handleRaceState(peerId: string, payload: unknown): void {
     if (!this.remoteBuffers.has(peerId)) {
       return; // Peer desconocido (no está en el roster congelado): ignorar.
     }
+    const received = parseRaceStatePayload(payload);
+    if (!received) {
+      return; // rstate malformado (issue #35): descartado en silencio.
+    }
     const clean = roundRaceStatePayload(
-      payload,
+      received,
       this.path.totalLength,
       this.trackDef.widthPx / 2,
     );
