@@ -443,16 +443,32 @@ describe('TrysteroNetClient — start', () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
-  it('onStart se dispara al recibir la acción de un peer remoto', () => {
+  it('onStart se dispara al recibir la acción del anfitrión remoto', () => {
+    const net = createClientFixture('guest');
+    const client = net.client;
+    const onStart = vi.fn();
+    client.onStart(onStart);
+    client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'Beto' });
+    // T3 (issue #35): el remitente debe resolver como anfitrión del roster
+    // LOCAL — sin su meta de creador, su start ya no se aceptaría.
+    net.room().connectPeer('host-remoto');
+    net.room().receive<PeerMeta>('meta', { name: 'Ana', color: 0, isCreator: true }, 'host-remoto');
+
+    net.room().receive<StartPayload>('start', payload, 'host-remoto');
+
+    expect(onStart).toHaveBeenCalledWith(payload);
+  });
+
+  it('T3 (#35): el start de un peer ajeno al roster se descarta sin onStart', () => {
     const net = createClientFixture('guest');
     const client = net.client;
     const onStart = vi.fn();
     client.onStart(onStart);
     client.join({ appId: 'app', roomWord: 'PARRILLA', name: 'Beto' });
 
-    net.room().receive<StartPayload>('start', payload, 'host-remoto');
+    net.room().receive<StartPayload>('start', payload, 'desconocido');
 
-    expect(onStart).toHaveBeenCalledWith(payload);
+    expect(onStart).not.toHaveBeenCalled();
   });
 });
 

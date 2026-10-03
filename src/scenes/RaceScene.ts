@@ -1287,6 +1287,12 @@ export class RaceScene extends Phaser.Scene {
     if (!clean || !this.rosterPlayers.some((player) => player.peerId === peerId)) {
       return;
     }
+    // T3 (issue #35) — primer rfin gana: el reenvío del mismo peer (o de un
+    // eco tardío) NO pisa su tiempo, así nadie reordena el podio con
+    // reenvíos cada vez menores después del primer finish.
+    if (this.finishedPeers.has(peerId)) {
+      return;
+    }
     this.finishedPeers.set(peerId, clean);
     if (!this.firstFinish) {
       this.firstFinish = { peerId, at: this.time.now };
