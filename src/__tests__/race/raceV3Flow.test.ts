@@ -8,6 +8,7 @@ import {
 import { SnapshotBuffer } from '../../net/interpolation';
 import {
   parseRaceInit,
+  parseRaceOverPayload,
   roundRaceFinishPayload,
   roundRaceStatePayload,
   type PlayerInfo,
@@ -22,6 +23,11 @@ import {
 } from '../../race/raceRanking';
 import { LapTracker } from '../../race/lapTracker';
 import { unrollProgress, type RaceRemoteSample } from '../../race/raceRemote';
+import {
+  allPeersResolved,
+  shouldAcceptRaceOver,
+  shouldBroadcastRaceOver,
+} from '../../race/raceClose';
 import { RacePlausibility } from '../../race/racePlausibility';
 import { RaceStaleTracker } from '../../race/raceStale';
 import { assignGridOrder } from '../../race/gridOrder';
@@ -90,9 +96,9 @@ function sharedClock(): { now: () => number; advance: (ms: number) => void } {
 /**
  * Un cliente de carrera V3: el wiring EXACTO de RaceScene multi (buffer por
  * rival con filtro de plausibilidad, presencia de staleness, `rfin` propio
- * una vez, condición de ganador con el primer `rfin`, gracia de
- * RACE_FINISH_GRACE_MS y clasificación determinista de
- * `finalClassification`), más el barrido ~1/segundo que saca a los mudos.
+ * una vez, cierre por todos-resueltos o gracia RACE_FINISH_GRACE_MS con
+ * autoridad determinista del race-over — #35 — y clasificación determinista
+ * de `finalClassification`), más el barrido ~1/segundo que saca a los mudos.
  */
 class RaceV3Client {
   readonly path = buildTrackPath(getTrackById(TRACK_ID)!);
@@ -186,8 +192,23 @@ class RaceV3Client {
         this.firstFinish = { peerId, at: this.clock.now() };
       }
     });
-    client.onRaceOver((_peerId, payload) => {
-      this.raceOverReceived = JSON.parse(JSON.stringify(payload)).standings ?? null;
+    client.onRaceOver((peerId, payload) => {
+      // #35: UNA sola aceptación, sólo del finisher de peerId menor que
+      // conozco (la autoridad determinista — espejo de handleRaceOver).
+      const parsed = parseRaceOverPayload(payload);
+      if (!parsed) {
+        return;
+      }
+      if (
+        !shouldAcceptRaceOver(
+          peerId,
+          [...this.finishedPeers.keys()],
+          this.raceOverReceived !== null,
+        )
+      ) {
+        return;
+      }
+      this.raceOverReceived = parsed.standings;
     });
     client.onPeerLeave((peerId) => this.handlePeerLeft(peerId));
   }
@@ -221,10 +242,17 @@ class RaceV3Client {
       this.distance += (this.profile.speed * TICK_MS) / 1000;
       const raw = this.ownGridS + this.distance;
       const s = raw % this.lapLength;
+      this.lapTracker.update(s, TICK_MS); // dispara onRaceFinished al cierre
+      // El wire lleva el lap POST-update (idem RaceScene: difunde
+      // lapsCompleted DESPUÉS del lapTracker.update del frame) — con el lap
+      // viejo, el tick del cruce mandaría (s envuelto, lap viejo) y el
+      // progreso desenrollado RETROCEDERÍA una vuelta: el filtro de
+      // plausibilidad del receptor rechazaría TODO lo siguiente y el sweep
+      // daría de baja a rivales compitiendo (fidelidad del espejo, #35).
       this.lastS = s;
       this.lastLap = this.lapTracker.lapsCompleted;
-      this.lapTracker.update(s, TICK_MS); // dispara onRaceFinished al cierre
-      if (this.ticks <= this.muteAfterTick) {
+      // Idem escena: en el tick del cruce final YA no se difunde.
+      if (!this.selfFinished && this.ticks <= this.muteAfterTick) {
         this.client.sendRaceState(
           roundRaceStatePayload(
             { s, o: this.profile.lateral, v: this.profile.speed, lap: this.lastLap },
@@ -285,13 +313,21 @@ class RaceV3Client {
       this.concluded = this.raceOverReceived;
       return;
     }
-    const allFinished = this.players.every((player) => this.finishedPeers.has(player.peerId));
+    // #35: los desconectados (leave o stale) cuentan como resueltos — jamás
+    // mandarán rfin, así que no bloquean el cierre.
+    const allResolved = allPeersResolved(
+      this.players.map((player) => player.peerId),
+      [...this.finishedPeers.keys()],
+      [...this.disconnected],
+    );
     const graceExpired =
       this.firstFinish !== null && this.clock.now() - this.firstFinish.at >= RACE_FINISH_GRACE_MS;
-    if (!allFinished && !graceExpired) {
+    if (!allResolved && !graceExpired) {
       return;
     }
-    if (!this.raceOverSent && this.winnerPeerId === this.peerId) {
+    // #35: difunde la AUTORIDAD — el finisher de peerId menor (tiebreak del
+    // ranking), no el primer rfin visto localmente.
+    if (!this.raceOverSent && shouldBroadcastRaceOver([...this.finishedPeers.keys()], this.peerId)) {
       this.raceOverSent = true;
       this.client.sendRaceOver({ standings: this.classifyLocally() });
     }
@@ -430,15 +466,17 @@ describe('QA issue #9 V3 — robustez de la carrera con 3 clientes', () => {
     expect(ana.disconnected.has(beto.peerId)).toBe(true); // los demás lo vieron
     expect(ana.buffers.has(beto.peerId)).toBe(false); // su coche salió del mundo
 
-    // Sin race-over, los sobrevivientes corren hasta vencer la gracia.
+    // Sin race-over del ganador caído, los sobrevivientes corren hasta vencer
+    // la gracia; ahí difunde la AUTORIDAD viva: el finisher de peerId menor
+    // (ana — 'v3-ana' < 'v3-beto', el rfin de Beto llegó antes de caerse).
     const graceTicks = Math.ceil(RACE_FINISH_GRACE_MS / TICK_MS) + 2;
     runTicks(clock, [ana, carla], graceTicks);
 
-    // Nadie difundió race-over (el ganador ya no está): nadie lo recibió.
-    expect(ana.raceOverSent).toBe(false);
+    expect(ana.raceOverSent).toBe(true);
     expect(carla.raceOverSent).toBe(false);
-    expect(ana.raceOverReceived).toBeNull();
-    expect(carla.raceOverReceived).toBeNull();
+    expect(ana.raceOverReceived).toBeNull(); // nadie más difunde: nada llega
+    // Carla aceptó el race-over de la autoridad (una sola aceptación, #35).
+    expect(carla.raceOverReceived).toEqual(ana.concluded);
 
     // Ambos concluyeron con SU clasificación local determinista: idénticas.
     expect(ana.concluded).not.toBeNull();
@@ -490,8 +528,9 @@ describe('QA issue #9 V3 — robustez de la carrera con 3 clientes', () => {
     const frozenProgress = frozen.lap * lapLength + frozen.s;
     expect(frozenProgress).toBeGreaterThan(0);
 
-    // La carrera sigue: Beto termina primero y abre la gracia; al vencer,
-    // Carla cierra `disconnected` clasificada por ese último progreso.
+    // Carla cierra `disconnected` clasificada por ese último progreso; el
+    // cierre ahora es TEMPRANO: al terminar Ana todos los vivos están
+    // resueltos (Carla ya estaba disconnected) y difunde la autoridad (ana).
     runUntil(clock, clients, () => beto.winnerPeerId !== null);
     expect(beto.winnerPeerId).toBe(beto.peerId);
     const graceTicks = Math.ceil(RACE_FINISH_GRACE_MS / TICK_MS) + 2;
@@ -508,7 +547,9 @@ describe('QA issue #9 V3 — robustez de la carrera con 3 clientes', () => {
     // Ana y Beto terminaron antes de la gracia: finished con SU totalMs.
     expect(standings.find((row) => row.peerId === ana.peerId)!.status).toBe('finished');
     expect(standings.find((row) => row.peerId === beto.peerId)!.status).toBe('finished');
-    expect(beto.raceOverSent).toBe(true); // Beto es el ganador: difunde él.
+    // #35: la autoridad es el finisher de peerId menor (ana), no el ganador.
+    expect(ana.raceOverSent).toBe(true);
+    expect(beto.raceOverSent).toBe(false);
   });
 
   it('rstate con avance IMPOSIBLE se ignora; el próximo legítimo vuelve a pasar', () => {
