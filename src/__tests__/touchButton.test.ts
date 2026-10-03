@@ -8,6 +8,7 @@ import {
   type TouchButtonRect,
   type TouchButtonVisual,
 } from '../systems/TouchButton';
+import { computeSteerJoystickRect } from '../systems/SteerJoystick';
 import { TOUCH_HUD } from '../config/balance';
 
 /**
@@ -112,7 +113,7 @@ describe('TouchButton', () => {
 
   it('release con OTRO id no cambia el visual (botón sigue presionado)', () => {
     const fake = makeFakeVisual();
-    const button = new TouchButton({ action: 'left', rect: rect(0, 0), visual: fake.visual });
+    const button = new TouchButton({ action: 'throttle', rect: rect(0, 0), visual: fake.visual });
 
     button.press(7);
     button.release(8);
@@ -123,7 +124,7 @@ describe('TouchButton', () => {
 
   it('press de otro id no roba el botón ni duplica el feedback', () => {
     const fake = makeFakeVisual();
-    const button = new TouchButton({ action: 'right', rect: rect(0, 0), visual: fake.visual });
+    const button = new TouchButton({ action: 'brake', rect: rect(0, 0), visual: fake.visual });
 
     button.press(7);
     button.press(8);
@@ -157,7 +158,7 @@ describe('TouchButton', () => {
 
   it('contains: dentro sí, fuera no y respeta el padding de tolerancia', () => {
     // Rect 100×100 en (200, 300).
-    const button = new TouchButton({ action: 'left', rect: rect(200, 300), hitPadding: 12 });
+    const button = new TouchButton({ action: 'throttle', rect: rect(200, 300), hitPadding: 12 });
 
     expect(button.contains(250, 350)).toBe(true);
     expect(button.contains(200, 300)).toBe(true); // esquina interna (borde inclusive)
@@ -170,14 +171,14 @@ describe('TouchButton', () => {
   });
 
   it('sin padding el hit-test es exacto al rect', () => {
-    const button = new TouchButton({ action: 'left', rect: rect(0, 0, 50, 50) });
+    const button = new TouchButton({ action: 'turbo', rect: rect(0, 0, 50, 50) });
 
     expect(button.contains(50, 50)).toBe(false); // borde externo exclusivo
     expect(button.contains(49.9, 49.9)).toBe(true);
   });
 
   it('sin visual explícito usa el nulo: no explota con feedback', () => {
-    const button = new TouchButton({ action: 'left', rect: rect(0, 0) });
+    const button = new TouchButton({ action: 'drs', rect: rect(0, 0) });
 
     expect(() => {
       button.press(1);
@@ -198,15 +199,8 @@ describe('TouchButton', () => {
 });
 
 describe('ALL_TOUCH_ACTIONS', () => {
-  it('lista las 6 acciones del HUD en orden estable', () => {
-    expect(ALL_TOUCH_ACTIONS).toEqual([
-      'left',
-      'right',
-      'throttle',
-      'brake',
-      'turbo',
-      'drs',
-    ]);
+  it('lista las 4 acciones con botón del HUD en orden estable (el giro va por el joystick, issue #37)', () => {
+    expect(ALL_TOUCH_ACTIONS).toEqual(['throttle', 'brake', 'turbo', 'drs']);
   });
 });
 
@@ -239,7 +233,7 @@ describe('computeTouchButtonLayout (720×1280)', () => {
     }
   });
 
-  it('los 6 botones tienen el tamaño del balance y no se superponen', () => {
+  it('los 4 botones tienen el tamaño del balance y no se superponen', () => {
     for (const r of rects()) {
       expect(r.width).toBe(TOUCH_HUD.buttonSize);
       expect(r.height).toBe(TOUCH_HUD.buttonSize);
@@ -252,11 +246,19 @@ describe('computeTouchButtonLayout (720×1280)', () => {
     }
   });
 
-  it('◀ y ▶ viven en el cluster inferior izquierdo', () => {
-    expect(layout.left.x).toBe(TOUCH_HUD.marginX);
-    expect(layout.right.x).toBeGreaterThan(layout.left.x);
-    expect(layout.left.y).toBe(layout.right.y);
-    expect(layout.left.y + layout.left.height).toBe(1280 - TOUCH_HUD.marginBottom);
+  it('la zona del joystick (issue #37) ocupa el cluster inferior izquierdo, sin pisar botones', () => {
+    const zone = computeSteerJoystickRect(720, 1280);
+    // Mismo footprint que los viejos ◀ ▶: desde el margen, ancho de dos
+    // botones + gap, apoyado en la fila de abajo.
+    expect(zone.x).toBe(TOUCH_HUD.marginX);
+    expect(zone.width).toBe(TOUCH_HUD.buttonSize * 2 + TOUCH_HUD.gap);
+    expect(zone.height).toBe(TOUCH_HUD.buttonSize);
+    expect(zone.y + zone.height).toBe(1280 - TOUCH_HUD.marginBottom);
+
+    // Y no se superpone con NINGUNO de los 4 botones.
+    for (const action of ALL_TOUCH_ACTIONS) {
+      expect(overlap(zone, layout[action]), `joystick pisa el botón ${action}`).toBe(false);
+    }
   });
 
   it('los botones de acción viven en el cluster inferior derecho (GAS en la esquina)', () => {

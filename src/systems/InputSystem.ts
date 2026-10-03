@@ -27,6 +27,13 @@ export interface IInputState {
   turbo: boolean;
   /** DRS. */
   drs: boolean;
+  /**
+   * Eje analógico de giro (issue #37): −1 izquierda … +1 derecha. Las fuentes
+   * binarias (teclado) no lo reportan; el joystick deslizable lo reporta
+   * SIEMPRE que está en uso (0 en reposo o zona muerta). Cuando es distinto
+   * de 0, `steerDirection` lo prefiere sobre los flags.
+   */
+  steerAxis?: number;
 }
 
 /** Estado sin ninguna acción activa (base para clones y defaults). */
@@ -71,9 +78,12 @@ export class NullInputSource implements IInputSource {
 /**
  * Fusión pura de N estados: OR flag a flag. Cualquier fuente que pida una
  * acción la enciende en el estado fusionado. No muta los estados entrantes.
+ * El eje analógico fusiona por MAYOR MAGNITUD (el giro más pronunciado gana,
+ * el mismo espíritu del OR de flags); fuentes sin eje no participan.
  */
 export function mergeInputStates(states: readonly IInputState[]): IInputState {
   const merged: IInputState = { ...EMPTY_INPUT_STATE };
+  let bestAxis = 0;
   for (const state of states) {
     merged.left = merged.left || state.left;
     merged.right = merged.right || state.right;
@@ -81,15 +91,31 @@ export function mergeInputStates(states: readonly IInputState[]): IInputState {
     merged.brake = merged.brake || state.brake;
     merged.turbo = merged.turbo || state.turbo;
     merged.drs = merged.drs || state.drs;
+    const axis = state.steerAxis;
+    if (typeof axis === 'number' && Number.isFinite(axis) && Math.abs(axis) > Math.abs(bestAxis)) {
+      bestAxis = axis;
+    }
+  }
+  if (bestAxis !== 0) {
+    merged.steerAxis = bestAxis;
   }
   return merged;
 }
 
 /**
- * Dirección de giro pedida (pura): -1 izquierda, 1 derecha, 0 nada.
- * Si ambos lados están presionados se cancelan (comportamiento de Fase 1).
+ * Dirección de giro pedida: continua en [−1, 1] (issue #37).
+ *
+ * El eje analógico del joystick tiene prioridad cuando está activo (≠ 0):
+ * el deslizo modula el giro de forma proporcional. Sin eje (o centrado en
+ * zona muerta) se usa la fórmula binaria de siempre: −1 izquierda, 1 derecha,
+ * 0 nada — ambos lados a la vez se cancelan (comportamiento de Fase 1, y así
+ * sigue girando el teclado).
  */
 export function steerDirection(state: IInputState): number {
+  const axis = state.steerAxis;
+  if (typeof axis === 'number' && Number.isFinite(axis) && axis !== 0) {
+    return Math.min(Math.max(axis, -1), 1);
+  }
   return (state.left ? -1 : 0) + (state.right ? 1 : 0);
 }
 

@@ -40,8 +40,9 @@ export interface CarState {
 export interface CircuitInput {
   throttle: boolean;
   brake: boolean;
-  /** -1 izquierda, 0 recto, +1 derecha. */
-  steer: -1 | 0 | 1;
+  /** Giro continuo: −1 izquierda, 0 recto, +1 derecha; intermedios = giro
+   * proporcional del joystick táctil (issue #37). */
+  steer: number;
 }
 
 /**
@@ -118,8 +119,10 @@ export class CircuitPhysics {
     // Techo (pasto o punta) y piso: clamp final defensivo.
     speed = Math.min(Math.max(speed, 0), Math.min(ceiling, CIRCUIT.maxSpeed));
 
-    // 2) Giro: tasa que decae con la velocidad.
-    const steer = input.steer === -1 || input.steer === 1 ? input.steer : 0;
+    // 2) Giro: tasa que decae con la velocidad. El steer es continuo
+    // [−1, 1] (issue #37): se clampea defensivamente (NaN/no finito → 0).
+    const steerInput = input.steer;
+    const steer = Number.isFinite(steerInput) ? Math.min(Math.max(steerInput, -1), 1) : 0;
     const heading = Number.isFinite(state.heading)
       ? state.heading + steer * turnRateAtSpeed(speed) * step
       : 0;

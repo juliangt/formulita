@@ -107,6 +107,40 @@ describe('mergeInputStates', () => {
 
     expect(EMPTY_INPUT_STATE.left).toBe(false);
   });
+
+  it('fusión del eje analógico (issue #37): gana la MAGNITUD mayor', () => {
+    const merged = mergeInputStates([
+      { ...EMPTY_INPUT_STATE, steerAxis: -0.3 },
+      { ...EMPTY_INPUT_STATE, steerAxis: 0.9 },
+    ]);
+
+    expect(merged.steerAxis).toBeCloseTo(0.9, 12);
+  });
+
+  it('fusión del eje: fuentes sin eje no pisan al que lo trae', () => {
+    const merged = mergeInputStates([
+      { ...EMPTY_INPUT_STATE, steerAxis: -0.7 },
+      { ...EMPTY_INPUT_STATE, throttle: true },
+    ]);
+
+    expect(merged.steerAxis).toBeCloseTo(-0.7, 12);
+    expect(merged.throttle).toBe(true);
+  });
+
+  it('fusión del eje: eje 0 (zona muerta) no aparece en el estado fusionado', () => {
+    const merged = mergeInputStates([{ ...EMPTY_INPUT_STATE, steerAxis: 0 }]);
+
+    expect(merged.steerAxis).toBeUndefined();
+  });
+
+  it('fusión del eje: NaN/Infinity del eje se descartan (defensa ante fuentes rotas)', () => {
+    const merged = mergeInputStates([
+      { ...EMPTY_INPUT_STATE, steerAxis: Number.NaN },
+      { ...EMPTY_INPUT_STATE, steerAxis: 0.4 },
+    ]);
+
+    expect(merged.steerAxis).toBeCloseTo(0.4, 12);
+  });
 });
 
 describe('steerDirection', () => {
@@ -121,6 +155,32 @@ describe('steerDirection', () => {
 
   it('ambos lados presionados se cancelan', () => {
     expect(steerDirection({ ...EMPTY_INPUT_STATE, left: true, right: true })).toBe(0);
+  });
+
+  it('eje analógico activo (issue #37): el valor pasa continuo y con prioridad sobre los flags', () => {
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: 0.5 })).toBeCloseTo(0.5, 12);
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: -0.75 })).toBeCloseTo(-0.75, 12);
+    // El eje no nulo gana aunque hubiera flags encendidos (joystick en uso).
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, right: true, steerAxis: -0.5 })).toBeCloseTo(
+      -0.5,
+      12,
+    );
+  });
+
+  it('eje fuera de rango se clampea a ±1', () => {
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: 42 })).toBe(1);
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: -42 })).toBe(-1);
+  });
+
+  it('eje en zona muerta (0) cae a la fórmula binaria (teclado convive con el táctil)', () => {
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: 0, right: true })).toBe(1);
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: 0, left: true })).toBe(-1);
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: 0 })).toBe(0);
+  });
+
+  it('eje no finito se ignora y se usa la fórmula binaria (defensa)', () => {
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: Number.NaN, right: true })).toBe(1);
+    expect(steerDirection({ ...EMPTY_INPUT_STATE, steerAxis: Infinity })).toBe(0);
   });
 });
 
