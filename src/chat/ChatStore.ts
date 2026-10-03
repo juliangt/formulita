@@ -13,8 +13,11 @@
  *   peer BLOQUEADO (guarda de salida — ver `blockPeer`).
  * - ENTRADA: el adaptador de red llama `receiveRoomMessage`/`receiveDm` con
  *   lo que llegó; el store sanitiza de nuevo (misma regla), descarta los de
- *   peers bloqueados ANTES de que entren al estado de UI y devuelve el
- *   mensaje agregado o `null` (descartado).
+ *   peers bloqueados ANTES de que entren al estado de UI, aplica el
+ *   rate-limit de flood POR EMISOR (issue #35: ráfaga + ritmo sostenido; el
+ *   excedente se descarta en silencio) y devuelve el mensaje agregado o
+ *   `null` (descartado). El historial de cada hilo se recorta a
+ *   `CHAT_HISTORY_MAX` (FIFO).
  *
  * Además de los mensajes conversacionales, cada hilo puede recibir avisos de
  * SISTEMA locales (`appendSystemMessage`, C3): notas del propio cliente
@@ -31,7 +34,12 @@
  * los sistemas del juego).
  */
 
-import { CHAT_SEND_COOLDOWN_MS } from '../config/balance';
+import {
+  CHAT_FLOOD_BURST,
+  CHAT_FLOOD_REFILL_MS,
+  CHAT_HISTORY_MAX,
+  CHAT_SEND_COOLDOWN_MS,
+} from '../config/balance';
 import { sanitizeChatText } from '../net/protocol';
 import type { PlayerInfo } from '../net/protocol';
 
@@ -73,6 +81,14 @@ export interface ChatStoreOptions {
   readonly now?: () => number;
 }
 
+/** Estado del bucket de flood de un peer emisor (issue #35, qaT8). */
+interface FloodBucket {
+  /** Mensajes de presupuesto disponibles (fraccionarios entre recargas). */
+  tokens: number;
+  /** Instante (ms) de la última recarga/medición del bucket. */
+  last: number;
+}
+
 /**
  * Store del chat: MENSAJERÍA + no leídos + bloqueo por sesión + estado de
  * disponibilidad de los hilos de DM. Ver doc del módulo para el contrato
@@ -84,6 +100,7 @@ export class ChatStore {
   private readonly unread = new Map<string, number>();
   private readonly blocked = new Set<string>();
   private readonly available = new Map<string, boolean>();
+  private readonly flood = new Map<string, FloodBucket>();
   private readonly nowFn: () => number;
   private self: PlayerInfo;
 
@@ -229,6 +246,31 @@ export class ChatStore {
     return this.receive(from.peerId, from, text, at);
   }
 
+  /**
+   * true si la ENTRADA de un mensaje del peer en `at` tiene presupuesto de
+   * flood (issue #35, qaT8): token bucket POR EMISOR — ráfaga de
+   * `CHAT_FLOOD_BURST` y recarga de 1 mensaje cada `CHAT_FLOOD_REFILL_MS`.
+   * El bucket es del EMISOR, no del hilo: un mismo peer no reparte su flood
+   * entre room y sus DM. Cubre el hueco del throttle (que sólo mide el envío
+   * PROPIO) sin tocar los mensajes locales (eco propio y sistema no pasan
+   * por acá). Los rechazos no consumen token ni re-arman la ventana.
+   */
+  private allowsInflow(peerId: string, at: number): boolean {
+    const bucket = this.flood.get(peerId);
+    if (bucket === undefined) {
+      this.flood.set(peerId, { tokens: CHAT_FLOOD_BURST - 1, last: at });
+      return true;
+    }
+    const elapsed = Math.max(0, at - bucket.last);
+    const tokens = Math.min(CHAT_FLOOD_BURST, bucket.tokens + elapsed / CHAT_FLOOD_REFILL_MS);
+    if (tokens < 1) {
+      this.flood.set(peerId, { tokens, last: at });
+      return false;
+    }
+    this.flood.set(peerId, { tokens: tokens - 1, last: at });
+    return true;
+  }
+
   /** Núcleo compartido de la recepción: bloqueo → descarte temprano. */
   private receive(threadId: string, from: PlayerInfo, rawText: string, at: number): ChatMessage | null {
     if (this.isBlocked(from.peerId)) {
@@ -239,6 +281,12 @@ export class ChatStore {
       return null;
     }
     const mine = from.peerId === this.self.peerId;
+    // Rate-limit de ENTRADA (qaT8): sólo mensaje ajeno. El excedente de un
+    // peer en flood se descarta EN SILENCIO: ni mensaje, ni hilo nuevo, ni
+    // no leídos — nada de marcadores falsos en el historial.
+    if (!mine && !this.allowsInflow(from.peerId, at)) {
+      return null;
+    }
     const message: ChatMessage = {
       threadId,
       fromPeerId: from.peerId,
@@ -268,6 +316,24 @@ export class ChatStore {
     thread.push(message);
     if (!message.mine && !message.system) {
       this.unread.set(message.threadId, (this.unread.get(message.threadId) ?? 0) + 1);
+    }
+    // Tope de historial (issue #35, qaT8): FIFO — llegado CHAT_HISTORY_MAX,
+    // cada mensaje nuevo recorta los más viejos. Y el badge no promete lo que
+    // ya no está: los no leídos se clampean a los mensajes AJENOS que el hilo
+    // conserva (los recortados sin leer ya no se pueden leer).
+    const excess = thread.length - CHAT_HISTORY_MAX;
+    if (excess > 0) {
+      thread.splice(0, excess);
+      let foreignKept = 0;
+      for (const kept of thread) {
+        if (!kept.mine && !kept.system) {
+          foreignKept += 1;
+        }
+      }
+      const current = this.unread.get(message.threadId) ?? 0;
+      if (current > foreignKept) {
+        this.unread.set(message.threadId, foreignKept);
+      }
     }
   }
 
@@ -415,15 +481,16 @@ export class ChatStore {
   }
 
   /**
-   * Vacia mensajes, no leídos, cooldowns y disponibilidad (al salir de la
-   * partida / volver al menú). CONSERVA el bloqueo de la sesión: es una
-   * decisión sobre QUIÉN es el otro jugador, no sobre una partida puntual,
-   * y sigue vigente en la próxima sala a la que entre.
+   * Vacia mensajes, no leídos, cooldowns, disponibilidad y estado de flood
+   * (al salir de la partida / volver al menú). CONSERVA el bloqueo de la
+   * sesión: es una decisión sobre QUIÉN es el otro jugador, no sobre una
+   * partida puntual, y sigue vigente en la próxima sala a la que entre.
    */
   clear(): void {
     this.threads.clear();
     this.lastSentAt.clear();
     this.unread.clear();
     this.available.clear();
+    this.flood.clear();
   }
 }
