@@ -16,6 +16,7 @@
  *    handlers) — el siguiente lobby crea uno fresco.
  */
 
+import type { ChatPayload, PlayerInfo, StartPayload } from './protocol';
 import type { NetClient } from './NetClient';
 
 /** Clave del registry de Phaser donde vive el cliente en traspaso. */
@@ -50,4 +51,70 @@ export function takeSessionNetClient(registry: RegistrySlice): NetClient | null 
     typeof candidate.sendState === 'function' &&
     typeof candidate.destroy === 'function';
   return looksLikeClient ? (raw as NetClient) : null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Vinculación del lobby (issue #35 — handlers zombie tras el handoff) */
+/* ------------------------------------------------------------------ */
+
+/** Handlers del lobby sobre el NetClient (los seis eventos que consume). */
+export interface LobbyNetHandlers {
+  /** `onError`: feedback de error en el status del lobby. */
+  onStatus(message: string): void;
+  /** `onRoomFull`: sala llena al entrar. */
+  onRoomFull(): void;
+  /** `onRosterChange`: roster vivo. */
+  onRosterChange(roster: PlayerInfo[], hostPeerId: string | null): void;
+  /** `onHostChange`: migración de anfitrión. */
+  onHostChange(hostPeerId: string): void;
+  /** `onStart`: el anfitrión difundió el arranque. */
+  onStart(payload: StartPayload): void;
+  /** `onChat`: chat de sala al store de sesión. */
+  onChat(fromPeerId: string, payload: ChatPayload): void;
+}
+
+/**
+ * Suscribe TODOS los handlers del lobby y devuelve su desuscripción TOTAL.
+ *
+ * Issue #35: al arrancar la carrera el lobby sólo desuscribía `onChat`;
+ * `onStart`/`onRosterChange`/`onHostChange`/`onRoomFull`/`onError` quedaban
+ * vivos toda la partida apuntando a widgets destruidos y a `startRace()` —
+ * un `start` de un anfitrión migrado reiniciaba la carrera de todos. El
+ * lobby DEBE llamar el detach devuelto ANTES del handoff (en `startRace`),
+ * no en el SHUTDOWN: ahí los handlers ya habrían hecho daño.
+ */
+export function bindLobbyNet(client: NetClient, handlers: LobbyNetHandlers): () => void {
+  const unsubscribe: ReadonlyArray<() => void> = [
+    client.onError(handlers.onStatus),
+    client.onRoomFull(handlers.onRoomFull),
+    client.onRosterChange(handlers.onRosterChange),
+    client.onHostChange(handlers.onHostChange),
+    client.onStart(handlers.onStart),
+    client.onChat(handlers.onChat),
+  ];
+  return () => {
+    for (const off of unsubscribe) {
+      off();
+    }
+  };
+}
+
+/** Resultado de una entrada a sala (create/join) del lobby. */
+export interface LobbyEntryResult {
+  /** true SOLO si el cliente quedó dentro de una sala. */
+  readonly entered: boolean;
+  /** Palabra vigente ('' si la entrada falló). */
+  readonly roomWord: string;
+}
+
+/**
+ * Evalúa la entrada SIN confiar en el fire-and-forget: `create`/`join` son
+ * síncronos y pueden fallar ANTES de abrir sala (nombre inválido, transporte
+ * que lanza); en ese caso `roomWord` queda null, así que la palabra vigente
+ * es LA señal de éxito. Issue #35: `joined` sólo con sala real, para que la
+ * UI no pinte la sala ni pise el error que `onError` ya dejó en pantalla.
+ */
+export function evaluateLobbyEntry(client: Pick<NetClient, 'roomWord'>): LobbyEntryResult {
+  const roomWord = client.roomWord ?? '';
+  return { entered: roomWord.length > 0, roomWord };
 }
