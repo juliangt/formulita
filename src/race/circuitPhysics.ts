@@ -85,8 +85,14 @@ export class CircuitPhysics {
   /**
    * Avanza `state` un paso de `dt` segundos según `input` (muta y devuelve el
    * MISMO objeto, estilo SpeedSystem). `dt` no finito o ≤ 0: no-op estricto.
+   *
+   * #39 — `speedCapPx` (opcional, default `CIRCUIT.maxSpeed`): techo de
+   * velocidad del paso, consumido por el desgaste de neumáticos del GRAN
+   * PREMIO (la goma gastada recorta la punta). El pasto sigue mandando: el
+   * techo efectivo es el MÍNIMO entre pasto, cap y punta global. Un cap
+   * basura (no finito, ≤ 0) degrada al default — sin castigo fantasma.
    */
-  step(state: CarState, dt: number, input: CircuitInput = defaultCircuitInput()): CarState {
+  step(state: CarState, dt: number, input: CircuitInput = defaultCircuitInput(), speedCapPx: number = CIRCUIT.maxSpeed): CarState {
     if (!Number.isFinite(dt) || dt <= 0) {
       return state;
     }
@@ -100,6 +106,10 @@ export class CircuitPhysics {
     const halfWidth = this.widthPx / 2;
     const onGrass = Math.abs(projection.lateral) > halfWidth;
     const ceiling = CIRCUIT.maxSpeed * (onGrass ? CIRCUIT.grassMaxSpeedFactor : 1);
+    const cap =
+      Number.isFinite(speedCapPx) && speedCapPx > 0
+        ? Math.min(speedCapPx, CIRCUIT.maxSpeed)
+        : CIRCUIT.maxSpeed;
 
     if (input.brake) {
       // El freno gana si se pisa junto con el acelerador (prioridad de seguridad).
@@ -111,8 +121,8 @@ export class CircuitPhysics {
       speed = Math.max(0, speed - CIRCUIT.coastDrag * step);
     }
 
-    // Techo (pasto o punta) y piso: clamp final defensivo.
-    speed = Math.min(Math.max(speed, 0), Math.min(ceiling, CIRCUIT.maxSpeed));
+    // Techo (pasto, desgaste o punta) y piso: clamp final defensivo.
+    speed = Math.min(Math.max(speed, 0), Math.min(ceiling, cap));
 
     // 2) Giro: tasa que decae con la velocidad.
     const steer = input.steer === -1 || input.steer === 1 ? input.steer : 0;

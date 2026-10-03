@@ -79,6 +79,12 @@ export interface RaceSceneInit {
    * la carrera vs CPU siempre puede arrancar sin red).
    */
   difficulty?: CpuDifficulty;
+  /**
+   * #39 — toggle DESGASTE de neumáticos del picker (sólo vs CPU): `true`
+   * activa la degradación de goma por kilometraje/golpes. Ausente o basura
+   * → `false` (carrera arcade, default histórico).
+   */
+  wear?: boolean;
 }
 
 /** Primera pista del registro (default de la escena). */
@@ -114,13 +120,20 @@ export function parseRaceSceneInit(raw: unknown): RaceSceneInit {
 
   // #14 — modo vs CPU: corre 100% local, así que SIEMPRE puede arrancar
   // (sin el gate "payload completo" del multi). Dificultad inválida →
-  // default; seed inválida → 0 (parrilla fija).
+  // default; seed inválida → 0 (parrilla fija). #39: el toggle de desgaste
+  // sólo viaja `true` con booleano real (default `false` = arcade).
   if (record.mode === 'vs-cpu') {
     const seed =
       typeof record.seed === 'number' && Number.isInteger(record.seed) && record.seed >= 0
         ? record.seed
         : 0;
-    return { trackId, mode: 'vs-cpu', difficulty: parseCpuDifficulty(record.difficulty), seed };
+    return {
+      trackId,
+      mode: 'vs-cpu',
+      difficulty: parseCpuDifficulty(record.difficulty),
+      seed,
+      wear: record.wear === true,
+    };
   }
 
   return { trackId, mode: 'practice' };
