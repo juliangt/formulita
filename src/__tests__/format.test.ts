@@ -7,6 +7,7 @@ import {
   formatLapMs,
   formatRaceGaps,
   formatScore,
+  formatWear,
 } from '../ui/format';
 
 /**
@@ -148,5 +149,20 @@ describe('formatRaceGaps — línea de gaps del HUD vs CPU (#14, V3)', () => {
     expect(formatRaceGaps(Number.NaN, Number.POSITIVE_INFINITY)).toBe('');
     expect(formatRaceGaps(1, Number.NaN)).toBe('+1.0s');
     expect(formatRaceGaps(Number.NEGATIVE_INFINITY, -1)).toBe('-1.0s');
+  });
+});
+
+describe('formatWear — indicador de neumáticos del GRAN PREMIO (#39)', () => {
+  it('muestra el porcentaje restante con etiqueta', () => {
+    expect(formatWear(100)).toBe('NEUMÁTICOS 100%');
+    expect(formatWear(87.4)).toBe('NEUMÁTICOS 87%');
+    expect(formatWear(0)).toBe('NEUMÁTICOS 0%');
+  });
+
+  it('es defensivo: se clampea a [0, 100] y el basura degrada a 0', () => {
+    expect(formatWear(120)).toBe('NEUMÁTICOS 100%');
+    expect(formatWear(-5)).toBe('NEUMÁTICOS 0%');
+    expect(formatWear(Number.NaN)).toBe('NEUMÁTICOS 0%');
+    expect(formatWear(Number.POSITIVE_INFINITY)).toBe('NEUMÁTICOS 0%');
   });
 });

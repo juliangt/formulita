@@ -26,6 +26,7 @@
  */
 
 import { CIRCUIT } from '../config/balance';
+import { MAX_DT } from './circuitPhysics';
 import type { TrackPath } from './trackPath';
 
 /** Datos del evento de vuelta completada. */
@@ -123,7 +124,12 @@ export class LapTracker {
     }
     const wrapped = ((s % this.path.totalLength) + this.path.totalLength)
       % this.path.totalLength;
-    const delta = Math.max(0, deltaMs);
+    // Techo = MAX_DT de los sistemas puros. DECISIÓN DE SEMÁNTICA (issue #35):
+    // el tiempo en background NO cuenta para la carrera — justo para todos:
+    // nadie corre mientras está en background — y el clamp descarta ese tramo
+    // exactamente. Sin techo, totalMs/currentLapMs lo absorben y el `rfin`
+    // propio reporta tiempos absurdos que corrompen la clasificación final.
+    const delta = Math.min(Math.max(0, deltaMs), MAX_DT * 1000);
     this.totalMsValue += delta;
 
     if (this.lastS !== null) {

@@ -7,6 +7,11 @@ import { getSaveRepository } from '../data/LocalStorageSaveRepository';
 import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { TRACKS, type TrackId } from '../race/tracks';
 import {
+  defaultGpStorage,
+  loadGpSettings,
+  saveGpWearEnabled,
+} from '../race/gpSettings';
+import {
   CPU_DIFFICULTY_LABELS,
   DEFAULT_CPU_DIFFICULTY,
   parseCpuDifficulty,
@@ -175,6 +180,11 @@ export class MenuScene extends Phaser.Scene {
   /** Botones del selector (se reconstruyen al cambiar la selección). */
   private difficultyButtons: MenuButton[] = [];
 
+  /* #39 — toggle DESGASTE del picker: se LEE del storage al abrir el picker
+   * y se PERSISTE en cada alternancia (única fuente: `race/gpSettings`). */
+  private wearEnabled = false;
+  private wearButton: MenuButton | null = null;
+
   constructor() {
     super(MenuScene.KEY);
   }
@@ -322,7 +332,7 @@ export class MenuScene extends Phaser.Scene {
   /** Ayuda de controles según el dispositivo (táctil vs teclado). */
   private createControlsHelp(centerX: number, isTouch: boolean): void {
     const lines = isTouch
-      ? ['DOBLA CON ◀ ▶', 'GAS ACELERA · BRK FRENA', 'TURBO Y DRS EN PANTALLA', 'BOTÓN II PAUSA']
+      ? ['DESLIZA EL DEDO PARA DOBLAR', 'GAS ACELERA · BRK FRENA', 'TURBO Y DRS EN PANTALLA', 'BOTÓN II PAUSA']
       : [
           '←→ / A·D  DOBLAR  ·  ESPACIO  ACELERAR',
           'SHIFT  TURBO  ·  Z  FRENO  ·  X  DRS',
@@ -356,8 +366,10 @@ export class MenuScene extends Phaser.Scene {
   private readonly startGame = (): void => {
     // Con una subpantalla abierta (EN LÍNEA o selector de pistas), Enter/
     // Espacio son del input de esa pantalla: no arrancan una carrera sola
-    // atravesada.
-    if (this.onlineOverlay || this.trackOverlay) {
+    // atravesada. #35 — el chat (que se abre DESPUÉS de cerrar la
+    // subpantalla) también cuenta: con su input DOM sin foco, Enter/Espacio
+    // llegan acá y arrancarían una carrera DEBAJO del overlay.
+    if (this.onlineOverlay || this.trackOverlay || this.scene.isActive(ChatScene.KEY)) {
       return;
     }
     // Issue #27 — telemetría (fire-and-forget, sin PII): el JUGAR del menú
@@ -578,6 +590,10 @@ export class MenuScene extends Phaser.Scene {
     }
     const centerX = this.scale.width / 2;
     const bus = getSessionEventBus(this.registry);
+    // #39 — la preferencia se lee FRESCA al abrir el picker (única fuente:
+    // storage de `race/gpSettings`; entre sesiones sobrevive, REINTENTAR
+    // también la lee de ahí).
+    this.wearEnabled = loadGpSettings(defaultGpStorage()).wearEnabled;
 
     const overlay = this.add.container(0, 0).setDepth(100);
     const dim = this.add
@@ -625,6 +641,10 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5),
     );
     this.rebuildDifficultyRow(overlay, centerX, bus);
+
+    // #39 — toggle DESGASTE: un solo botón pixel que alterna SÍ (verde, goma
+    // se desgasta) / NO (gris, arcade pura). Persiste al instante.
+    this.rebuildWearRow(overlay, centerX, bus);
 
     overlay.add(
       new MenuButton(this, {
@@ -679,6 +699,34 @@ export class MenuScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * (Re)construye el toggle DESGASTE (#39): al alternar el botón se
+   * redibuja para mostrar el estado (SÍ verde / NO gris) y persiste.
+   */
+  private rebuildWearRow(
+    overlay: Phaser.GameObjects.Container,
+    centerX: number,
+    bus: EventBus<GameEvents>,
+  ): void {
+    this.wearButton?.destroy();
+    this.wearButton = new MenuButton(this, {
+      x: centerX,
+      y: TRACK_PICKER.wearRowY,
+      width: TRACK_PICKER.wearButtonWidth,
+      height: TRACK_PICKER.wearButtonHeight,
+      label: `DESGASTE: ${this.wearEnabled ? 'SÍ' : 'NO'}`,
+      tint: this.wearEnabled ? 0x1d8f43 : 0x525868,
+      fontSize: TRACK_PICKER.wearFontSize,
+      bus,
+      onPress: () => {
+        this.wearEnabled = !this.wearEnabled;
+        saveGpWearEnabled(defaultGpStorage(), this.wearEnabled);
+        this.rebuildWearRow(overlay, centerX, bus);
+      },
+    });
+    overlay.add(this.wearButton.container);
+  }
+
   /** Fila de pista: botón con el nombre + hint del circuito real debajo. */
   private trackRow(
     centerX: number,
@@ -729,23 +777,28 @@ export class MenuScene extends Phaser.Scene {
     // el modo 'gran_premio' (RaceScene vs CPU). `dificultad` viaja con el id
     // EXACTO de `CpuDifficulty` ('easy' | 'normal' | 'hard', default
     // 'normal' — el mismo que se le pasa a RaceScene en el init data).
+    // #39: `desgaste` reporta el toggle elegido (mismo evento, campo nuevo).
     trackEvent('partida_iniciada', {
       modo: 'gran_premio',
       pista: trackId,
       dificultad: this.selectedDifficulty,
+      desgaste: this.wearEnabled,
     });
     this.scene.start(RaceScene.KEY, {
       trackId,
       mode: 'vs-cpu',
       difficulty: this.selectedDifficulty,
       seed: Date.now(),
+      wear: this.wearEnabled,
     });
   };
 
   private readonly closeTrackPicker = (): void => {
-    // Los botones de dificultad viven dentro del overlay: el destroy del
-    // contenedor los tira; acá sólo se sueltan las referencias.
+    // Los botones de dificultad y el toggle de desgaste viven dentro del
+    // overlay: el destroy del contenedor los tira; acá sólo se sueltan las
+    // referencias.
     this.difficultyButtons = [];
+    this.wearButton = null;
     this.trackOverlay?.destroy();
     this.trackOverlay = null;
   };

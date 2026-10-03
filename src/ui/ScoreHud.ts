@@ -78,7 +78,9 @@ export class ScoreHud {
     const unsubscribeCoins = bus.on('coins', (coins) => {
       if (coins !== this.lastCoins) {
         this.lastCoins = coins;
-        this.coinsText.setText(`x ${Math.max(0, Math.floor(coins))}`);
+        // Mismo patrón defensivo de Speedometer/format: `Math.max(0, NaN)` es
+        // NaN, no 0 — un no finito pinta el neutro del widget.
+        this.coinsText.setText(`x ${Number.isFinite(coins) ? Math.max(0, Math.floor(coins)) : 0}`);
         this.repositionCoinIcon();
       }
     });

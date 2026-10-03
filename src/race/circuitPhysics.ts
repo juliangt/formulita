@@ -40,8 +40,9 @@ export interface CarState {
 export interface CircuitInput {
   throttle: boolean;
   brake: boolean;
-  /** -1 izquierda, 0 recto, +1 derecha. */
-  steer: -1 | 0 | 1;
+  /** Giro continuo: −1 izquierda, 0 recto, +1 derecha; intermedios = giro
+   * proporcional del joystick táctil (issue #37). */
+  steer: number;
 }
 
 /**
@@ -72,8 +73,12 @@ export function turnRateAtSpeed(speed: number): number {
 /**
  * dt máximo aceptado por paso (anti-espiral de la muerte), igual criterio
  * que SpeedSystem: hitches se acotan; no finito o ≤ 0 es no-op.
+ *
+ * Constante COMPARTIDA (issue #35): es el techo de delta de los sistemas
+ * puros — cualquier consumidor de tiempo fuera de src/systems (LapTracker)
+ * importa ésta en lugar de duplicar el número.
  */
-const MAX_DT = 0.25;
+export const MAX_DT = 0.25;
 
 export class CircuitPhysics {
   constructor(
@@ -85,8 +90,14 @@ export class CircuitPhysics {
   /**
    * Avanza `state` un paso de `dt` segundos según `input` (muta y devuelve el
    * MISMO objeto, estilo SpeedSystem). `dt` no finito o ≤ 0: no-op estricto.
+   *
+   * #39 — `speedCapPx` (opcional, default `CIRCUIT.maxSpeed`): techo de
+   * velocidad del paso, consumido por el desgaste de neumáticos del GRAN
+   * PREMIO (la goma gastada recorta la punta). El pasto sigue mandando: el
+   * techo efectivo es el MÍNIMO entre pasto, cap y punta global. Un cap
+   * basura (no finito, ≤ 0) degrada al default — sin castigo fantasma.
    */
-  step(state: CarState, dt: number, input: CircuitInput = defaultCircuitInput()): CarState {
+  step(state: CarState, dt: number, input: CircuitInput = defaultCircuitInput(), speedCapPx: number = CIRCUIT.maxSpeed): CarState {
     if (!Number.isFinite(dt) || dt <= 0) {
       return state;
     }
@@ -100,6 +111,10 @@ export class CircuitPhysics {
     const halfWidth = this.widthPx / 2;
     const onGrass = Math.abs(projection.lateral) > halfWidth;
     const ceiling = CIRCUIT.maxSpeed * (onGrass ? CIRCUIT.grassMaxSpeedFactor : 1);
+    const cap =
+      Number.isFinite(speedCapPx) && speedCapPx > 0
+        ? Math.min(speedCapPx, CIRCUIT.maxSpeed)
+        : CIRCUIT.maxSpeed;
 
     if (input.brake) {
       // El freno gana si se pisa junto con el acelerador (prioridad de seguridad).
@@ -111,11 +126,13 @@ export class CircuitPhysics {
       speed = Math.max(0, speed - CIRCUIT.coastDrag * step);
     }
 
-    // Techo (pasto o punta) y piso: clamp final defensivo.
-    speed = Math.min(Math.max(speed, 0), Math.min(ceiling, CIRCUIT.maxSpeed));
+    // Techo (pasto, desgaste o punta) y piso: clamp final defensivo.
+    speed = Math.min(Math.max(speed, 0), Math.min(ceiling, cap));
 
-    // 2) Giro: tasa que decae con la velocidad.
-    const steer = input.steer === -1 || input.steer === 1 ? input.steer : 0;
+    // 2) Giro: tasa que decae con la velocidad. El steer es continuo
+    // [−1, 1] (issue #37): se clampea defensivamente (NaN/no finito → 0).
+    const steerInput = input.steer;
+    const steer = Number.isFinite(steerInput) ? Math.min(Math.max(steerInput, -1), 1) : 0;
     const heading = Number.isFinite(state.heading)
       ? state.heading + steer * turnRateAtSpeed(speed) * step
       : 0;

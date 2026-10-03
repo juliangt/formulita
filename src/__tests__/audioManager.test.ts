@@ -1168,16 +1168,27 @@ describe('AudioManager — dron del motor', () => {
     bus.emit('speed', 600);
     expect(ctx.oscillators[0].frequency.valuesOf('setTarget').length).toBe(targetsWhilePaused);
 
-    // Reanudar: dos osciladores NUEVOS (los viejos quedaron con stop programado).
+    // Reanudar (qaT9, issue #35): dentro de la ventana de release el MISMO
+    // grafo se readopta (cancela el fade y vuelve a subir la ganancia). Antes
+    // se creaban dos osciladores NUEVOS superpuestos al dron viejo que aún
+    // se oía durante el fade (0.30 s) — ese era el bug.
     bus.emit('game-resumed', undefined);
-    expect(ctx.oscillators.length).toBe(4);
-    expect(ctx.oscillators[2].started.length).toBe(1);
-    expect(ctx.oscillators[3].started.length).toBe(1);
+    expect(ctx.oscillators.length).toBe(2);
+    expect(ctx.oscillators[0].started.length).toBe(1);
+    expect(ctx.oscillators[1].started.length).toBe(1);
+    // Y el dron rearmado vuelve a seguir la velocidad (mismos osciladores).
+    bus.emit('speed', 600);
+    expect(ctx.oscillators[0].frequency.valuesOf('setTarget').length).toBe(
+      targetsWhilePaused + 1,
+    );
 
-    // Abandono (MENÚ desde la pausa): corta el dron sin SFX de crash.
+    // Abandono (MENÚ desde la pausa): corta el dron sin SFX de crash. Cada
+    // oscilador acumula su historial de stops: el release de la pausa, el
+    // re-arme "lejos" de la readopción y el release final del abandono.
     const sourcesBefore = ctx.sources.length;
     bus.emit('game-aborted', undefined);
-    expect(ctx.oscillators[2].stopped.length).toBe(1);
+    expect(ctx.oscillators[0].stopped.length).toBe(3);
+    expect(ctx.oscillators[1].stopped.length).toBe(3);
     expect(ctx.sources.length).toBe(sourcesBefore);
   });
 });

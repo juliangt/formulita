@@ -13,6 +13,7 @@ import { getPlayerProfileRepository } from '../data/PlayerProfileRepository';
 import { parseGameOverData, type GameOverData } from '../data/types';
 import { parseMultiGameOverData, type MultiGameOverData } from '../net/protocol';
 import { defaultGpStorage, saveGpResult } from '../race/gpRecords';
+import { loadGpSettings } from '../race/gpSettings';
 import {
   CPU_DIFFICULTY_LABELS,
   parseRaceMultiResults,
@@ -743,8 +744,10 @@ export class GameOverScene extends Phaser.Scene {
   }
 
   /**
-   * REINTENTAR (vs CPU): RaceScene con la MISMA pista + dificultad y una
-   * seed fresca de parrilla (misma política que la salida desde el menú).
+   * REINTENTAR (vs CPU): RaceScene con la MISMA pista + dificultad + toggle
+   * DESGASTE (leído FRESCO de `race/gpSettings`, la misma fuente del picker
+   * — #39) y una seed fresca de parrilla (misma política que la salida desde
+   * el menú).
    */
   private readonly retryRaceVsCpu = (): void => {
     const data = this.vsCpuData;
@@ -753,6 +756,7 @@ export class GameOverScene extends Phaser.Scene {
       mode: 'vs-cpu',
       difficulty: data?.difficulty,
       seed: Date.now(),
+      wear: loadGpSettings(defaultGpStorage()).wearEnabled,
     });
   };
 

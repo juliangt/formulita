@@ -105,6 +105,22 @@ export function visibleChatMessages(
   return messages.slice(Math.max(0, messages.length - maxVisible));
 }
 
+/**
+ * true si la lista del hilo quedó vieja y hay que re-renderizar (issue #35,
+ * qaT8): cambió la cantidad de mensajes O el ÚLTIMO. La cola se compara por
+ * IDENTIDAD porque con el tope de historial (`CHAT_HISTORY_MAX`) el largo se
+ * clava y un mensaje nuevo sólo se nota por la cola — cada mensaje aceptado
+ * es un objeto nuevo del store, así que la comparación es exacta y barata.
+ */
+export function chatListStale(
+  messages: readonly ChatMessage[],
+  lastCount: number,
+  lastTail: ChatMessage | null,
+): boolean {
+  const tail = messages.length > 0 ? messages[messages.length - 1] : null;
+  return messages.length !== lastCount || tail !== lastTail;
+}
+
 /** Estado del botón ENVIAR según el cooldown restante del hilo. */
 export interface ChatSendState {
   readonly label: string;
@@ -302,8 +318,8 @@ export interface ChatPanelConfig {
 
 /**
  * Panel de chat: lista + input + ENVIAR + cooldown. La escena llama
- * `refresh(now)` por frame (repinta solo si cambió la cuenta de mensajes o el
- * estado del botón) y lo destruye en su SHUTDOWN.
+ * `refresh(now)` por frame (repinta solo si la lista cambió — ver
+ * `chatListStale` — o el estado del botón) y lo destruye en su SHUTDOWN.
  */
 export class ChatPanel {
   private readonly scene: Phaser.Scene;
@@ -321,6 +337,7 @@ export class ChatPanel {
   private readonly sendButton: MenuButton;
   private messageTexts: Phaser.GameObjects.Text[] = [];
   private lastMessageCount = -1;
+  private lastTail: ChatMessage | null = null;
   private lastSendLabel = '';
 
   constructor(scene: Phaser.Scene, config: ChatPanelConfig) {
@@ -376,16 +393,18 @@ export class ChatPanel {
   }
 
   /**
-   * Sincroniza la vista con el store: repinta la lista cuando cambia la
-   * cantidad de mensajes, el botón ENVIAR según el cooldown visible y el
-   * input según el estado de envío del hilo (C3: desconectado o peer
-   * bloqueado — el input se deshabilita con el aviso de placeholder).
+   * Sincroniza la vista con el store: repinta la lista cuando cambió (largo
+   * o último mensaje — con el tope de historial el largo se clava, ver
+   * `chatListStale`), el botón ENVIAR según el cooldown visible y el input
+   * según el estado de envío del hilo (C3: desconectado o peer bloqueado —
+   * el input se deshabilita con el aviso de placeholder).
    */
   refresh(now?: number): void {
     const at = now ?? this.now();
     const messages = this.store.getMessages(this.threadId);
-    if (messages.length !== this.lastMessageCount) {
+    if (chatListStale(messages, this.lastMessageCount, this.lastTail)) {
       this.lastMessageCount = messages.length;
+      this.lastTail = messages.length > 0 ? messages[messages.length - 1] : null;
       this.renderMessages(messages);
     }
     const blockedState = this.sendBlockedState();

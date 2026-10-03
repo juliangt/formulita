@@ -263,28 +263,34 @@ export const MENU = {
 /**
  * Layout del overlay selector de GRAN PREMIO de MenuScene (V1, issue #9):
  * panel centrado con título, una fila por pista (botón con el nombre + hint
- * del circuito real que lo inspira), selector de DIFICULTAD del rival (#14)
- * y CERRAR. Mismo patrón de la subpantalla EN LÍNEA.
+ * del circuito real que lo inspira), selector de DIFICULTAD del rival (#14),
+ * toggle DESGASTE (#39) y CERRAR. Mismo patrón de la subpantalla EN LÍNEA.
  *
  * Issue #26: con la 6ª pista (GÁLVEZ) el paso de 120 px hacía que la última
  * fila cayera sobre el rótulo de dificultad. Se compactó la fila (alto 76,
  * hint 14 px, paso 102) manteniendo panel, dificultad y CERRAR en su lugar:
  * la última fila queda ~18 px por encima de DIFICULTAD DEL RIVAL y todo el
  * bloque vive dentro del panel (invariante fijado en `balance.test.ts`).
+ *
+ * Issue #39: el toggle DESGASTE (un solo botón que alterna SÍ/NO) entra
+ * entre la fila de dificultad y CERRAR: el panel crece hacia abajo (hasta
+ * 1250, el lienzo es de 1280) y las filas se compactan un paso más para
+ * conservar el aire de 16 px entre bloques (invariante extendido en
+ * `balance.test.ts`).
  */
 export const TRACK_PICKER = {
   /** Opacidad del velo oscuro sobre el menú (0–1). */
   dimAlpha: 0.86,
-  /** Centro Y y tamaño del panel. */
-  panelY: 700,
+  /** Centro Y y tamaño del panel (spans 164–1260 sobre el lienzo de 1280). */
+  panelY: 712,
   panelWidth: 620,
-  panelHeight: 1050,
+  panelHeight: 1096,
   /** Y del título ENTRENAR y del subtítulo (centros). */
   titleY: 300,
   subtitleY: 368,
   /** Filas de pistas: centro Y de la primera y paso entre filas. */
-  rowStartY: 444,
-  rowStep: 102,
+  rowStartY: 430,
+  rowStep: 100,
   /** Tamaño del botón de cada fila. */
   rowWidth: 540,
   rowHeight: 76,
@@ -292,21 +298,28 @@ export const TRACK_PICKER = {
   hintGap: 8,
   hintFontSize: 14,
   /* #14 — selector de dificultad del rival: rótulo + 3 botones pixel
-   * (FÁCIL / NORMAL / DIFÍCIL) entre las filas de pistas y CERRAR. */
+   * (FÁCIL / NORMAL / DIFÍCIL) entre las filas de pistas y el toggle. */
   /** Y del rótulo DIFICULTAD (centro) y su fuente. */
-  difficultyLabelY: 1044,
+  difficultyLabelY: 1020,
   difficultyLabelFontSize: 24,
   /** Y del centro de la fila de botones de dificultad. */
-  difficultyRowY: 1088,
+  difficultyRowY: 1062,
   /** Tamaño de cada botón de dificultad y offsets X desde el centro. */
   difficultyButtonWidth: 180,
-  difficultyButtonHeight: 60,
+  difficultyButtonHeight: 56,
   difficultyButtonOffsetX: 200,
   difficultyFontSize: 24,
+  /* #39 — toggle DESGASTE: un solo botón que alterna SÍ (verde) / NO (gris),
+   * entre la fila de dificultad y CERRAR. */
+  /** Y del centro del botón DESGASTE, su tamaño y fuente. */
+  wearRowY: 1134,
+  wearButtonWidth: 340,
+  wearButtonHeight: 52,
+  wearFontSize: 24,
   /** Botón CERRAR. */
-  closeY: 1170,
+  closeY: 1218,
   closeWidth: 300,
-  closeHeight: 88,
+  closeHeight: 80,
 } as const;
 
 /**
@@ -654,6 +667,97 @@ export const RACE_VS_CPU = {
 } as const;
 
 /* ------------------------------------------------------------------ */
+/* Gran Premio vs CPU — contactos entre autos (issue #39)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Contactos entre autos del GRAN PREMIO (issue #39): los autos ya NO se
+ * atraviesan. La resolución (`race/carContacts.ts`) es simétrica y por pares:
+ * separación posicional SIEMPRE (anti-atravesamiento) e impulso sólo si los
+ * autos se ACERCAN, descompuesto en el frame de cada auto:
+ * - Toque de atrás: la víctima (la de adelante) gana un empujón hacia
+ *   ADELANTE (`pushFactor`) y el agresor se frena (`ramSlowFactor`).
+ * - Roce lateral: desvío del heading proporcional a la componente lateral
+ *   de la normal (`deflectRadPerImpact`), en sentidos opuestos.
+ * Consumido por la rama vs CPU (práctica no tiene rivales y en multi los
+ * rivales son interpolaciones de red, no simulaciones locales).
+ */
+export const RACE_CONTACT = {
+  /**
+   * Radio de colisión de cada auto (px). El sprite mide 48×64 (alerón a
+   * ruedas traseras): un círculo de 30 lo cubre con margen para que los
+   * contactos se sientan antes de que los pixeles se pisen.
+   */
+  radiusPx: 30,
+  /**
+   * Impacto máximo considerado por par (px/s): por encima, el impulso se
+   * clampea (un choque a 700 px/s no puede teletransportar a la víctima).
+   */
+  maxImpactPx: 260,
+  /**
+   * Fracción del impacto que recibe la víctima como EMPUJÓN hacia adelante
+   * (px/s a lo largo de SU heading, sólo la componente alineada): el "lo
+   * empujás para adelante levemente" del pedido.
+   */
+  pushFactor: 0.35,
+  /**
+   * Fracción del impacto que PIERDE el agresor (px/s): el "el que choca se
+   * frena un poco". Mayor que pushFactor: golpear frena más de lo que
+   * empuja (empujar a alguien nunca es gratis ni rentable).
+   */
+  ramSlowFactor: 0.5,
+  /**
+   * Desvío de heading del toque (rad por unidad de impacto lateral, ya
+   * escalada por dt de integration implícito: es un empujón angular por
+   * contacto, no por segundo): componente lateral de la normal × impacto
+   * normalizado × este factor. El ángulo del contacto decide cuánto gira.
+   */
+  deflectRadPerImpact: 0.55,
+  /** Impacto mínimo (px/s) para que el contacto cuente como golpe sonable. */
+  minImpactSfx: 55,
+  /** Enfriamiento del SFX/shake de contacto (ms): máximo 1 por ráfaga. */
+  feedbackCooldownMs: 350,
+  /** Impacto mínimo (px/s) para que el golpe sacuda la cámara. */
+  minImpactShake: 130,
+  /** Shake de cámara en un golpe fuerte (ms). */
+  shakeMs: 90,
+  /** Intensidad del shake de cámara (fracción del tamaño de pantalla). */
+  shakeIntensity: 0.004,
+} as const;
+
+/**
+ * Desgaste de neumáticos del GRAN PREMIO (issue #39) — OPCIONAL (toggle del
+ * picker, default NO): con OFF ningún auto cambia su rendimiento por rodar
+ * o chocar; con ON la goma se degrada (0–1) y recorta la velocidad punta
+ * (`tireWear.speedCapFor`). Alimenta `race/tireWear.ts` y el indicador
+ * NEUMÁTICOS del HUD (sólo rama vs CPU con el toggle activo).
+ */
+export const RACE_WEAR = {
+  /**
+   * Desgaste por distancia rodada (fracción de goma cada 1000 px): una
+   * carrera de 3 vueltas (~54000 px) gasta ≈ 0.43 de goma sola por rodar.
+   */
+  perThousandPx: 0.008,
+  /**
+   * Desgaste extra por GOLPE (fracción al impacto máximo): un golpe fuerte
+   * cuesta ~0.04 de goma (~0.7% de punta); los roces leves casi no castigan.
+   */
+  perImpact: 0.04,
+  /** Tope del nivel de desgaste (la goma no queda "mejor que nueva"). */
+  maxLevel: 1,
+  /**
+   * Recorte de punta a desgaste máximo (fracción de `CIRCUIT.maxSpeed`):
+   * con la goma en 1 la punta cae un 18% (750 → 615 px/s) — suficiente para
+   * sentirse, sin romper la validación de ritmos de las pistas.
+   */
+  maxSpeedPenalty: 0.18,
+  /** Y del indicador NEUMÁTICOS del HUD (centro), bajo el chip de contexto. */
+  hudY: 294,
+  /** Nivel de goma restante (%) bajo el cual el indicador pasa a rojo. */
+  hudCriticalPct: 25,
+} as const;
+
+/* ------------------------------------------------------------------ */
 /* Gran Premio vs CPU — podio y récords (issue #14, V4)                 */
 /* ------------------------------------------------------------------ */
 
@@ -934,8 +1038,8 @@ export function laneIndexAtX(x: number, laneCount: number = SPAWN.laneCount): nu
 /* ------------------------------------------------------------------ */
 
 /**
- * Layout y feedback visual de los botones táctiles (TouchSource).
- * Dos clusters en el borde inferior: ◀ ▶ abajo-izquierda y GAS / BRK /
+ * Layout y feedback visual del HUD táctil (TouchSource).
+ * Joystick deslizable de dirección abajo-izquierda (issue #37) y GAS / BRK /
  * TURBO / DRS en grilla 2×2 abajo-derecha (el acelerador en la esquina,
  * donde llega el pulgar derecho).
  *
@@ -966,6 +1070,13 @@ export const TOUCH_HUD = {
   pressedScale: 0.9,
   /** Tamaño de fuente de las etiquetas de texto (px). */
   labelFontSize: 30,
+  /* Joystick deslizable de dirección (issue #37): reemplaza los botones ◀ ▶
+   * y ocupa SU MISMO footprint (2 × buttonSize + gap de ancho) para no pisar
+   * el cluster derecho. */
+  /** Zona muerta (px) alrededor del centro: desvíos menores no doblan. */
+  joystickDeadzonePx: 14,
+  /** Lado del knob deslizable (px). */
+  joystickKnobSize: 92,
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -1348,6 +1459,28 @@ export const CHAT_MAX_LEN = 200;
  * el último envío ACEPTADO: los intentos rechazados no re-arman el reloj.
  */
 export const CHAT_SEND_COOLDOWN_MS = 1500;
+
+/**
+ * Tope de historial por hilo (issue #35, qaT8): llegado el tope, cada mensaje
+ * nuevo recorta los MÁS VIEJOS (FIFO). Sin este techo, un peer que inunda el
+ * chat hace crecer el historial (y su memoria) sin límite — el throttle de
+ * envío sólo gobierna el envío propio, no la ENTRADA. El recorte cae también
+ * del conteo de no leídos: un mensaje recortado ya no se puede leer.
+ */
+export const CHAT_HISTORY_MAX = 100;
+
+/**
+ * Rate-limit de RECEPCIÓN por peer emisor (issue #35, qaT8): token bucket que
+ * cubre el flood de ENTRADA, que el throttle de envío propio no alcanza. Cada
+ * peer arranca con `CHAT_FLOOD_BURST` mensajes de ráfaga y recarga 1 mensaje
+ * cada `CHAT_FLOOD_REFILL_MS` (ritmo sostenido acotado); lo que llega sin
+ * presupuesto se DESCARTA en silencio (sin historial, sin no leídos y sin
+ * hilo nuevo). El bucket es por EMISOR, compartido entre room y sus DM: un
+ * mismo peer no reparte su flood entre hilos. Los mensajes propios (eco local)
+ * nunca pasan por acá.
+ */
+export const CHAT_FLOOD_BURST = 5;
+export const CHAT_FLOOD_REFILL_MS = 1000;
 
 /**
  * Intervalo del heartbeat de presencia (ms, C2): cada cliente difunde un

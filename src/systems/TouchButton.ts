@@ -11,7 +11,8 @@
  *   inyectado (`TouchButtonVisual`). Los botones hacen hit-test manual sobre
  *   los eventos de pointer de la escena, así NO roban eventos al resto del
  *   juego (ningún objeto interactivo bloquea el canvas).
- * - `computeTouchButtonLayout`: layout puro de los 6 botones.
+ * - `computeTouchButtonLayout`: layout puro de los 4 botones del cluster
+ *   derecho (el giro va por `SteerJoystick` desde el issue #37).
  *
  * Decisión de ubicación (documentada): el plan lista `TouchButton` bajo
  * `systems/` y `PixelButton` bajo `ui/` — se respeta: la lógica de tracking
@@ -21,13 +22,12 @@
 
 import { TOUCH_HUD } from '../config/balance';
 
-/** Acciones que puede representar un botón táctil (= claves de IInputState). */
-export type TouchButtonAction = 'left' | 'right' | 'throttle' | 'brake' | 'turbo' | 'drs';
+/** Acciones que puede representar un botón táctil (= claves de IInputState).
+ * El giro NO va más por botones (issue #37): lo lleva el `SteerJoystick`. */
+export type TouchButtonAction = 'throttle' | 'brake' | 'turbo' | 'drs';
 
 /** Todas las acciones, en orden estable de construcción. */
 export const ALL_TOUCH_ACTIONS: readonly TouchButtonAction[] = [
-  'left',
-  'right',
   'throttle',
   'brake',
   'turbo',
@@ -202,9 +202,10 @@ export class TouchButton {
 }
 
 /**
- * Layout puro de los 6 botones táctiles del HUD sobre un lienzo de
+ * Layout puro de los 4 botones táctiles del HUD sobre un lienzo de
  * `width × height` (resolución base 720×1280):
- * - abajo-izquierda: ◀ ▶ (doblar)
+ * - abajo-izquierda: ZONA DEL JOYSTICK (issue #37, `computeSteerJoystickRect`
+ *   en `systems/SteerJoystick`) — ocupa el footprint de los viejos ◀ ▶.
  * - abajo-derecha: grilla 2×2 con BRK/TURBO arriba y GAS/DRS abajo
  *   (GAS en la esquina inferior derecha, donde llega el pulgar derecho).
  */
@@ -216,13 +217,10 @@ export function computeTouchButtonLayout(
 
   const bottomY = height - marginBottom - size;
   const topY = bottomY - gap - size;
-  const leftX = marginX;
   const rightOuterX = width - marginX - size;
   const rightInnerX = rightOuterX - gap - size;
 
   return {
-    left: { x: leftX, y: bottomY, width: size, height: size },
-    right: { x: leftX + size + gap, y: bottomY, width: size, height: size },
     throttle: { x: rightOuterX, y: bottomY, width: size, height: size },
     brake: { x: rightInnerX, y: bottomY, width: size, height: size },
     turbo: { x: rightOuterX, y: topY, width: size, height: size },

@@ -9,6 +9,7 @@ import {
   MULTIPLAYER,
   RACE,
   RACE_CONFETTI,
+  RACE_CONTACT,
   RACE_FINISH_GRACE_MS,
   RACE_HUD,
   RACE_LAP_BANNER,
@@ -30,8 +31,15 @@ import {
   RACE_TOUCH_ACTIONS,
   type RaceTouchAction,
 } from '../race/raceControls';
-import { assignGridOrder, type GridSlot } from '../race/gridOrder';
+import { assignGridOrder, ownGridSlot, type GridSlot } from '../race/gridOrder';
 import { CircuitPhysics, type CarState } from '../race/circuitPhysics';
+import { resolveCarContacts } from '../race/carContacts';
+import {
+  accumulateWear,
+  speedCapFor,
+  wearFromDistance,
+  wearFromImpact,
+} from '../race/tireWear';
 import { LapTracker, type LapCompletedEvent } from '../race/lapTracker';
 import {
   finalClassification,
@@ -56,6 +64,11 @@ import {
 } from '../race/results';
 import { raceEngineSpeed } from '../race/raceAudio';
 import { computeRaceGaps } from '../race/raceGap';
+import {
+  allPeersResolved,
+  shouldAcceptRaceOver,
+  shouldBroadcastRaceOver,
+} from '../race/raceClose';
 import { PositionSwapDetector } from '../race/racePositionSwap';
 import {
   sampleFromProgress,
@@ -63,10 +76,13 @@ import {
   type RaceRemoteSample,
 } from '../race/raceRemote';
 import { RacePlausibility } from '../race/racePlausibility';
+import { decideLateAdmission } from '../race/raceLateAdmission';
+import { scheduleRaceStateBroadcast } from '../race/raceBroadcast';
 import { RaceStaleTracker } from '../race/raceStale';
 import {
   parseRaceFinishPayload,
   parseRaceOverPayload,
+  parseRaceStatePayload,
   roundRaceFinishPayload,
   roundRaceStatePayload,
   type PlayerInfo,
@@ -79,6 +95,8 @@ import type { TrackPath, TrackProjection } from '../race/trackPath';
 import { CountdownSystem, type CountdownLabel } from '../systems/CountdownSystem';
 import { PauseSystem } from '../systems/PauseSystem';
 import { TouchButton } from '../systems/TouchButton';
+import { SteerJoystick } from '../systems/SteerJoystick';
+import { SteerJoystickView } from '../ui/SteerJoystickView';
 import type { PointerEventEmitter } from '../systems/TouchSource';
 import { InputSystem, type IInputSource, type IInputState } from '../systems/InputSystem';
 import { RemoteCar } from '../entities/RemoteCar';
@@ -225,14 +243,21 @@ interface RivalRuntime {
   finished: boolean;
   /** Tiempos exactos al terminar (para la clasificación final). */
   finish: { totalMs: number; bestLapMs: number } | null;
+  /**
+   * #39 — goma gastada (0–1). Sólo crece con el toggle DESGASTE activo;
+   * con el toggle apagado queda en 0 toda la carrera (cero costo).
+   */
+  wear: number;
 }
 
 /**
  * Fuente táctil de la carrera (implementa `IInputSource`): reutiliza la
  * lógica de `TouchButton` (tracking multi-touch por pointerId, hit-test
- * manual que no roba eventos al juego) y la presentación `PixelButton`, con
- * el layout propio del circuito (◀ ▶ + GAS + FRENO) de `raceControls`. Es la
- * hermana chica de `TouchSource` (GameScene) sin TURBO/DRS. Issue #20: el
+ * manual que no roba eventos al juego) y la presentación `PixelButton` para
+ * GAS + FRENO, con el layout propio del circuito de `raceControls`. El GIRO
+ * va por el joystick deslizable (`SteerJoystick` + `SteerJoystickView`,
+ * issue #37), que consume `pointermove` para el eje analógico. Es la
+ * hermana de `TouchSource` (GameScene) sin TURBO/DRS. Issue #20: el
  * circuito ya NO es auto-acelerado — el botón GAS (misma casilla/esquina y
  * estilo verde del modo BATALLA) pisa el acelerador.
  */
@@ -240,6 +265,7 @@ class RaceTouchControls implements IInputSource {
   readonly name = 'race-touch';
 
   private readonly buttons: readonly TouchButton[];
+  private readonly joystick: SteerJoystick;
   private readonly emitter: PointerEventEmitter | null;
   private attached = false;
 
@@ -247,31 +273,42 @@ class RaceTouchControls implements IInputSource {
     const { width, height } = scene.scale;
     const layout = computeRaceTouchLayout(width, height);
     const styles: Record<RaceTouchAction, PixelButtonStyle> = {
-      left: { icon: TEXTURE_KEYS.hudArrowLeft, tint: 0x3c6cd6 },
-      right: { icon: TEXTURE_KEYS.hudArrowRight, tint: 0x3c6cd6 },
       // MISMO estilo del GAS de la BATALLA (TouchSource): label verde.
       throttle: { label: 'GAS', tint: 0x3c9e52 },
       brake: { label: 'FRENO', tint: 0xd63c3c },
     };
 
+    // La cámara del mundo scrollea: el HUD táctil vive en pantalla fija.
+    // Dos cámaras (issue #18): el HUD táctil renderiza SOLO en la cámara de
+    // UI — la del mundo lo ignora (mismo truco que `hud()`: `ignore` marca
+    // los hijos del container y el bit del PROPIO container es el que mira
+    // el hit-test). El toque en sí NO pasa por cámaras: los hit-tests
+    // comparan px de pantalla crudos, así que siguen registrando igual.
+    const pinToUiCam = (container: Phaser.GameObjects.Container): void => {
+      container.setScrollFactor(0);
+      scene.cameras.main.ignore(container);
+      container.cameraFilter |= scene.cameras.main.id;
+    };
+
     this.buttons = RACE_TOUCH_ACTIONS.map((action) => {
       const rect = layout[action];
       const visual = new PixelButton(scene, rect, styles[action]);
-      // La cámara del mundo scrollea: el HUD táctil vive en pantalla fija.
-      visual.container.setScrollFactor(0);
-      // Dos cámaras (issue #18): el HUD táctil renderiza SOLO en la cámara de
-      // UI — la del mundo lo ignora (mismo truco que `hud()`: `ignore` marca
-      // los hijos del container y el bit del PROPIO container es el que mira
-      // el hit-test). El toque en sí NO pasa por cámaras: `TouchButton.contains`
-      // compara px de pantalla crudos, así que sigue registrando igual.
-      scene.cameras.main.ignore(visual.container);
-      visual.container.cameraFilter |= scene.cameras.main.id;
+      pinToUiCam(visual.container);
       return new TouchButton({
         action,
         rect,
         visual,
         hitPadding: TOUCH_HUD.hitPadding,
       });
+    });
+
+    const joystickVisual = new SteerJoystickView(scene, layout.joystick);
+    pinToUiCam(joystickVisual.container);
+    this.joystick = new SteerJoystick({
+      rect: layout.joystick,
+      visual: joystickVisual,
+      deadzonePx: TOUCH_HUD.joystickDeadzonePx,
+      hitPadding: TOUCH_HUD.hitPadding,
     });
 
     this.emitter = scene.input;
@@ -283,6 +320,7 @@ class RaceTouchControls implements IInputSource {
     }
     this.attached = true;
     this.emitter.on('pointerdown', this.onPointerDown);
+    this.emitter.on('pointermove', this.onPointerMove);
     this.emitter.on('pointerup', this.onPointerUp);
     this.emitter.on('pointerupoutside', this.onPointerUp);
   }
@@ -293,8 +331,10 @@ class RaceTouchControls implements IInputSource {
     }
     this.attached = false;
     this.emitter?.off('pointerdown', this.onPointerDown);
+    this.emitter?.off('pointermove', this.onPointerMove);
     this.emitter?.off('pointerup', this.onPointerUp);
     this.emitter?.off('pointerupoutside', this.onPointerUp);
+    this.joystick.forceRelease();
     for (const button of this.buttons) {
       button.forceRelease();
     }
@@ -302,6 +342,7 @@ class RaceTouchControls implements IInputSource {
 
   destroy(): void {
     this.detach();
+    this.joystick.destroy();
     for (const button of this.buttons) {
       button.destroy();
     }
@@ -311,17 +352,23 @@ class RaceTouchControls implements IInputSource {
   getState(): IInputState {
     const pressed = (action: RaceTouchAction): boolean =>
       this.buttons.find((button) => button.action === action)?.isPressed ?? false;
+    const axis = this.joystick.steerAxis;
     return {
-      left: pressed('left'),
-      right: pressed('right'),
+      // Flags derivados del eje: fuera de zona muerta, el lado manda.
+      left: axis < 0,
+      right: axis > 0,
       throttle: pressed('throttle'),
       brake: pressed('brake'),
       turbo: false,
       drs: false,
+      steerAxis: axis,
     };
   }
 
   private readonly onPointerDown = (pointer: { id: number; x: number; y: number }): void => {
+    if (this.joystick.contains(pointer.x, pointer.y)) {
+      this.joystick.press(pointer.id, pointer.x);
+    }
     for (const button of this.buttons) {
       if (button.contains(pointer.x, pointer.y)) {
         button.press(pointer.id);
@@ -329,7 +376,13 @@ class RaceTouchControls implements IInputSource {
     }
   };
 
+  /** pointermove: SOLO el joystick lo consume (el dueño desliza el knob). */
+  private readonly onPointerMove = (pointer: { id: number; x: number; y: number }): void => {
+    this.joystick.move(pointer.id, pointer.x);
+  };
+
   private readonly onPointerUp = (pointer: { id: number; x: number; y: number }): void => {
+    this.joystick.release(pointer.id);
     for (const button of this.buttons) {
       button.release(pointer.id);
     }
@@ -370,9 +423,9 @@ class RaceTouchControls implements IInputSource {
  *   funcionando porque Phaser resuelve el hit-test por cámara con el mismo
  *   filtro de render.
  * - INPUT: mismo stack que el modo BATALLA (`IInputState` fusionado por
- *   `InputSystem`) con fuentes propias de carrera (teclado W/↑ + ◀ ▶ + FRENO
- *   y táctil ◀ ▶ + GAS + FRENO, issue #20: gas manual); el puente a la
- *   física es el puro `circuitInputFromState`.
+ *   `InputSystem`) con fuentes propias de carrera (teclado W/↑ + ←→/A·D +
+ *   FRENO y táctil joystick deslizable + GAS + FRENO, issues #20 y #37); el
+ *   puente a la física es el puro `circuitInputFromState` (giro analógico).
  * - PAUSA: igual que GameScene (PauseSystem + PauseScene encima, tecla P,
  *   auto-pausa por blur) — PauseScene ahora recibe la escena objetivo por
  *   init data (default Game: regresión cero en el modo BATALLA).
@@ -539,7 +592,24 @@ export class RaceScene extends Phaser.Scene {
   /** Peers fuera de la carrera sin terminar (leave o stale V3): en la
    *  clasificación final van como `disconnected` con su último progreso. */
   private disconnectedPeers = new Set<string>();
-  /** Primer `rfin` visto (ganador + instante local del arranque de gracia). */
+  /**
+   * #35 — "Joiner invisible": peers admitidos DINÁMICAMENTE durante la
+   * carrera (recibieron el start pero su meta no llegó al anfitrión antes de
+   * congelar el roster, así que no viajan en `players`). La identidad sale
+   * del roster vivo local (ver `decideLateAdmission`): alimenta buffers,
+   * ranking y clasificación final.
+   */
+  private admittedPeers = new Map<string, PlayerInfo>();
+  /**
+   * #35 — peers que aparecieron en la sala DESPUÉS del create de la escena
+   * (`onPeerJoin` durante la carrera): jamás recibieron el start, así que la
+   * admisión dinámica los rechaza siempre — la puerta sólo abre para quien
+   * ya estaba en la malla al arrancar.
+   */
+  private postStartJoins = new Set<string>();
+  /** Primer `rfin` visto: abre la ventana de gracia del cierre (#35: la
+   *  AUTORIDAD del race-over ya no se deriva de acá — es el finisher de
+   *  peerId menor, ver `race/raceClose`). */
   private firstFinish: { peerId: string; at: number } | null = null;
   /** Clasificación recibida por `race-over` (manda sobre la local). */
   private raceOverStandings: RaceFinalStanding[] | null = null;
@@ -605,6 +675,17 @@ export class RaceScene extends Phaser.Scene {
    * reutiliza la instancia de escena y el estado debe arrancar limpio.
    */
   private positionSwapDetector!: PositionSwapDetector;
+  /**
+   * #39 — contactos entre autos del vs CPU (colisiones + desgaste). El
+   * `wearEnabled` viene del toggle DESGASTE del picker (init data); el
+   * enfriamiento del feedback (SFX/shake) es por carrera: el restart
+   * reutiliza la instancia de escena.
+   */
+  private wearEnabled = false;
+  /** #39 — goma gastada del AUTO PROPIO (0–1; congelada sin toggle). */
+  private playerWear = 0;
+  /** #39 — `time.now` del último feedback de contacto (enfriamiento). */
+  private lastContactFeedbackMs = -Infinity;
 
   constructor() {
     super(RaceScene.KEY);
@@ -641,6 +722,10 @@ export class RaceScene extends Phaser.Scene {
     this.worldObjects = [];
     this.rivalRoster = [];
     this.cpuDifficulty = this.sceneInit.difficulty ?? DEFAULT_CPU_DIFFICULTY;
+    // #39 — contacto y desgaste frescos por carrera (idempotencia del restart).
+    this.wearEnabled = this.sceneInit.wear === true;
+    this.playerWear = 0;
+    this.lastContactFeedbackMs = -Infinity;
     // V3 (#14) — detector fresco de cambios de posición (idempotencia del
     // restart: sin línea base heredada de la carrera anterior).
     this.positionSwapDetector = new PositionSwapDetector(RACE_VS_CPU.positionSfxCooldownMs);
@@ -662,6 +747,8 @@ export class RaceScene extends Phaser.Scene {
     this.finishedPeers.clear();
     this.remoteProgress.clear();
     this.disconnectedPeers.clear();
+    this.admittedPeers.clear();
+    this.postStartJoins.clear();
 
     // Parrilla determinista detrás de la meta: práctica = un solo corredor
     // en la pole; multi = TODO el roster (misma seed ⇒ misma parrilla en
@@ -680,10 +767,8 @@ export class RaceScene extends Phaser.Scene {
           )
         : assignGridOrder([{ peerId: PLAYER_PEER_ID }], PRACTICE_GRID_SEED, this.path);
     const ownSlot = this.isMultiRace()
-      ? (this.gridSlots.find((slot) => slot.peerId === this.myPeerId) ??
-        this.gridSlots[0])
-      : (this.gridSlots.find((slot) => slot.peerId === PLAYER_PEER_ID) ??
-        this.gridSlots[0]);
+      ? ownGridSlot(this.gridSlots, this.myPeerId, this.path)
+      : ownGridSlot(this.gridSlots, PLAYER_PEER_ID, this.path);
     this.carState = {
       x: ownSlot.x ?? this.path.sample(0).x,
       y: ownSlot.y ?? this.path.sample(0).y,
@@ -799,6 +884,10 @@ export class RaceScene extends Phaser.Scene {
     this.raceHud.setTimings(this.lapTracker.currentLapMs, this.lapTracker.totalMs);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      // #35 — el chat de espectador muere con la carrera (patrón LobbyScene):
+      // si la carrera terminó con el overlay abierto, su velo interactivo
+      // quedaría encima de los resultados bloqueando los botones.
+      this.scene.stop(ChatScene.KEY);
       this.inputSystem.detach();
       this.touch.destroy();
       for (const widget of this.hudWidgets) {
@@ -849,7 +938,9 @@ export class RaceScene extends Phaser.Scene {
     // En multi, quien terminó su carrera deja de conducir (espectador).
     if (!this.selfFinished) {
       const input = circuitInputFromState(this.inputSystem.getState());
-      this.carPhysics.step(this.carState, dt, input);
+      // #39 — con el toggle DESGASTE, la goma gastada recorta la punta.
+      const cap = this.wearEnabled ? speedCapFor(this.playerWear) : undefined;
+      this.carPhysics.step(this.carState, dt, input, cap);
       // V4 — el dron del motor sigue la velocidad del auto (arranca con el
       // GO!; se apaga en pausa/fin/shutdown por el bus de sesión).
       this.bus.emit('speed', raceEngineSpeed(this.carState.speed));
@@ -1017,6 +1108,7 @@ export class RaceScene extends Phaser.Scene {
         lastLateral: 0,
         finished: false,
         finish: null,
+        wear: 0,
       });
     }
   }
@@ -1056,7 +1148,10 @@ export class RaceScene extends Phaser.Scene {
           cars: others,
           playerGapPx: playerProgress - rivalProgress,
         });
-        runtime.physics.step(runtime.state, dt, input);
+        // #39 — mismo tope por desgaste que el jugador: la goma gastada del
+        // rival también recorta SU punta (contacto y goma son simétricos).
+        const cap = this.wearEnabled ? speedCapFor(runtime.wear) : undefined;
+        runtime.physics.step(runtime.state, dt, input, cap);
         const projection = this.path.project(runtime.state.x, runtime.state.y);
         runtime.lastS = projection.s;
         runtime.lastLateral = projection.lateral;
@@ -1064,6 +1159,12 @@ export class RaceScene extends Phaser.Scene {
       }
       runtime.car.sync(runtime.state.x, runtime.state.y, runtime.state.heading);
     }
+
+    // #39 — CONTACTOS: los 8 autos comparten el mundo y ya no se atraviesan.
+    // El jugador (si siguió corriendo) ya dio SU paso de este frame; acá se
+    // resuelven los pares, se acumula el desgaste (con toggle) y se emite el
+    // feedback del golpe más fuerte que involucró al jugador.
+    this.resolveVsCpuContacts(dt);
 
     // Ranking vivo (sólo consume progreso: lap + s, mismo contrato que multi).
     this.rankAccumulatorMs += deltaMs;
@@ -1101,6 +1202,94 @@ export class RaceScene extends Phaser.Scene {
     if (swap !== null) {
       this.bus.emit('race-overtake', undefined);
     }
+  }
+
+  /**
+   * #39 — contactos y desgaste del vs CPU, un frame:
+   *
+   * - **Contactos** (`resolveCarContacts`, puro): los 8 autos (jugador en el
+   *   índice 0 + rivales) se separan y se empujan — nadie atraviesa a nadie.
+   *   El impulso ya aplicó empujón/desvío/frenada dentro del resolver; acá
+   *   sólo se cosecha.
+   * - **Desgaste** (sólo con el toggle DESGASTE): la distancia rodada del
+   *   frame + el impacto de cada golpe engordan la goma gastada de cada auto;
+   *   el tope de velocidad resultante actúa en el paso del frame SIGUIENTE.
+   * - **Feedback**: el golpe más fuerte del frame que involucró al JUGADOR
+   *   suena (`race-contact` → SFX `damage`) y sacude la cámara si fue fuerte,
+   *   con enfriamiento de `RACE_CONTACT.feedbackCooldownMs` (mientras dos
+   *   autos van pegados, el bus no recibe ráfagas).
+   *
+   * El jugador terminado (bandera a cuadros, mundo congelado para él) y las
+   * carreras sin rivales no resuelven nada.
+   */
+  private resolveVsCpuContacts(dt: number): void {
+    if (this.selfFinished || this.rivals.length === 0) {
+      return;
+    }
+    const states: CarState[] = [this.carState, ...this.rivals.map((r) => r.state)];
+    const contacts = resolveCarContacts(states);
+
+    // Desgaste por GOLPE: ambos autos del par pagan (simétrico, como la
+    // física). Con el toggle apagado esto queda en cero por construcción.
+    if (this.wearEnabled) {
+      // Por distancia: el jugador rodó speed·dt (si corrió) y cada rival
+      // vivo también. Los rivales terminados están congelados: no rodan.
+      this.playerWear = accumulateWear(
+        this.playerWear,
+        wearFromDistance(this.carState.speed * dt),
+      );
+      for (const runtime of this.rivals) {
+        if (!runtime.finished) {
+          runtime.wear = accumulateWear(
+            runtime.wear,
+            wearFromDistance(runtime.state.speed * dt),
+          );
+        }
+      }
+      for (const contact of contacts) {
+        const wear = wearFromImpact(contact.impact);
+        // El jugador paga si participó del golpe (índice 0 en `states`).
+        this.playerWear = accumulateWear(
+          this.playerWear,
+          contact.a === 0 || contact.b === 0 ? wear : 0,
+        );
+        // Los rivales pagan SIEMPRE (ambos autos del par, simétrico).
+        const rivalA = this.rivals[contact.a - 1];
+        const rivalB = this.rivals[contact.b - 1];
+        if (rivalA) {
+          rivalA.wear = accumulateWear(rivalA.wear, wear);
+        }
+        if (rivalB) {
+          rivalB.wear = accumulateWear(rivalB.wear, wear);
+        }
+      }
+    }
+
+    // Feedback del golpe más fuerte que involucró al JUGADOR (índice 0),
+    // con enfriamiento — un roce continuo no ametralla SFX ni shake.
+    let playerHit: number | null = null;
+    for (const contact of contacts) {
+      if (contact.a !== 0 && contact.b !== 0) {
+        continue;
+      }
+      if (playerHit === null || contact.impact > playerHit) {
+        playerHit = contact.impact;
+      }
+    }
+    if (
+      playerHit !== null &&
+      playerHit >= RACE_CONTACT.minImpactSfx &&
+      this.time.now - this.lastContactFeedbackMs >= RACE_CONTACT.feedbackCooldownMs
+    ) {
+      this.lastContactFeedbackMs = this.time.now;
+      this.bus.emit('race-contact', undefined);
+      if (playerHit >= RACE_CONTACT.minImpactShake) {
+        this.cameras.main.shake(RACE_CONTACT.shakeMs, RACE_CONTACT.shakeIntensity);
+      }
+    }
+
+    // Indicador de goma (sólo con toggle; `null` lo mantiene oculto).
+    this.raceHud.setWear(this.wearEnabled ? (1 - this.playerWear) * 100 : null);
   }
 
   /**
@@ -1207,6 +1396,10 @@ export class RaceScene extends Phaser.Scene {
       client.onRaceFinish((peerId, payload) => this.handleRaceFinish(peerId, payload)),
       client.onRaceOver((peerId, payload) => this.handleRaceOver(peerId, payload)),
       client.onPeerLeave((peerId) => this.handlePeerLeftRace(peerId)),
+      // #35 — frontera de la admisión dinámica: todo peer que APAREZCA en la
+      // sala desde ahora entra a la carrera después del start (no recibió el
+      // start) y queda excluido para siempre de la admisión.
+      client.onPeerJoin((peerId) => this.postStartJoins.add(peerId)),
       // Chat de sala (V3): sigue llegando durante TODA la carrera — entra al
       // store de sesión y el espectador (quien terminó) lo lee/escribe desde
       // el overlay. Mismo cableado que el espectador de la BATALLA (#2).
@@ -1240,27 +1433,28 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Llegó `rstate` de un rival: el payload se RE-normaliza con la pista local
-   * (misma función que el emisor — defensa en profundidad contra un peer
-   * corrupto) y alimenta el buffer como progreso DESENROLLADO (monótono, no
-   * salta en la meta) más el último (lap, s) crudo para el ranking.
+   * Llegó `rstate` de un rival: el payload se VALIDA (forma — issue #35, un
+   * `rstate` null/no numérico se descarta sin romper el callback) y se
+   * RE-normaliza con la pista local (misma función que el emisor — defensa
+   * en profundidad contra un peer corrupto) y alimenta el buffer como
+   * progreso DESENROLLADO (monótono, no salta en la meta) más el último
+   * (lap, s) crudo para el ranking.
    *
    * V3 — antes de tocar nada, el progreso pasa el filtro de plausibilidad
    * (`race/racePlausibility`): un avance físicamente imposible se IGNORA
    * (buffer, ranking y presencia ni se enteran) y se espera el próximo
    * `rstate`; un sample aceptado refresca la presencia del peer (staleness).
    */
-  private handleRaceState(peerId: string, payload: {
-    s: number;
-    o: number;
-    v: number;
-    lap: number;
-  }): void {
-    if (!this.remoteBuffers.has(peerId)) {
-      return; // Peer desconocido (no está en el roster congelado): ignorar.
+  private handleRaceState(peerId: string, payload: unknown): void {
+    if (!this.remoteBuffers.has(peerId) && !this.tryAdmitRemotePeer(peerId)) {
+      return; // Peer desconocido (ni roster congelado ni sala): ignorar.
+    }
+    const received = parseRaceStatePayload(payload);
+    if (!received) {
+      return; // rstate malformado (issue #35): descartado en silencio.
     }
     const clean = roundRaceStatePayload(
-      payload,
+      received,
       this.path.totalLength,
       this.trackDef.widthPx / 2,
     );
@@ -1280,7 +1474,20 @@ export class RaceScene extends Phaser.Scene {
   /** Llegó `rfin`: ese peer terminó sus 3 vueltas con estos tiempos. */
   private handleRaceFinish(peerId: string, payload: unknown): void {
     const clean = parseRaceFinishPayload(payload);
-    if (!clean || !this.rosterPlayers.some((player) => player.peerId === peerId)) {
+    if (!clean) {
+      return;
+    }
+    if (
+      !this.rosterPlayers.some((player) => player.peerId === peerId) &&
+      !this.admittedPeers.has(peerId) &&
+      !this.tryAdmitRemotePeer(peerId)
+    ) {
+      return; // Remitente fuera del roster congelado y de la sala: ignorar.
+    }
+    // T3 (issue #35) — primer rfin gana: el reenvío del mismo peer (o de un
+    // eco tardío) NO pisa su tiempo, así nadie reordena el podio con
+    // reenvíos cada vez menores después del primer finish.
+    if (this.finishedPeers.has(peerId)) {
       return;
     }
     this.finishedPeers.set(peerId, clean);
@@ -1290,16 +1497,72 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Llegó `race-over` del ganador: su clasificación manda sobre la local.
-   * Mismo gate de roster que el `rfin` (un remitente fuera del roster
-   * congelado no puede concluir la carrera de todos).
+  /**
+   * #35 — admisión acotada del "joiner invisible": un peer que recibió el
+   * start pero cuya meta no llegó al anfitrión antes de congelar el roster no
+   * viaja en `players`; si su meta SÍ es conocida por ESTE cliente (estaba en
+   * la malla al arrancar) y no apareció en la sala después del start, se le
+   * admite dinámicamente: buffer + RemoteCar + ranking + clasificación.
+   * Decisión pura en `decideLateAdmission`; sin transporte no hay roster vivo
+   * que consultar y nadie se admite.
+   */
+  private tryAdmitRemotePeer(peerId: string): boolean {
+    if (!this.netClient || this.remoteBuffers.has(peerId)) {
+      return false;
+    }
+    const player = decideLateAdmission(
+      peerId,
+      this.rosterPlayers,
+      this.netClient.getRoster(),
+      this.postStartJoins,
+    );
+    if (!player) {
+      return false;
+    }
+    // Nace en la meta (su primer `rstate` lo ubica apenas interpola; si sólo
+    // se le recibió el `rfin`, queda estacionado tras la línea, igual que un
+    // terminado).
+    const car = new RemoteCar(this, player);
+    const start = sampleFromProgress(this.path, 0, 0);
+    car.sync(start.x, start.y, start.angle);
+    this.worldObjects.push(...car.renderObjects);
+    this.remotes.set(peerId, car);
+    this.remoteBuffers.set(peerId, new SnapshotBuffer<RaceRemoteSample>());
+    this.remoteProgress.set(peerId, { lap: 0, s: 0 });
+    // Presencia inicial (base del stale, igual criterio que la parrilla).
+    this.staleTracker.record(peerId, this.time.now);
+    this.admittedPeers.set(peerId, player);
+    return true;
+  }
+
+  /**
+   * Llegó `race-over`: su clasificación manda sobre la local. Gate de
+   * remitente: roster congelado más los peers admitidos dinámicamente (#35,
+   * un joiner invisible legítimo puede ser el ganador). #35 — y sólo se
+   * acepta UNO, del remitente que es la autoridad (finisher de peerId menor
+   * entre MIS finishers conocidos): un duplicado o un no-authority no pisa la
+   * clasificación ya aceptada. TRADEOFF: con una vista local transitoriamente
+   * incompleta se puede rechazar un race-over legítimo — la conclusión local
+   * determinista y la gracia de respaldo cubren el caso (ver `race/raceClose`).
    */
   private handleRaceOver(peerId: string, payload: unknown): void {
-    if (!this.rosterPlayers.some((player) => player.peerId === peerId)) {
-      return; // Remitente desconocido (no está en el roster congelado): ignorar.
+    if (
+      !this.rosterPlayers.some((player) => player.peerId === peerId) &&
+      !this.admittedPeers.has(peerId)
+    ) {
+      return; // Remitente desconocido (ni roster congelado ni admitido): ignorar.
     }
     const parsed = parseRaceOverPayload(payload);
     if (!parsed) {
+      return;
+    }
+    if (
+      !shouldAcceptRaceOver(
+        peerId,
+        [...this.finishedPeers.keys()],
+        this.raceOverStandings !== null,
+      )
+    ) {
       return;
     }
     this.raceOverStandings = parsed.standings;
@@ -1361,23 +1624,30 @@ export class RaceScene extends Phaser.Scene {
     if (this.selfFinished || !this.netClient) {
       return;
     }
-    this.stateAccumulatorMs += deltaMs;
-    const intervalMs = 1000 / STATE_HZ;
-    while (this.stateAccumulatorMs >= intervalMs) {
-      this.stateAccumulatorMs -= intervalMs;
-      this.netClient.sendRaceState(
-        roundRaceStatePayload(
-          {
-            s: projection.s,
-            o: projection.lateral,
-            v: this.carState.speed,
-            lap: this.lapTracker.lapsCompleted,
-          },
-          this.path.totalLength,
-          this.trackDef.widthPx / 2,
-        ),
-      );
+    // Saturación (issue #35): el delta acumulado NUNCA itera — un tramo
+    // gigante (background en multi, sin auto-pausa) emite UN único rstate
+    // fresco y descarta el sobrante (patrón de GameScene; raceBroadcast.ts).
+    const schedule = scheduleRaceStateBroadcast(
+      this.stateAccumulatorMs,
+      deltaMs,
+      1000 / STATE_HZ,
+    );
+    this.stateAccumulatorMs = schedule.accumulatorMs;
+    if (schedule.sendCount === 0) {
+      return;
     }
+    this.netClient.sendRaceState(
+      roundRaceStatePayload(
+        {
+          s: projection.s,
+          o: projection.lateral,
+          v: this.carState.speed,
+          lap: this.lapTracker.lapsCompleted,
+        },
+        this.path.totalLength,
+        this.trackDef.widthPx / 2,
+      ),
+    );
   }
 
   /**
@@ -1472,11 +1742,14 @@ export class RaceScene extends Phaser.Scene {
 
   /**
    * Condiciones de cierre de la carrera multi, EN ORDEN:
-   * 1) llegó `race-over` del ganador → sus standings mandan;
-   * 2) terminaron todos → el ganador difunde su clasificación y cierra;
-   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra el
-   *    ganador (difundiendo) o cada cliente con SU clasificación local
-   *    (defensa: ganador desaparecido — las reglas determinísticas hacen
+   * 1) llegó `race-over` de la autoridad → sus standings mandan;
+   * 2) todos los peers del roster están resueltos → concluye. #35: los
+   *    desconectados (leave/stale) cuentan como resueltos — jamás mandarán
+   *    `rfin`, así que exigirlos esperaba la gracia completa con rivales
+   *    caídos aunque los vivos ya hubieran terminado;
+   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra la
+   *    autoridad (difundiendo) o cada cliente con SU clasificación local
+   *    (defensa: autoridad desaparecida — las reglas determinísticas hacen
    *    que la clasificación local coincida con la que habría difundido).
    */
   private checkRaceEnd(): void {
@@ -1487,10 +1760,12 @@ export class RaceScene extends Phaser.Scene {
       this.concludeRace(this.raceOverStandings);
       return;
     }
-    const allFinished = this.rosterPlayers.every((player) =>
-      this.finishedPeers.has(player.peerId),
+    const allResolved = allPeersResolved(
+      this.rosterPlayers.map((player) => player.peerId),
+      [...this.finishedPeers.keys()],
+      [...this.disconnectedPeers],
     );
-    if (allFinished) {
+    if (allResolved) {
       this.broadcastRaceOverIfWinner();
       this.concludeRace(this.buildFinalClassification());
       return;
@@ -1504,9 +1779,18 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
-  /** El ganador (primer `rfin`) difunde `race-over` UNA vez. */
+  /**
+   * La AUTORIDAD difunde `race-over` UNA vez: el finisher de peerId menor
+   * (tiebreak del ranking), no el primer `rfin` visto localmente — con
+   * cruces casi simultáneos cada máquina se creía ganadora y difundía
+   * standings distintas (#35). Con un único finisher difunde él: sin cambio
+   * de comportamiento.
+   */
   private broadcastRaceOverIfWinner(): void {
-    if (this.raceOverSent || this.firstFinish?.peerId !== this.myPeerId) {
+    if (
+      this.raceOverSent ||
+      !shouldBroadcastRaceOver([...this.finishedPeers.keys()], this.myPeerId)
+    ) {
       return;
     }
     this.raceOverSent = true;
@@ -1517,10 +1801,15 @@ export class RaceScene extends Phaser.Scene {
    * Clasificación final local con `finalClassification` (determinista):
    * terminados con SU `rfin` (totalMs ASC) → en carrera por progreso →
    * desconectados al final. Las mismas entradas producen el mismo orden en
-   * todos los clientes.
+   * todos los clientes. #35: los peers admitidos dinámicamente (joiner
+   * invisible) clasifican igual que los del roster congelado — el orden no
+   * cambia para los demás (el desempate canónico es peerId).
    */
   private buildFinalClassification(): RaceFinalStanding[] {
-    const cars: FinalCar[] = this.rosterPlayers.map((player) => {
+    const cars: FinalCar[] = [
+      ...this.rosterPlayers,
+      ...this.admittedPeers.values(),
+    ].map((player) => {
       const peerId = player.peerId;
       const progress = this.lastKnownProgress(peerId);
       const finish = this.finishedPeers.get(peerId);
@@ -1700,7 +1989,9 @@ export class RaceScene extends Phaser.Scene {
           this.trackDef.id,
           standings,
           this.myPeerId,
-          this.rosterPlayers,
+          // #35 — los admitidos dinámicos viajan también (nombres/colores del
+          // podio de resultados; un joiner invisible no vuelve a ser "PILOTO").
+          [...this.rosterPlayers, ...this.admittedPeers.values()],
           // V4 — vuelta rápida de la carrera: el mejor `bestLapMs` de los
           // `rfin` (elección determinista en `fastestRaceLap`).
           fastestRaceLap(

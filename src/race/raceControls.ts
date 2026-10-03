@@ -5,18 +5,22 @@
  * La RaceScene comparte con GameScene el stack de input (`IInputState`
  * fusionado por `InputSystem`, teclado + táctil), pero el CONSUMIDOR cambia:
  * `CircuitPhysics` espera un `CircuitInput` {throttle, brake, steer}. Acá
- * vive ese mapeo, las teclas de la carrera y el layout de los botones
- * táctiles, todo puro y testeable sin Phaser (mismo criterio que
- * KeyboardSource/TouchButton).
+ * vive ese mapeo, las teclas de la carrera y el layout táctil, todo puro y
+ * testeable sin Phaser (mismo criterio que KeyboardSource/TouchButton).
  *
  * Issue #20 — GAS MANUAL: el acelerador ya no viene pisado por defecto; el
  * jugador controla el gas (tecla W/↑ o botón GAS táctil) y con él sus
  * frenadas y trazadas. Sin gas pisado el auto desacelera por el roce
  * (`CIRCUIT.coastDrag`); el freno conserva prioridad sobre el gas.
  *
+ * Issue #37 — GIRO ANALÓGICO: el steer sale de `steerDirection` (compartido
+ * con `PlayerCar`): eje continuo [−1, 1] cuando el joystick táctil está en
+ * uso, fórmula binaria de siempre con el teclado. La física lo escala al
+ * turn rate, así la mitad de deslizo es la mitad de giro.
+ *
  * Teclado de carrera: W/↑ acelera; ←→ o A/D giran; ↓, S o ESPACIO frenan.
- * Táctil: ◀ ▶ abajo-izquierda (mismo layout del modo BATALLA) y GAS + FRENO
- * abajo-derecha en SUS casillas del layout de 6 botones (gas en la esquina,
+ * Táctil: JOYSTICK deslizable abajo-izquierda (issue #37) y GAS + FRENO
+ * abajo-derecha en SUS casillas del layout de botones (gas en la esquina,
  * donde llega el pulgar derecho).
  */
 
@@ -24,23 +28,25 @@ import {
   computeTouchButtonLayout,
   type TouchButtonRect,
 } from '../systems/TouchButton';
+import {
+  computeSteerJoystickRect,
+} from '../systems/SteerJoystick';
 import type { KeyLike, KeyboardPluginLike } from '../systems/KeyboardSource';
-import type { IInputState } from '../systems/InputSystem';
+import { steerDirection, type IInputState } from '../systems/InputSystem';
 import type { CircuitInput } from './circuitPhysics';
 
 /**
  * Estado fusionado `IInputState` → `CircuitInput` de la física. El acelerador
  * es la acción del jugador (issue #20: gas manual — sin pisarlo el auto
  * desacelera por `CIRCUIT.coastDrag`); el freno gana sobre el gas en la
- * física y el giro se toma de la dirección pedida (ambos lados a la vez se
- * cancelan, comportamiento de Fase 1).
+ * física y el giro sale de `steerDirection`: eje analógico del joystick si
+ * está activo, si no la fórmula binaria (teclado).
  */
 export function circuitInputFromState(state: IInputState): CircuitInput {
-  const steer = (state.left ? -1 : 0) + (state.right ? 1 : 0);
   return {
     throttle: state.throttle,
     brake: state.brake,
-    steer: steer as -1 | 0 | 1,
+    steer: steerDirection(state),
   };
 }
 
@@ -120,32 +126,34 @@ export class RaceKeyboardSource {
   }
 }
 
-/** Acciones táctiles de la carrera: ◀ ▶ para girar y GAS + FRENO. */
-export type RaceTouchAction = 'left' | 'right' | 'throttle' | 'brake';
+/** Acciones táctiles de la carrera con botón: GAS + FRENO. El giro va por
+ * el joystick deslizable (issue #37), que no es un botón. */
+export type RaceTouchAction = 'throttle' | 'brake';
 
-export const RACE_TOUCH_ACTIONS: readonly RaceTouchAction[] = [
-  'left',
-  'right',
-  'throttle',
-  'brake',
-];
+export const RACE_TOUCH_ACTIONS: readonly RaceTouchAction[] = ['throttle', 'brake'];
+
+/** Layout táctil de la carrera: zona del joystick + GAS y FRENO. */
+export interface RaceTouchLayout {
+  /** Zona del joystick deslizable (abajo-izquierda, issue #37). */
+  readonly joystick: TouchButtonRect;
+  /** Botón GAS (esquina inferior derecha, donde llega el pulgar derecho). */
+  readonly throttle: TouchButtonRect;
+  /** Botón FRENO (a la izquierda del GAS). */
+  readonly brake: TouchButtonRect;
+}
 
 /**
- * Layout táctil de la carrera: reutiliza el layout de 6 botones del modo
- * BATALLA (`computeTouchButtonLayout`) y se queda con ◀ ▶ (abajo-izquierda,
- * como siempre) y GAS + FRENO abajo-derecha en SUS casillas (gas en la
- * esquina exterior, donde llega el pulgar derecho; freno a su lado).
- * El resto de las casillas (turbo/drs) queda libre.
+ * Layout táctil de la carrera: reutiliza el layout de botones del modo
+ * BATALLA (`computeTouchButtonLayout`) para GAS + FRENO en SUS casillas
+ * (gas en la esquina exterior, donde llega el pulgar derecho; freno a su
+ * lado) y agrega la zona del joystick deslizable, que ocupa el footprint de
+ * los viejos ◀ ▶. Las casillas turbo/drs quedan libres.
  */
-export function computeRaceTouchLayout(
-  width: number,
-  height: number,
-): Record<RaceTouchAction, TouchButtonRect> {
-  const full = computeTouchButtonLayout(width, height);
+export function computeRaceTouchLayout(width: number, height: number): RaceTouchLayout {
+  const buttons = computeTouchButtonLayout(width, height);
   return {
-    left: full.left,
-    right: full.right,
-    throttle: full.throttle,
-    brake: full.brake,
+    joystick: computeSteerJoystickRect(width, height),
+    throttle: buttons.throttle,
+    brake: buttons.brake,
   };
 }

@@ -53,7 +53,7 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 
 | Acción | Teclado | Táctil (HUD) |
 | --- | --- | --- |
-| Doblar | ← → o A / D | ◀ ▶ (abajo-izquierda) |
+| Doblar | ← → o A / D | **Joystick deslizable** (abajo-izquierda, issue #37) |
 | Acelerar | Espacio | GAS (abajo-derecha) |
 | Freno | Z | BRK |
 | Turbo | Shift | TURBO |
@@ -70,13 +70,14 @@ El acelerador es **manual** (issue #20): hay que pisar GAS; sin gas el auto desa
 
 | Acción | Teclado | Táctil (HUD) |
 | --- | --- | --- |
-| Doblar | ← → o A / D | ◀ ▶ (abajo-izquierda) |
+| Doblar | ← → o A / D | **Joystick deslizable** (abajo-izquierda, issue #37) |
 | Gas | W o ↑ | GAS (abajo-derecha, verde) |
 | Freno | ↓ / S / Espacio | FRENO (abajo-derecha) |
 
 Común a todos los modos:
 
-- Los botones táctiles soportan **multi-touch real** (tracking de `pointerId` por botón): doblar y acelerar a la vez.
+- **Doblado analógico (issue #37)**: en táctil, el giro es un joystick horizontal — apoyá el dedo en la zona inferior-izquierda y deslizalo: cuanto más lejos del centro, más giro (con zona muerta en el medio). Al soltar —aunque el dedo salga del canvas— el volante vuelve al centro. El teclado sigue binario (← → / A D).
+- Los controles táctiles soportan **multi-touch real** (tracking de `pointerId` por control): doblar deslizando y acelerar a la vez.
 - La carrera arranca con un **countdown 3-2-1-GO!**: el mundo está congelado hasta el final de la cuenta.
 - La **pausa es real**: botón en pantalla, tecla P, o **automática** al cambiar de pestaña / perder el foco. Física, scroll, spawn y puntaje quedan congelados de verdad hasta reanudar.
 
@@ -116,10 +117,10 @@ El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde �
 
 ### Cómo se juega
 
-1. Menú → **GRAN PREMIO** → elegí pista y **dificultad del rival**: FÁCIL / NORMAL / DIFÍCIL.
+1. Menú → **GRAN PREMIO** → elegí pista, **dificultad del rival** (FÁCIL / NORMAL / DIFÍCIL) y el toggle **DESGASTE: SÍ/NO**.
 2. Countdown 3-2-1-GO! y largada hacia **arriba** de la pantalla: **mismos controles que la carrera en circuito** (gas manual — ver [Controles](#controles)).
-3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD** y minimapa con **tu punto destacado**. Cambiar de posición suena (igual al ganar que al perder el lugar).
-4. Al cruzar TU meta: **podio con el top 3** (ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista y dificultad con parrilla nueva.
+3. HUD en vivo: posición **Pn/8**, **gap** en segundos con el rival de adelante y de atrás, vuelta/tiempos, chip **GRAN PREMIO · PISTA · DIFICULTAD**, minimapa con **tu punto destacado** y — con desgaste activo — el indicador **NEUMÁTICOS n%** (rojo cuando la goma está crítica). Cambiar de posición suena (igual al ganar que al perder el lugar).
+4. Al cruzar TU meta: **podio con el top 3** (ganador en oro) y, si quedaste fuera, **tu fila destacada debajo**; **¡NUEVO RÉCORD!** parpadea si superaste tu mejor posición o mejor vuelta para esa pista × dificultad. **REINTENTAR** repite la misma pista, dificultad y desgaste con parrilla nueva.
 
 ### Rivales con criterio (no autos sobre rieles)
 
@@ -127,6 +128,26 @@ El auto tiene **100 HP de chasis**, visibles en la barra CHASIS del HUD (verde �
 - **Personalidad**: los 7 rivales (ALONSITO, MAXVELOZ, SCHUMIKA, LECLERVO, NORRITO, PIASTRINO, SARGUINI) tienen velocidad, trazada y agresividad propias, **deterministas por seed**: la misma carrera es reproducible de punta a punta.
 - **Errores humanos**: de vez en cuando frenan tarde o se desvían de su trazada — más seguido en FÁCIL que en DIFÍCIL — y el fallo dura un instante, no los saca de carrera.
 - **Adelantamientos**: ven a los autos alrededor, cierran el hueco y desvían SU línea para intentar la maniobra; la agresividad de cada uno decide cuánto se arriesga.
+
+### Contactos entre autos (se puede empujar y bloquear)
+
+Los 8 autos comparten el mundo y **ya no se atraviesan** (issue #39): tocarse tiene física real, simétrica para jugador y rivales y **determinista por seed**.
+
+- **Toque de cola**: el de adelante recibe un **empujón para adelante** (leve) y **el que golpea se frena un poco** — golpear nunca es rentable.
+- **El ángulo manda**: un roce de lado **desvía los headings** en sentidos opuestos (más ángulo de contacto, más desvío); un toque limpio de cola es empujón puro, sin desvío.
+- **Bloquear es real**: la separación posicional es siempre mutua — sostener tu línea empuja al otro fuera del hueco.
+- Cada golpe fuerte **suena** (thump seco) y sacude la cámara; los roces continuos no ametrallan SFX (hay enfriamiento).
+
+### Desgaste de neumáticos (opcional)
+
+El toggle **DESGASTE** del picker (default **NO**, persistido en `localStorage`; REINTENTAR lo respeta) decide si la goma se degrada:
+
+| Toggle | Comportamiento |
+| --- | --- |
+| **NO** (default) | Carrera arcade pura: rodar y chocar no cambia el rendimiento de ningún auto. |
+| **SÍ** | La goma (100% → 0%) se gasta **por kilometraje** (una carrera de 3 vueltas gasta ~40% solo rodando) y **cada golpe acelera el desgaste** (un impacto a fondo cuesta ~4%). La goma gastada **recorta la velocidad punta** hasta −18% al final. El HUD lo muestra en **NEUMÁTICOS n%** (rojo bajo el 25%). El desgaste es simétrico: los rivales lo sufren igual. |
+
+En multijugador y en la práctica libre no hay contactos ni desgaste: los rivales del multi son interpolaciones de red, no simulaciones locales.
 - **Goma declarada y acotada**: si un rival queda muy lejos del jugador, su ritmo se ajusta una fracción MUY chica para que la pelea no se rompa — tope pequeño por dificultad (el mayor en FÁCIL, casi rígido en DIFÍCIL) y NUNCA por encima del techo físico del auto.
 - **Dificultad**: los presets ajustan ritmo en recta, calidad de trazada, frecuencia de errores, agresividad y goma; el orden fácil < normal < difícil está garantizado por tests.
 
@@ -244,7 +265,7 @@ La analítica está **APAGADA por default** y es opt-in del administrador del de
 | Evento | Properties | Cuándo |
 | --- | --- | --- |
 | Pageview | — (el default del loader) | al cargar la página |
-| `partida_iniciada` | `modo` (`entrenar` \| `gran_premio` \| `multijugador`), `pista` (sólo gran premio y carrera multi), `dificultad` (sólo gran premio: `easy`/`normal`/`hard`) | al arrancar una partida desde el menú o desde el lobby |
+| `partida_iniciada` | `modo` (`entrenar` \| `gran_premio` \| `multijugador`), `pista` (sólo gran premio y carrera multi), `dificultad` (sólo gran premio: `easy`/`normal`/`hard`), `desgaste` (sólo gran premio, #39: booleano del toggle DESGASTE) | al arrancar una partida desde el menú o desde el lobby |
 | `vuelta_completada` | `pista`, `duracion_ms` | cada vuelta válida del jugador local en RaceScene (gran premio y carrera multi; nunca por rival) |
 
 **Qué NO se mide — cero PII**: nombres de jugador, contenido de chat, peer IDs ni datos de presencia jamás viajan en las properties (el código fuente es el contrato: [`src/telemetry/analytics.ts`](./src/telemetry/analytics.ts) es el único punto de contacto, y los ganchos viven en `MenuScene`, `LobbyScene` y `RaceScene`).
