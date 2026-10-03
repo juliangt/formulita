@@ -47,7 +47,7 @@ import {
   type StartPayload,
 } from '../net/protocol';
 import type { NetClient } from '../net/NetClient';
-import { handoffNetClient } from '../net/netClientSession';
+import { bindLobbyNet, evaluateLobbyEntry, handoffNetClient } from '../net/netClientSession';
 import { randomRoomSeed } from '../net/roomRng';
 import { resolveAppId, TrysteroNetClient } from '../net/TrysteroNetClient';
 import { buildTrackPath, getTrackById, TRACKS, type TrackId } from '../race/tracks';
@@ -164,8 +164,13 @@ export class LobbyScene extends Phaser.Scene {
   private chatStore: ChatStore | null = null;
   /** Botón CHAT (solo DENTRO de la sala; la carrera no tiene chat). */
   private chatButton: MenuButton | null = null;
-  /** Desuscripción de `onChat` del NetClient (limpia en SHUTDOWN). */
-  private unsubscribeChat: (() => void) | null = null;
+  /**
+   * Desuscripción TOTAL de los handlers del lobby sobre el NetClient (los
+   * seis eventos, chat incluido). Issue #35: se llama en `startRace` ANTES
+   * del handoff — dejarlos vivos durante la carrera apuntaba a widgets
+   * destruidos y a startRace() (handlers zombie).
+   */
+  private detachLobbyNet: (() => void) | null = null;
 
   /* V2 (issue #9) — MODO y PISTA del anfitrión. El `start` viaja extendido
    * (gameMode + trackId); los invitados conocen la elección al arrancar (el
@@ -253,27 +258,7 @@ export class LobbyScene extends Phaser.Scene {
     }
 
     this.client = new TrysteroNetClient();
-    this.client.onError((message) => this.setStatus(message, '#d63c3c'));
-    this.client.onRoomFull(() => {
-      this.joined = false;
-      this.wordText.setVisible(false);
-      this.closeChatEntry();
-      this.showWordInput();
-      this.setStatus(`SALA LLENA (${MULTIPLAYER.maxPlayers}/${MULTIPLAYER.maxPlayers})`, '#d63c3c');
-    });
-    this.client.onRosterChange((roster) => this.renderRoster(roster));
-    this.client.onHostChange(() => this.syncStartButton());
-    this.client.onStart((payload) => this.startRace(payload));
-
-    // C1 — chat de sala: los mensajes que llegan por la malla entran al store
-    // de la sesión (el overlay los lee de ahí, abierto o cerrado). El
-    // remitente se resuelve contra el roster LOCAL (wire = solo texto).
-    this.unsubscribeChat = this.client.onChat((fromPeerId, payload) => {
-      if (!this.chatStore || !this.client) {
-        return;
-      }
-      receiveRoomChat(this.chatStore, this.client.getRoster(), fromPeerId, payload, Date.now());
-    });
+    this.wireLobbyNet(this.client);
 
     if (this.playerName.length === 0) {
       // Arranque defensivo sin nombre (el flujo normal lo pide en el menú).
@@ -297,8 +282,8 @@ export class LobbyScene extends Phaser.Scene {
       // chat abierto): su propio shutdown destruye el panel y restaura la
       // captura de teclado del juego.
       this.scene.stop(ChatScene.KEY);
-      this.unsubscribeChat?.();
-      this.unsubscribeChat = null;
+      this.detachLobbyNet?.();
+      this.detachLobbyNet = null;
       if (this.handedOff) {
         // La sala SIGUE VIVA en la carrera: el store queda publicado para
         // el modo espectador (C3 lee/escribe el hilo room desde GameScene).
@@ -317,6 +302,36 @@ export class LobbyScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Cablea los SEIS eventos del lobby sobre el cliente y guarda la
+   * desuscripción total (issue #35): `startRace` la invoca antes del
+   * handoff para que ningún handler sobreviva a la escena.
+   */
+  private wireLobbyNet(client: NetClient): void {
+    this.detachLobbyNet = bindLobbyNet(client, {
+      onStatus: (message) => this.setStatus(message, '#d63c3c'),
+      onRoomFull: () => {
+        this.joined = false;
+        this.wordText.setVisible(false);
+        this.closeChatEntry();
+        this.showWordInput();
+        this.setStatus(`SALA LLENA (${MULTIPLAYER.maxPlayers}/${MULTIPLAYER.maxPlayers})`, '#d63c3c');
+      },
+      onRosterChange: (roster) => this.renderRoster(roster),
+      onHostChange: () => this.syncStartButton(),
+      onStart: (payload) => this.startRace(payload),
+      // C1 — chat de sala: los mensajes que llegan por la malla entran al
+      // store de la sesión (el overlay los lee de ahí, abierto o cerrado).
+      // El remitente se resuelve contra el roster LOCAL (wire = solo texto).
+      onChat: (fromPeerId, payload) => {
+        if (!this.chatStore || !this.client) {
+          return;
+        }
+        receiveRoomChat(this.chatStore, this.client.getRoster(), fromPeerId, payload, Date.now());
+      },
+    });
+  }
+
   /* ---------------------------------------------------------------- */
   /* Entrada a la sala                                                 */
   /* ---------------------------------------------------------------- */
@@ -325,9 +340,18 @@ export class LobbyScene extends Phaser.Scene {
   private createRoom(): void {
     const client = this.requireClient();
     client.create({ appId: this.appId, name: this.playerName });
+    // Issue #35 — `create` es fire-and-forget y puede fallar ANTES de abrir
+    // sala (nombre inválido, transporte que lanza): en ese caso el error YA
+    // está en pantalla (onStatus es síncrono) y NO se marca joined ni se
+    // pinta sala/INICIAR, que escondían el fallo.
+    const entry = evaluateLobbyEntry(client);
+    if (!entry.entered) {
+      this.joined = false;
+      return;
+    }
     this.joined = true;
     this.openChatEntry();
-    const word = client.roomWord ?? '';
+    const word = entry.roomWord;
     this.wordInput?.destroy();
     this.wordInput = null;
     this.wordText.setText(word).setVisible(true);
@@ -389,6 +413,15 @@ export class LobbyScene extends Phaser.Scene {
     this.playerName = name;
     getPlayerProfileRepository(this.registry).save({ name });
     client.join({ appId: this.appId, roomWord: word, name });
+    // Issue #35 — mismo gate que createRoom: si el join no abrió sala
+    // (transporte que lanza; palabra y nombre ya validados acá), el error
+    // queda en pantalla y el input sigue vivo para reintentar. Nada de
+    // "BUSCANDO SALA…" ni INICIAR fantasma.
+    const entry = evaluateLobbyEntry(client);
+    if (!entry.entered) {
+      this.joined = false;
+      return;
+    }
     this.joined = true;
     this.openChatEntry();
     this.enterButton?.destroy();
@@ -729,6 +762,12 @@ export class LobbyScene extends Phaser.Scene {
    * parseo defensivo (`parseRaceInit`) garantiza la degradación.
    */
   private startRace(payload: StartPayload): void {
+    // Issue #35 — antes del handoff mueren TODOS los handlers del lobby:
+    // onStart/onRosterChange/onHostChange/onRoomFull/onError apuntarían a
+    // widgets ya destruidos y a esta misma función (un `start` de un
+    // anfitrión migrado durante la partida reiniciaría la carrera de todos).
+    this.detachLobbyNet?.();
+    this.detachLobbyNet = null;
     // M2 — handoff del NetClient: la carrera es la nueva dueña del transporte
     // (difunde state/eliminated/match-over o rstate/rfin/race-over). Este
     // SHUTDOWN ya no lo destruye.
