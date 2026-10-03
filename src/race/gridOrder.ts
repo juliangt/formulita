@@ -43,6 +43,19 @@ export interface GridSlot {
 }
 
 /**
+ * [STUB del commit Test: replica el fallback ACTUAL de RaceScene (la pole)
+ * para que los tests qaT6 fallen POR ASSERTION. La casilla sintética real
+ * llega en el commit Fix #35.]
+ */
+export function ownGridSlot(
+  slots: readonly GridSlot[],
+  peerId: string,
+  _path?: TrackPath,
+): GridSlot {
+  return slots.find((slot) => slot.peerId === peerId) ?? slots[0];
+}
+
+/**
  * Asigna la parrilla. Misma (players, seed) ⇒ misma parrilla siempre; la
  * pista es opcional y sólo agrega las coordenadas de mundo de cada casilla.
  */
