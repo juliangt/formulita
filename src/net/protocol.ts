@@ -196,14 +196,22 @@ export function roundRaceFinishPayload(payload: RaceFinishPayload): RaceFinishPa
 
 /**
  * Parseo defensivo de un `rfin` recibido: null si el payload no tiene forma
- * de tiempos de carrera (el receptor lo descarta sin romper).
+ * de tiempos de carrera (el receptor lo descarta sin romper). T3 (issue #35):
+ * `totalMs <= 0` también es basura (nadie termina 3 vueltas en 0 ms) — si se
+ * coaccionara a 0 como antes, un peer ganaría al instante y abriría la
+ * ventana de gracia de todos. `bestLapMs: 0` SÍ es legítimo (ninguna vuelta
+ * válida) y no se rechaza.
  */
 export function parseRaceFinishPayload(raw: unknown): RaceFinishPayload | null {
   if (typeof raw !== 'object' || raw === null) {
     return null;
   }
   const record = raw as Record<string, unknown>;
-  if (typeof record.totalMs !== 'number' || !Number.isFinite(record.totalMs)) {
+  if (
+    typeof record.totalMs !== 'number' ||
+    !Number.isFinite(record.totalMs) ||
+    record.totalMs <= 0
+  ) {
     return null;
   }
   if (typeof record.bestLapMs !== 'number' || !Number.isFinite(record.bestLapMs)) {

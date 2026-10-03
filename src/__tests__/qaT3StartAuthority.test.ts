@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mulberry32 } from '../net/roomRng';
-import { isStartFromHost, type RosterEntry } from '../net/lobbyState';
-import { parseRaceFinishPayload, type StartPayload } from '../net/protocol';
+import { isStartFromHost } from '../net/lobbyState';
+import { parseRaceFinishPayload, type RosterEntry, type StartPayload } from '../net/protocol';
 import { TrysteroNetClient } from '../net/TrysteroNetClient';
 import { RaceScene } from '../scenes/RaceScene';
 import { FakeTrysteroRoom } from './fakes/FakeTrysteroRoom';

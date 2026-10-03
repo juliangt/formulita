@@ -39,7 +39,7 @@ import { joinRoom, selfId as trysteroSelfId } from '@trystero-p2p/torrent';
 import { JOIN_SETTLE_MS, MULTIPLAYER } from '../config/balance';
 import { relayConfigFor } from './appId';
 import type { NetEnvSource } from './appId';
-import { assignColors, isRoomFull, resolveHostPeerId } from './lobbyState';
+import { assignColors, isRoomFull, isStartFromHost, resolveHostPeerId } from './lobbyState';
 import type { NetClient, CreateRoomOptions, JoinRoomOptions } from './NetClient';
 import {
   isValidRoomWord,
@@ -275,7 +275,15 @@ export class TrysteroNetClient implements NetClient {
     };
 
     const startAction = room.makeAction<StartPayload>('start');
-    startAction.onMessage = (payload) => {
+    startAction.onMessage = (payload, context) => {
+      // T3 (issue #35) — autoridad del arranque en RECEPCIÓN: sólo el
+      // anfitrión resuelto sobre el roster LOCAL puede difundir start (el
+      // guard de isHost() de la emisión no alcanza: es un cálculo local que
+      // otro peer no puede verificar). Descarte SILENCIOSO: avisar por error
+      // le daría al atacante un canal para ensuciar el estado del lobby.
+      if (!isStartFromHost(this.rosterEntries(), context.peerId)) {
+        return;
+      }
       for (const handler of this.handlers.start) {
         handler(payload);
       }
