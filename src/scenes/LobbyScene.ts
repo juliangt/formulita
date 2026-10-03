@@ -146,6 +146,12 @@ export class LobbyScene extends Phaser.Scene {
    * debe destruirlo.
    */
   private handedOff = false;
+  /**
+   * qaT9 (issue #35) — true cuando tryStart ya difundió el start de ESTA
+   * sesión del lobby: el botón dispara en `pointerdown` (MenuButton) y un
+   * doble tap rápido entraría dos veces, difundiendo DOS seeds distintas.
+   */
+  private startRequested = false;
   private road!: Phaser.GameObjects.TileSprite;
 
   /* Widgets vivos (se recrean/actualizan por evento). */
@@ -198,6 +204,9 @@ export class LobbyScene extends Phaser.Scene {
     this.joinKeyword = sanitizeRoomWord(this.lobbyData.keyword ?? '');
     this.joined = false;
     this.handedOff = false;
+    // El guard de start es POR SESIÓN del lobby: re-entrar vuelve a permitir
+    // iniciar (el flag de la sala anterior no sobrevive).
+    this.startRequested = false;
     // V2 — el modo/pista del anfitrión arranca en el default (BATALLA) en
     // cada lobby nuevo; los widgets se (re)crean al entrar a la sala.
     this.gameMode = 'battle';
@@ -736,6 +745,12 @@ export class LobbyScene extends Phaser.Scene {
 
   /** INICIAR: el anfitrión difunde start y arranca SU carrera local. */
   private tryStart(): void {
+    // Guard de re-entrada: el INICIAR dispara en pointerdown y los eventos
+    // DOM encolados pueden entrar dos veces antes de que la escena cambie;
+    // un segundo `client.start` difundiría OTRA seed con la partida en marcha.
+    if (this.startRequested) {
+      return;
+    }
     const client = this.requireClient();
     const roster = client.getRoster();
     if (!client.isHost() || roster.length < MULTIPLAYER.minPlayersToStart) {
@@ -744,6 +759,7 @@ export class LobbyScene extends Phaser.Scene {
     }
     // V2 — el start viaja extendido con el modo (y la pista en CARRERA).
     // Campos AUSENTES en batalla: un receptor viejo degrada a batalla igual.
+    this.startRequested = true;
     const payload: StartPayload = {
       seed: randomRoomSeed(),
       players: roster,

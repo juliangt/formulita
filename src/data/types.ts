@@ -95,14 +95,23 @@ export function sanitizeChatSettings(raw: unknown): ChatSettings {
 }
 
 /**
- * Coacciona un valor desconocido a un entero ≥ 0: acepta el `fallback` si el
- * valor no es un número finito y trunca los fraccionales.
+ * Tope de todo contador persistido/pintado: el máximo del marcador arcade de
+ * 6 dígitos que usa `formatScore` (format.ts, SCORE_DIGITS). Sin tope, un
+ * localStorage manipulado con 1e300 pasaba el filtro de finitos y la UI lo
+ * pintaba "1e+300".
+ */
+const MAX_COUNT = 999_999;
+
+/**
+ * Coacciona un valor desconocido a un entero en [0, MAX_COUNT]: acepta el
+ * `fallback` si el valor no es un número finito, trunca los fraccionales y
+ * clampea al tope del marcador de 6 dígitos.
  */
 function toCount(value: unknown, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return fallback;
   }
-  return Math.max(0, Math.floor(value));
+  return Math.min(MAX_COUNT, Math.max(0, Math.floor(value)));
 }
 
 /**
