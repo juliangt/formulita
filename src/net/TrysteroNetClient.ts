@@ -268,9 +268,19 @@ export class TrysteroNetClient implements NetClient {
 
     // Acción de meta: cada peer anuncia {name, color, isCreator}. El color
     // del wire es informativo (se recalcula del roster en todos lados).
+    // Forma mínima del wire (issue #35): objeto con `name` string — una meta
+    // malformada se descarta en silencio (sin lanzar en el callback de
+    // Trystero, sin peer fantasma ni roster corrupto).
     this.metaAction = room.makeAction<PeerMeta>('meta');
     this.metaAction.onMessage = (meta, context) => {
-      this.metas.set(context.peerId, { ...meta, name: sanitizePlayerName(meta.name) });
+      if (typeof meta !== 'object' || meta === null || typeof meta.name !== 'string') {
+        return;
+      }
+      this.metas.set(context.peerId, {
+        name: sanitizePlayerName(meta.name),
+        color: typeof meta.color === 'number' && Number.isFinite(meta.color) ? meta.color : 0,
+        isCreator: meta.isCreator === true,
+      });
       this.emitRoster();
     };
 
@@ -304,9 +314,14 @@ export class TrysteroNetClient implements NetClient {
     };
 
     // Chat de sala (C1): broadcast {text} sanitizado; el remitente viaja en
-    // el contexto (peerId) que Trystero entrega al recibir.
+    // el contexto (peerId) que Trystero entrega al recibir. Forma mínima del
+    // wire (issue #35): {text: string} — un payload malformado se descarta
+    // antes de llegar al store (que igual re-sanitiza el string).
     const chatAction = room.makeAction<ChatPayload>('chat');
     chatAction.onMessage = (payload, context) => {
+      if (typeof payload !== 'object' || payload === null || typeof payload.text !== 'string') {
+        return;
+      }
       for (const handler of this.handlers.chat) {
         handler(context.peerId, payload);
       }

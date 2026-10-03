@@ -161,11 +161,11 @@ describe('qaT4 — meta malformada en el lobby (TrysteroNetClient)', () => {
     net.client.onRosterChange(rosterListener);
     const room = net.room();
 
-    expect(() => room.receive<PeerMeta>('meta', null, 'zz-remoto')).not.toThrow();
-    expect(() => room.receive<PeerMeta>('meta', 'Ana', 'zz-remoto')).not.toThrow();
-    expect(() => room.receive<PeerMeta>('meta', 42, 'zz-remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('meta', null, 'zz-remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('meta', 'Ana', 'zz-remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('meta', 42, 'zz-remoto')).not.toThrow();
     expect(() =>
-      room.receive<PeerMeta>('meta', { name: 99, color: 0, isCreator: false }, 'zz-remoto'),
+      room.receive<unknown>('meta', { name: 99, color: 0, isCreator: false }, 'zz-remoto'),
     ).not.toThrow();
 
     // Sin fantasma: el peer malformado no aparece en el roster.
@@ -178,8 +178,8 @@ describe('qaT4 — meta malformada en el lobby (TrysteroNetClient)', () => {
     net.client.create({ appId: 'app-formulita', name: 'Ana' });
     const room = net.room();
 
-    room.receive<PeerMeta>('meta', null, 'zz-remoto');
-    room.receive<PeerMeta>('meta', { name: 99, color: 0, isCreator: false }, 'zz-remoto');
+    room.receive<unknown>('meta', null, 'zz-remoto');
+    room.receive<unknown>('meta', { name: 99, color: 0, isCreator: false }, 'zz-remoto');
     room.receive<PeerMeta>('meta', { name: 'Beto', color: 0, isCreator: false }, 'zz-remoto');
 
     expect(
@@ -196,9 +196,9 @@ describe('qaT4 — meta malformada en la sala pública (TrysteroChatClient)', ()
     chat.client.onAvailablePeers(peersListener);
     const room = chat.room();
 
-    expect(() => room.receive<PresenceMeta>('meta', null, 'remoto')).not.toThrow();
-    expect(() => room.receive<PresenceMeta>('meta', { name: 5, color: 0 }, 'remoto')).not.toThrow();
-    expect(() => room.receive<PresenceMeta>('meta', 'Ana', 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('meta', null, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('meta', { name: 5, color: 0 }, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('meta', 'Ana', 'remoto')).not.toThrow();
 
     const peers = (): AvailablePeer[] => chat.client.getAvailablePeers();
     expect(peers().some((peer) => peer.peerId === 'remoto')).toBe(false);
@@ -258,9 +258,9 @@ describe('qaT4 — chat malformado (cadena onChat → receiveRoomChat)', () => {
     const store = wireLobbyChat(net);
     const room = net.room();
 
-    expect(() => room.receive<ChatPayload>('chat', null, 'remoto')).not.toThrow();
-    expect(() => room.receive<ChatPayload>('chat', 'junk', 'remoto')).not.toThrow();
-    expect(() => room.receive<ChatPayload>('chat', { text: 42 }, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('chat', null, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('chat', 'junk', 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('chat', { text: 42 }, 'remoto')).not.toThrow();
     expect(store.getMessages('room')).toEqual([]);
 
     // El mensaje sano posterior entra al hilo con normalidad.
@@ -278,12 +278,12 @@ describe('qaT4 — dm malformado (TrysteroChatClient)', () => {
     chat.client.onDm(dmListener);
     const room = chat.room();
 
-    expect(() => room.receive<DmPayload>('dm', null, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('dm', null, 'remoto')).not.toThrow();
     expect(() =>
-      room.receive<DmPayload>('dm', { text: 'hola', targetPeerId: 42 }, 'remoto'),
+      room.receive<unknown>('dm', { text: 'hola', targetPeerId: 42 }, 'remoto'),
     ).not.toThrow();
     expect(() =>
-      room.receive<DmPayload>('dm', { text: 42, targetPeerId: 'self' }, 'remoto'),
+      room.receive<unknown>('dm', { text: 42, targetPeerId: 'self' }, 'remoto'),
     ).not.toThrow();
     expect(dmListener).not.toHaveBeenCalled();
 
@@ -301,8 +301,8 @@ describe('qaT4 — invite malformado (TrysteroChatClient, misma clase de forma)'
     chat.client.onInvite(inviteListener);
     const room = chat.room();
 
-    expect(() => room.receive<InvitePayload>('invite', null, 'remoto')).not.toThrow();
-    expect(() => room.receive<InvitePayload>('invite', { keyword: 42 }, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('invite', null, 'remoto')).not.toThrow();
+    expect(() => room.receive<unknown>('invite', { keyword: 42 }, 'remoto')).not.toThrow();
     expect(inviteListener).not.toHaveBeenCalled();
 
     // La invitación sana posterior se despacha con normalidad.

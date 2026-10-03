@@ -187,6 +187,33 @@ export function roundRaceStatePayload(
   return { s, o, v, lap };
 }
 
+/**
+ * Parseo defensivo de un `rstate` recibido (issue #35): valida que los
+ * CUATRO campos viajen y sean finitos; null si no — el receptor descarta el
+ * mensaje sin romper (un `rstate` null hacía TypeError por mensaje a 10 Hz).
+ * La re-normalización de pista (wrap/clamp) sigue siendo
+ * `roundRaceStatePayload` con la pista LOCAL del receptor.
+ */
+export function parseRaceStatePayload(raw: unknown): RaceStatePayload | null {
+  if (typeof raw !== 'object' || raw === null) {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.s !== 'number' || !Number.isFinite(record.s)) {
+    return null;
+  }
+  if (typeof record.o !== 'number' || !Number.isFinite(record.o)) {
+    return null;
+  }
+  if (typeof record.v !== 'number' || !Number.isFinite(record.v)) {
+    return null;
+  }
+  if (typeof record.lap !== 'number' || !Number.isFinite(record.lap)) {
+    return null;
+  }
+  return { s: record.s, o: record.o, v: record.v, lap: record.lap };
+}
+
 /** Normaliza un `RaceFinishPayload` (enteros ≥ 0; no finito ⇒ 0). */
 export function roundRaceFinishPayload(payload: RaceFinishPayload): RaceFinishPayload {
   const clean = (value: number): number =>
@@ -214,9 +241,11 @@ export function parseRaceFinishPayload(raw: unknown): RaceFinishPayload | null {
 
 /**
  * Parseo defensivo de un `race-over` recibido: valida CADA fila de la
- * clasificación (misma forma que produce `finalClassification`); null si el
- * payload o alguna fila no tiene forma válida — una standings corrupta no
- * pisa la clasificación local del receptor.
+ * clasificación (misma forma que produce `finalClassification`) y que el
+ * CONJUNTO sea una clasificación real — posiciones EXACTAMENTE la permutación
+ * 1..N (sin repetidos ni huecos) y peerIds únicos; null si el payload, alguna
+ * fila o el conjunto no cumplen — una standings corrupta no pisa la
+ * clasificación local del receptor.
  */
 export function parseRaceOverPayload(raw: unknown): RaceOverPayload | null {
   if (typeof raw !== 'object' || raw === null) {
@@ -227,6 +256,7 @@ export function parseRaceOverPayload(raw: unknown): RaceOverPayload | null {
     return null;
   }
   const standings: RaceFinalStanding[] = [];
+  const seenPeerIds = new Set<string>();
   for (const entry of record.standings) {
     if (typeof entry !== 'object' || entry === null) {
       return null;
@@ -235,6 +265,10 @@ export function parseRaceOverPayload(raw: unknown): RaceOverPayload | null {
     if (typeof row.peerId !== 'string' || row.peerId.length === 0) {
       return null;
     }
+    if (seenPeerIds.has(row.peerId)) {
+      return null; // peerId repetido: no es una clasificación por fila única
+    }
+    seenPeerIds.add(row.peerId);
     if (
       typeof row.position !== 'number' ||
       !Number.isInteger(row.position) ||
@@ -265,6 +299,20 @@ export function parseRaceOverPayload(raw: unknown): RaceOverPayload | null {
       s: Math.max(0, row.s),
       progress: Number.isFinite(row.progress) ? Math.max(0, row.progress as number) : 0,
     });
+  }
+  // Posiciones EXACTAMENTE 1..N: N enteros distintos todos ≥ 1 (ya validado)
+  // forman la permutación completa si y solo si el máximo es N — descarta
+  // repetidos y huecos de una vez.
+  const positions = new Set(standings.map((row) => row.position));
+  if (positions.size !== standings.length) {
+    return null;
+  }
+  let maxPosition = 0;
+  for (const position of positions) {
+    maxPosition = Math.max(maxPosition, position);
+  }
+  if (maxPosition !== standings.length) {
+    return null;
   }
   return { standings };
 }
@@ -418,9 +466,13 @@ function collapseSpaces(value: string): string {
  * Normaliza el nombre del jugador: trim, espacios internos colapsados y
  * recorte a `MULTIPLAYER.maxPlayerNameLength` (12). Respeta mayúsculas y
  * caracteres unicode (es un nombre propio, no un código). El resultado
- * vacío significa "sin nombre válido".
+ * vacío significa "sin nombre válido". Acepta `unknown`: un no-string del
+ * wire (meta malformada) degrada a vacío en vez de lanzar en el callback.
  */
-export function sanitizePlayerName(raw: string): string {
+export function sanitizePlayerName(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
   return collapseSpaces(raw.trim()).slice(0, MULTIPLAYER.maxPlayerNameLength);
 }
 
@@ -488,9 +540,13 @@ export function isValidRoomWord(raw: string): boolean {
  * (antes de entrar al store/render), y es la que usa `ChatStore.sanitizeText`
  * — una sola regla de texto para todo el chat. Como los mensajes se dibujan
  * como `Phaser.GameObjects.Text` (nunca HTML/innerHTML), no hay vector XSS:
- * esto es límite de largo/limpieza, no sanitización HTML.
+ * esto es límite de largo/limpieza, no sanitización HTML. Acepta `unknown`:
+ * un no-string del wire degrada a vacío (mensaje descartado) en vez de lanzar.
  */
-export function sanitizeChatText(raw: string): string {
+export function sanitizeChatText(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return '';
+  }
   return collapseSpaces(raw.trim()).slice(0, CHAT_MAX_LEN);
 }
 
