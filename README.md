@@ -41,9 +41,16 @@ npm test           # suite de tests (Vitest)
 
 También funciona con `npm run preview` (puerto 4173) para probar el build desde el celular.
 
-### Instalarla como "app" (opcional)
+### Instalarla como app (PWA, issue #43)
 
-En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=cover` + safe-area insets ya están contemplados para pantallas con notch.
+El juego es una **PWA instalable**: manifest + service worker propios (cero dependencias nuevas), con registro **solo en producción** — en `npm run dev` el juego corre sin caché de por medio mientras iterás; en `npm run preview` y en el deploy de Pages:
+
+- **Android (Chrome)**: ofrece *Instalar app* (prompt del navegador o menú ⋮). Queda en el launcher con icono y nombre "Formulita", fullscreen y sin barra del navegador.
+- **iOS (Safari)**: *Compartir → Agregar a pantalla de inicio*. Se abre standalone con icono propio, nombre "Formulita" y barra de estado negra translúcida respetando el notch (`apple-touch-icon` + metas `apple-mobile-web-app-*`).
+- **Offline**: tras la primera visita, el service worker cachea el shell (el juego baja cero assets externos: texturas y audio son 100% procedurales) y el modo un jugador es 100% jugable sin red. El multijugador sigue necesitando conexión por diseño (P2P).
+- **Actualizaciones**: las navegaciones son network-first — al abrir o recargar con red entra la versión nueva y la caché vieja se limpia sola (`formulita-v1`, versionada).
+
+El registro (`src/pwa/serviceWorkerRegistration.ts`) es no-op seguro (nunca lanza, URL relativa que sobrevive al subpath `/formulita/` de Pages) y el manager del prompt (`src/pwa/installPrompt.ts`) observa `beforeinstallprompt`/`appinstalled` **sin secuestrar el banner nativo** de Android: manda la telemetría anónima `pwa_installed` y deja lista la API `promptInstall()` para un futuro botón "INSTALAR" del menú.
 
 ---
 
@@ -332,6 +339,9 @@ src/
 │                         #   ChatPanel (lista + input DOM + ENVIAR del chat)
 ├── audio/                # AudioManager (ISfxEngine): SFX sintéticos Web Audio + dron
 │                         #   del motor; mute persistido, desbloqueo por primer gesto
+├── pwa/                  # PWA instalable (#43): registro del service worker (solo
+│                         #   producción, nunca lanza) + manager del prompt de
+│                         #   instalación con telemetría anónima; el SW vive en public/
 └── data/                 # ISaveRepository → LocalStorageSaveRepository (fallback en
                           memoria); punto de extensión para scoreboard HTTP
 ```
@@ -343,18 +353,20 @@ Decisiones clave:
 - **Pausa real por `scene.pause()`**: la escena de juego congela update, física, tweens, timers y partículas; el overlay vive en una escena aparte (`PauseScene`) porque una escena pausada tampoco procesa su input.
 - **Texturas 100% procedurales** (`Graphics.generateTexture()` una vez en Preload; la viñeta de turbo es un gradiente de canvas horneado una vez). Sin `Graphics` dinámicos en `update`.
 - **Persistencia con interfaz** (`ISaveRepository`): swap a un repositorio HTTP futuro sin refactor del juego.
+- **PWA instalable (#43)**: manifest + service worker **vanilla** en `public/` (copiado tal cual por Vite: el scope cae en la raíz del juego y las URLs relativas sobreviven al subpath de Pages). Shell offline (cero assets externos) con navegaciones **network-first** — las actualizaciones entran al recargar — y assets **stale-while-revalidate**; caché versionada con limpieza en `activate`. Cross-origin (CDN de PostHog, trackers de Trystero) y no-GET quedan afuera. Registro solo en `import.meta.env.PROD` y prompt de instalación observado **sin `preventDefault`** (el banner nativo queda intacto).
 
 ---
 
 ## Tests
 
-- 108 archivos / 1546 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
+- 130 archivos / 1787 tests en `src/__tests__/`, corridos con `npm test` (Vitest, entorno `happy-dom` + stub de contexto 2D en `src/__tests__/setup.ts`).
 - **Modo solo**: lógica pura de todos los sistemas (velocidad, turbo, DRS, spawn con pasabilidad + pool, dificultad, puntaje, countdown, pausa, input con multi-touch, derrape, persistencia, audio con fakes de Web Audio) + tests de integración sin runtime de Phaser (input → steering, SpawnScheduler × Difficulty, colisiones → economía, carrera → guardado → recarga).
 - **Multijugador**: lobby y carrera compartida contra un hub en memoria (`fakes/FakeNetClient.ts`) — roster/colores/anfitrión, pista determinista por seed, stream a 10 Hz con fantasmas interpolados, eliminaciones/stale/desconexiones, y el flujo COMPLETO de una partida de 3 clientes que exige el MISMO ranking en los tres.
 - **Chat social**: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo), TrysteroChatClient contra hub fake (presencia opt-in, heartbeat, stale, DM/invite) y flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`), 100% determinista con reloj/timers inyectados.
 - **Carrera en circuito**: pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación, plausibilidad y staleness, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi.
 - **Gran Premio**: roster de 7 rivales determinista por seed, presets de dificultad en orden estricto (fácil < normal < difícil, probados sobre simulación headless a 60 Hz), línea de carrera, payload de resultados con parseo defensivo y récords por pista × dificultad (round-trip, JSON corrupto, storage roto → memoria, claves aisladas).
 - **Telemetría (#27, loader desde #41)**: wrapper no-op seguro de [`src/telemetry/analytics.ts`](./src/telemetry/analytics.ts), loader gateado de [`src/telemetry/posthogLoader.ts`](./src/telemetry/posthogLoader.ts) (fuera del HTML: token por `VITE_POSTHOG_TOKEN`) y ganchos de juego (`partida_iniciada` en menú y lobby, `vuelta_completada` en RaceScene con un LapTracker real de por medio) asertados contra un `window.posthog.capture` espiado, con igualdad EXACTA de properties (sin PII).
+- **PWA (#43)**: registro con gates inyectados (PROD/dev, sin soporte, error sincrónico y rechazo de `register` → `false`, jamás lanza), manager del prompt contra un target falso (captura **sin** `preventDefault`, evento de un solo uso, dismissed/reject reportados, `dispose` que suelta listeners) y el contrato de los estáticos en `pwaAssets.test.ts`: manifest válido con `start_url` relativo, iconos PNG con dimensiones reales (parseo del IHDR), metas de iOS en el shell y handlers/estrategia del `public/sw.js` (que es vanilla y no pasa por tsc).
 
 ---
 
