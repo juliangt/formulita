@@ -799,6 +799,10 @@ export class RaceScene extends Phaser.Scene {
     this.raceHud.setTimings(this.lapTracker.currentLapMs, this.lapTracker.totalMs);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      // #35 — el chat de espectador muere con la carrera (patrón LobbyScene):
+      // si la carrera terminó con el overlay abierto, su velo interactivo
+      // quedaría encima de los resultados bloqueando los botones.
+      this.scene.stop(ChatScene.KEY);
       this.inputSystem.detach();
       this.touch.destroy();
       for (const widget of this.hudWidgets) {
