@@ -43,16 +43,46 @@ export interface GridSlot {
 }
 
 /**
- * [STUB del commit Test: replica el fallback ACTUAL de RaceScene (la pole)
- * para que los tests qaT6 fallen POR ASSERTION. La casilla sintética real
- * llega en el commit Fix #35.]
+ * Casilla propia de un peer: SU casilla si está en la parrilla; si no (el
+ * "joiner invisible" del #35: recibió el start pero su peerId no viaja en el
+ * roster congelado, así que la parrilla —construida del roster— no lo
+ * incluye), una casilla SINTÉTICA en la fila SIGUIENTE a la última. NUNCA la
+ * pole (o cualquier casilla): todas pertenecen a miembros reales del roster y
+ * el fallback viejo (`gridSlots[0]`) lo paraba ENCIMA de un rival. Misma
+ * geometría de filas/columnas que `assignGridOrder` (2 columnas escalonadas
+ * detrás de la meta), determinista.
  */
 export function ownGridSlot(
   slots: readonly GridSlot[],
   peerId: string,
-  _path?: TrackPath,
+  path?: TrackPath,
 ): GridSlot {
-  return slots.find((slot) => slot.peerId === peerId) ?? slots[0];
+  const own = slots.find((slot) => slot.peerId === peerId);
+  if (own) {
+    return own;
+  }
+  const index = slots.length;
+  const row = Math.floor(index / 2);
+  const column = index % 2;
+  const behindPx = CIRCUIT.gridStartOffsetPx + row * CIRCUIT.gridRowStepPx;
+  const lateral = column === 0
+    ? -CIRCUIT.gridLateralOffsetPx
+    : CIRCUIT.gridLateralOffsetPx;
+  if (!path) {
+    return { index, peerId, s: -behindPx, lateral };
+  }
+  const s = ((path.totalLength - behindPx) % path.totalLength + path.totalLength)
+    % path.totalLength;
+  const sample = path.sample(s);
+  return {
+    index,
+    peerId,
+    s,
+    lateral,
+    x: sample.x + Math.cos(sample.angle + Math.PI / 2) * lateral,
+    y: sample.y + Math.sin(sample.angle + Math.PI / 2) * lateral,
+    angle: sample.angle,
+  };
 }
 
 /**
