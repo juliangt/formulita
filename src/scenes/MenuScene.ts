@@ -322,7 +322,7 @@ export class MenuScene extends Phaser.Scene {
   /** Ayuda de controles según el dispositivo (táctil vs teclado). */
   private createControlsHelp(centerX: number, isTouch: boolean): void {
     const lines = isTouch
-      ? ['DOBLA CON ◀ ▶', 'GAS ACELERA · BRK FRENA', 'TURBO Y DRS EN PANTALLA', 'BOTÓN II PAUSA']
+      ? ['DESLIZA EL DEDO PARA DOBLAR', 'GAS ACELERA · BRK FRENA', 'TURBO Y DRS EN PANTALLA', 'BOTÓN II PAUSA']
       : [
           '←→ / A·D  DOBLAR  ·  ESPACIO  ACELERAR',
           'SHIFT  TURBO  ·  Z  FRENO  ·  X  DRS',

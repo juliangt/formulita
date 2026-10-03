@@ -79,6 +79,8 @@ import type { TrackPath, TrackProjection } from '../race/trackPath';
 import { CountdownSystem, type CountdownLabel } from '../systems/CountdownSystem';
 import { PauseSystem } from '../systems/PauseSystem';
 import { TouchButton } from '../systems/TouchButton';
+import { SteerJoystick } from '../systems/SteerJoystick';
+import { SteerJoystickView } from '../ui/SteerJoystickView';
 import type { PointerEventEmitter } from '../systems/TouchSource';
 import { InputSystem, type IInputSource, type IInputState } from '../systems/InputSystem';
 import { RemoteCar } from '../entities/RemoteCar';
@@ -230,9 +232,11 @@ interface RivalRuntime {
 /**
  * Fuente táctil de la carrera (implementa `IInputSource`): reutiliza la
  * lógica de `TouchButton` (tracking multi-touch por pointerId, hit-test
- * manual que no roba eventos al juego) y la presentación `PixelButton`, con
- * el layout propio del circuito (◀ ▶ + GAS + FRENO) de `raceControls`. Es la
- * hermana chica de `TouchSource` (GameScene) sin TURBO/DRS. Issue #20: el
+ * manual que no roba eventos al juego) y la presentación `PixelButton` para
+ * GAS + FRENO, con el layout propio del circuito de `raceControls`. El GIRO
+ * va por el joystick deslizable (`SteerJoystick` + `SteerJoystickView`,
+ * issue #37), que consume `pointermove` para el eje analógico. Es la
+ * hermana de `TouchSource` (GameScene) sin TURBO/DRS. Issue #20: el
  * circuito ya NO es auto-acelerado — el botón GAS (misma casilla/esquina y
  * estilo verde del modo BATALLA) pisa el acelerador.
  */
@@ -240,6 +244,7 @@ class RaceTouchControls implements IInputSource {
   readonly name = 'race-touch';
 
   private readonly buttons: readonly TouchButton[];
+  private readonly joystick: SteerJoystick;
   private readonly emitter: PointerEventEmitter | null;
   private attached = false;
 
@@ -247,31 +252,42 @@ class RaceTouchControls implements IInputSource {
     const { width, height } = scene.scale;
     const layout = computeRaceTouchLayout(width, height);
     const styles: Record<RaceTouchAction, PixelButtonStyle> = {
-      left: { icon: TEXTURE_KEYS.hudArrowLeft, tint: 0x3c6cd6 },
-      right: { icon: TEXTURE_KEYS.hudArrowRight, tint: 0x3c6cd6 },
       // MISMO estilo del GAS de la BATALLA (TouchSource): label verde.
       throttle: { label: 'GAS', tint: 0x3c9e52 },
       brake: { label: 'FRENO', tint: 0xd63c3c },
     };
 
+    // La cámara del mundo scrollea: el HUD táctil vive en pantalla fija.
+    // Dos cámaras (issue #18): el HUD táctil renderiza SOLO en la cámara de
+    // UI — la del mundo lo ignora (mismo truco que `hud()`: `ignore` marca
+    // los hijos del container y el bit del PROPIO container es el que mira
+    // el hit-test). El toque en sí NO pasa por cámaras: los hit-tests
+    // comparan px de pantalla crudos, así que siguen registrando igual.
+    const pinToUiCam = (container: Phaser.GameObjects.Container): void => {
+      container.setScrollFactor(0);
+      scene.cameras.main.ignore(container);
+      container.cameraFilter |= scene.cameras.main.id;
+    };
+
     this.buttons = RACE_TOUCH_ACTIONS.map((action) => {
       const rect = layout[action];
       const visual = new PixelButton(scene, rect, styles[action]);
-      // La cámara del mundo scrollea: el HUD táctil vive en pantalla fija.
-      visual.container.setScrollFactor(0);
-      // Dos cámaras (issue #18): el HUD táctil renderiza SOLO en la cámara de
-      // UI — la del mundo lo ignora (mismo truco que `hud()`: `ignore` marca
-      // los hijos del container y el bit del PROPIO container es el que mira
-      // el hit-test). El toque en sí NO pasa por cámaras: `TouchButton.contains`
-      // compara px de pantalla crudos, así que sigue registrando igual.
-      scene.cameras.main.ignore(visual.container);
-      visual.container.cameraFilter |= scene.cameras.main.id;
+      pinToUiCam(visual.container);
       return new TouchButton({
         action,
         rect,
         visual,
         hitPadding: TOUCH_HUD.hitPadding,
       });
+    });
+
+    const joystickVisual = new SteerJoystickView(scene, layout.joystick);
+    pinToUiCam(joystickVisual.container);
+    this.joystick = new SteerJoystick({
+      rect: layout.joystick,
+      visual: joystickVisual,
+      deadzonePx: TOUCH_HUD.joystickDeadzonePx,
+      hitPadding: TOUCH_HUD.hitPadding,
     });
 
     this.emitter = scene.input;
@@ -283,6 +299,7 @@ class RaceTouchControls implements IInputSource {
     }
     this.attached = true;
     this.emitter.on('pointerdown', this.onPointerDown);
+    this.emitter.on('pointermove', this.onPointerMove);
     this.emitter.on('pointerup', this.onPointerUp);
     this.emitter.on('pointerupoutside', this.onPointerUp);
   }
@@ -293,8 +310,10 @@ class RaceTouchControls implements IInputSource {
     }
     this.attached = false;
     this.emitter?.off('pointerdown', this.onPointerDown);
+    this.emitter?.off('pointermove', this.onPointerMove);
     this.emitter?.off('pointerup', this.onPointerUp);
     this.emitter?.off('pointerupoutside', this.onPointerUp);
+    this.joystick.forceRelease();
     for (const button of this.buttons) {
       button.forceRelease();
     }
@@ -302,6 +321,7 @@ class RaceTouchControls implements IInputSource {
 
   destroy(): void {
     this.detach();
+    this.joystick.destroy();
     for (const button of this.buttons) {
       button.destroy();
     }
@@ -311,17 +331,23 @@ class RaceTouchControls implements IInputSource {
   getState(): IInputState {
     const pressed = (action: RaceTouchAction): boolean =>
       this.buttons.find((button) => button.action === action)?.isPressed ?? false;
+    const axis = this.joystick.steerAxis;
     return {
-      left: pressed('left'),
-      right: pressed('right'),
+      // Flags derivados del eje: fuera de zona muerta, el lado manda.
+      left: axis < 0,
+      right: axis > 0,
       throttle: pressed('throttle'),
       brake: pressed('brake'),
       turbo: false,
       drs: false,
+      steerAxis: axis,
     };
   }
 
   private readonly onPointerDown = (pointer: { id: number; x: number; y: number }): void => {
+    if (this.joystick.contains(pointer.x, pointer.y)) {
+      this.joystick.press(pointer.id, pointer.x);
+    }
     for (const button of this.buttons) {
       if (button.contains(pointer.x, pointer.y)) {
         button.press(pointer.id);
@@ -329,7 +355,13 @@ class RaceTouchControls implements IInputSource {
     }
   };
 
+  /** pointermove: SOLO el joystick lo consume (el dueño desliza el knob). */
+  private readonly onPointerMove = (pointer: { id: number; x: number; y: number }): void => {
+    this.joystick.move(pointer.id, pointer.x);
+  };
+
   private readonly onPointerUp = (pointer: { id: number; x: number; y: number }): void => {
+    this.joystick.release(pointer.id);
     for (const button of this.buttons) {
       button.release(pointer.id);
     }
@@ -370,9 +402,9 @@ class RaceTouchControls implements IInputSource {
  *   funcionando porque Phaser resuelve el hit-test por cámara con el mismo
  *   filtro de render.
  * - INPUT: mismo stack que el modo BATALLA (`IInputState` fusionado por
- *   `InputSystem`) con fuentes propias de carrera (teclado W/↑ + ◀ ▶ + FRENO
- *   y táctil ◀ ▶ + GAS + FRENO, issue #20: gas manual); el puente a la
- *   física es el puro `circuitInputFromState`.
+ *   `InputSystem`) con fuentes propias de carrera (teclado W/↑ + ←→/A·D +
+ *   FRENO y táctil joystick deslizable + GAS + FRENO, issues #20 y #37); el
+ *   puente a la física es el puro `circuitInputFromState` (giro analógico).
  * - PAUSA: igual que GameScene (PauseSystem + PauseScene encima, tecla P,
  *   auto-pausa por blur) — PauseScene ahora recibe la escena objetivo por
  *   init data (default Game: regresión cero en el modo BATALLA).
