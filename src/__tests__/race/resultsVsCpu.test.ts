@@ -27,7 +27,20 @@ describe('parseRaceSceneInit — modo vs-cpu (#14)', () => {
   it('acepta un payload válido con dificultad y seed', () => {
     expect(
       parseRaceSceneInit({ trackId: 'monza', mode: 'vs-cpu', difficulty: 'hard', seed: 1234 }),
-    ).toEqual({ trackId: 'monza', mode: 'vs-cpu', difficulty: 'hard', seed: 1234 });
+    ).toEqual({ trackId: 'monza', mode: 'vs-cpu', difficulty: 'hard', seed: 1234, wear: false });
+  });
+
+  it('wear del toggle DESGASTE (#39): sólo un booleano true viaja true', () => {
+    expect(parseRaceSceneInit({ mode: 'vs-cpu', wear: true }).wear).toBe(true);
+    expect(parseRaceSceneInit({ mode: 'vs-cpu', wear: false }).wear).toBe(false);
+    for (const junk of [undefined, null, 'true', 1, Number.NaN]) {
+      expect(
+        parseRaceSceneInit({ mode: 'vs-cpu', wear: junk as unknown as boolean }).wear,
+        `basura: ${String(junk)}`,
+      ).toBe(false);
+    }
+    // El payload sin el campo (llamadas viejas, REINTENTAR pre-#39) es arcade.
+    expect(parseRaceSceneInit({ mode: 'vs-cpu', seed: 3 }).wear).toBe(false);
   });
 
   it('dificultad inválida degrada a NORMAL sin lanzar', () => {

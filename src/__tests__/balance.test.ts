@@ -189,17 +189,30 @@ describe('TRACK_PICKER — GRAN PREMIO: 6 filas sin solapamientos (issue #26)', 
     );
   });
 
-  it('el rótulo de dificultad no pisa sus botones ni CERRAR', () => {
+  it('el rótulo de dificultad no pisa sus botones ni el toggle DESGASTE (#39)', () => {
     const difficultyTop = TRACK_PICKER.difficultyRowY - TRACK_PICKER.difficultyButtonHeight / 2;
     const difficultyBottom = TRACK_PICKER.difficultyRowY + TRACK_PICKER.difficultyButtonHeight / 2;
     expect(difficultyTop).toBeGreaterThanOrEqual(labelBottom);
-    expect(TRACK_PICKER.closeY - TRACK_PICKER.closeHeight / 2).toBeGreaterThanOrEqual(difficultyBottom);
+    const wearTop = TRACK_PICKER.wearRowY - TRACK_PICKER.wearButtonHeight / 2;
+    expect(wearTop, 'la fila de dificultad pisa el toggle DESGASTE').toBeGreaterThanOrEqual(
+      difficultyBottom + 16,
+    );
+  });
+
+  it('el toggle DESGASTE (#39) no pisa CERRAR y CERRAR queda dentro del panel', () => {
+    const wearBottom = TRACK_PICKER.wearRowY + TRACK_PICKER.wearButtonHeight / 2;
+    expect(
+      TRACK_PICKER.closeY - TRACK_PICKER.closeHeight / 2,
+      'el toggle DESGASTE pisa CERRAR',
+    ).toBeGreaterThanOrEqual(wearBottom + 16);
   });
 
   it('CERRAR queda completo dentro del panel, debajo de todo el contenido', () => {
     // El subtítulo mide 30 px de fuente; la primera fila arranca debajo.
     expect(buttonTop(rows[0])).toBeGreaterThanOrEqual(TRACK_PICKER.subtitleY + 15);
     expect(TRACK_PICKER.closeY + TRACK_PICKER.closeHeight / 2).toBeLessThanOrEqual(panelBottom);
+    // El panel crecido (#39) no puede salirse del lienzo 720×1280.
+    expect(panelBottom).toBeLessThanOrEqual(1280);
   });
 });
 
