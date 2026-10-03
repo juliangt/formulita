@@ -69,6 +69,7 @@ import {
 } from '../race/raceRemote';
 import { RacePlausibility } from '../race/racePlausibility';
 import { decideLateAdmission } from '../race/raceLateAdmission';
+import { scheduleRaceStateBroadcast } from '../race/raceBroadcast';
 import { RaceStaleTracker } from '../race/raceStale';
 import {
   parseRaceFinishPayload,
@@ -1463,23 +1464,30 @@ export class RaceScene extends Phaser.Scene {
     if (this.selfFinished || !this.netClient) {
       return;
     }
-    this.stateAccumulatorMs += deltaMs;
-    const intervalMs = 1000 / STATE_HZ;
-    while (this.stateAccumulatorMs >= intervalMs) {
-      this.stateAccumulatorMs -= intervalMs;
-      this.netClient.sendRaceState(
-        roundRaceStatePayload(
-          {
-            s: projection.s,
-            o: projection.lateral,
-            v: this.carState.speed,
-            lap: this.lapTracker.lapsCompleted,
-          },
-          this.path.totalLength,
-          this.trackDef.widthPx / 2,
-        ),
-      );
+    // Saturación (issue #35): el delta acumulado NUNCA itera — un tramo
+    // gigante (background en multi, sin auto-pausa) emite UN único rstate
+    // fresco y descarta el sobrante (patrón de GameScene; raceBroadcast.ts).
+    const schedule = scheduleRaceStateBroadcast(
+      this.stateAccumulatorMs,
+      deltaMs,
+      1000 / STATE_HZ,
+    );
+    this.stateAccumulatorMs = schedule.accumulatorMs;
+    if (schedule.sendCount === 0) {
+      return;
     }
+    this.netClient.sendRaceState(
+      roundRaceStatePayload(
+        {
+          s: projection.s,
+          o: projection.lateral,
+          v: this.carState.speed,
+          lap: this.lapTracker.lapsCompleted,
+        },
+        this.path.totalLength,
+        this.trackDef.widthPx / 2,
+      ),
+    );
   }
 
   /**
