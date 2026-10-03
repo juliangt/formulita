@@ -324,6 +324,9 @@ function createMenuHarness(options: { storedName?: string } = {}): MenuHarness {
       launch: sceneLaunch,
       get: vi.fn(() => null),
       add: vi.fn(),
+      // #35 — el guard de startGame pregunta si el overlay de chat sigue
+      // activo; acá nunca se abre el chat, así que el fake responde false.
+      isActive: vi.fn(() => false),
     },
     tweens: {
       killTweensOf: vi.fn(),
