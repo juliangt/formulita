@@ -53,7 +53,7 @@ En iOS/Android: compartí → *Agregar a pantalla de inicio*. El `viewport-fit=c
 
 | Acción | Teclado | Táctil (HUD) |
 | --- | --- | --- |
-| Doblar | ← → o A / D | ◀ ▶ (abajo-izquierda) |
+| Doblar | ← → o A / D | **Joystick deslizable** (abajo-izquierda, issue #37) |
 | Acelerar | Espacio | GAS (abajo-derecha) |
 | Freno | Z | BRK |
 | Turbo | Shift | TURBO |
@@ -70,13 +70,14 @@ El acelerador es **manual** (issue #20): hay que pisar GAS; sin gas el auto desa
 
 | Acción | Teclado | Táctil (HUD) |
 | --- | --- | --- |
-| Doblar | ← → o A / D | ◀ ▶ (abajo-izquierda) |
+| Doblar | ← → o A / D | **Joystick deslizable** (abajo-izquierda, issue #37) |
 | Gas | W o ↑ | GAS (abajo-derecha, verde) |
 | Freno | ↓ / S / Espacio | FRENO (abajo-derecha) |
 
 Común a todos los modos:
 
-- Los botones táctiles soportan **multi-touch real** (tracking de `pointerId` por botón): doblar y acelerar a la vez.
+- **Doblado analógico (issue #37)**: en táctil, el giro es un joystick horizontal — apoyá el dedo en la zona inferior-izquierda y deslizalo: cuanto más lejos del centro, más giro (con zona muerta en el medio). Al soltar —aunque el dedo salga del canvas— el volante vuelve al centro. El teclado sigue binario (← → / A D).
+- Los controles táctiles soportan **multi-touch real** (tracking de `pointerId` por control): doblar deslizando y acelerar a la vez.
 - La carrera arranca con un **countdown 3-2-1-GO!**: el mundo está congelado hasta el final de la cuenta.
 - La **pausa es real**: botón en pantalla, tecla P, o **automática** al cambiar de pestaña / perder el foco. Física, scroll, spawn y puntaje quedan congelados de verdad hasta reanudar.
 
