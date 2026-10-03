@@ -9,16 +9,17 @@
  *   en el dispositivo y, por lo mismo, NO hace falta banner de consentimiento
  *   (el juego no tiene ninguno y así queda).
  * - Cloud EU: API y assets en la UE (https://eu.i.posthog.com).
- * - JAMÁS llamar identify()/alias() desde este repo: asociar los eventos a
+ * - JAMÁS llamar `identify` ni `alias` desde este repo: asociar los eventos a
  *   una identidad persistente anularía todo el beneficio del modo cookieless.
  * - Nunca PII: los ganchos de juego (otra fase, issue #27) solo mandan el
  *   nombre del evento y properties agregadas/anónimas — sin nombres de
  *   jugador, salas ni contenido de chat.
  *
- * El SDK NO se bundlea (posthog-js no está en package.json): index.html lo
- * carga diferido desde el CDN EU, gateado por hostname y por token. Este
- * wrapper es el único archivo que conoce la forma del proveedor, y es
- * NO-OP SEGURO en todos los bordes:
+ * El SDK NO se bundlea (posthog-js no está en package.json): el loader de
+ * este mismo módulo (src/telemetry/posthogLoader.ts, issue #41 — antes un
+ * snippet inline en index.html) lo carga diferido desde el CDN EU, gateado
+ * por hostname y por token. Este wrapper es el único punto de `capture` con
+ * el proveedor, y es NO-OP SEGURO en todos los bordes:
  * - dev (`npm run dev`), script bloqueado (uBlock) o sin red: no hay
  *   `window.posthog` ⇒ no-op.
  * - SDK a medio cargar (`posthog` sin `capture`) ⇒ no-op.
@@ -29,11 +30,14 @@
 
 /**
  * Contrato mínimo del SDK que este repo consume. El resto de posthog-js no
- * nos interesa: mientras no exista esta superficie, `trackEvent` no hace nada.
+ * nos interesa: mientras no exista esta superficie, `trackEvent` no hace
+ * nada. `init` la usa el loader (posthogLoader.ts); `capture`, el wrapper.
  */
 declare global {
   interface Window {
     posthog?: {
+      /** Opcional: el SDK puede estar a medio cargar (solo `capture`). */
+      init?: (token: string, config: Record<string, unknown>) => void;
       capture: (name: string, properties?: Record<string, unknown>) => void;
     };
   }
