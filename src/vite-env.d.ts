@@ -18,6 +18,13 @@ interface ImportMetaEnv {
    * listas distintas fragmentan el matchmaking.
    */
   readonly VITE_TRYSTERO_RELAYS?: string;
+  /**
+   * Project API token de PostHog Cloud EU (analítica, issues #27 y #41).
+   * OPCIONAL y PÚBLICO por diseño (viaja al navegador en el bundle, no es un
+   * secreto): vacío o ausente = analítica apagada (el loader no carga el
+   * SDK). Dev: `.env.local`; producción: variable de repo en deploy.yml.
+   */
+  readonly VITE_POSTHOG_TOKEN?: string;
 }
 
 interface ImportMeta {

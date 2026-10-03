@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { createGameConfig, GAME_HEIGHT, GAME_WIDTH } from './config/gameConfig';
 import { isDebugMode } from './config/debugFlags';
 import { installDomContainerSync } from './core/domContainerSync';
+import { loadPostHogTelemetry } from './telemetry/posthogLoader';
 
 /** Contenedor DOM donde Phaser monta el canvas. */
 const GAME_CONTAINER_ID = 'game';
@@ -201,5 +202,11 @@ function installBuildTag(debug: boolean): void {
 }
 
 // El script es un módulo (defer), por lo que el DOM ya está disponible.
+// Telemetría (issues #27 y #41): agenda primero la carga diferida del SDK de
+// PostHog — gateada por hostname y por VITE_POSTHOG_TOKEN, y con la descarga
+// real recién en idle (requestIdleCallback), así que no compite con Phaser.
+// Ir antes del bootstrap garantiza el pageview aunque el juego rompa al
+// arrancar. Nunca lanza: con gates en falso o cualquier error es no-op.
+loadPostHogTelemetry();
 installGestureGuards();
 bootstrap();

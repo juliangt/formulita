@@ -258,13 +258,13 @@ Tres piezas, todo P2P sobre la misma red de Trystero: **(1)** chat de **SALA** d
 
 ### Analítica (PostHog Cloud EU, issue #27)
 
-La analítica está **APAGADA por default** y es opt-in del administrador del deploy (no del jugador): hay que crear el proyecto y pegar el token, como se describe abajo. Mientras no haya token, no se pide ni un byte del SDK.
+La analítica está **APAGADA por default** y es opt-in del administrador del deploy (no del jugador): hay que crear el proyecto y definir el token como variable de entorno, como se describe abajo. Mientras no haya token, no se pide ni un byte del SDK.
 
 **Qué se mide** (y nada más — `autocapture: false`, sólo eventos explícitos):
 
 | Evento | Properties | Cuándo |
 | --- | --- | --- |
-| Pageview | — (el default del snippet) | al cargar la página |
+| Pageview | — (el default del loader) | al cargar la página |
 | `partida_iniciada` | `modo` (`entrenar` \| `gran_premio` \| `multijugador`), `pista` (sólo gran premio y carrera multi), `dificultad` (sólo gran premio: `easy`/`normal`/`hard`), `desgaste` (sólo gran premio, #39: booleano del toggle DESGASTE) | al arrancar una partida desde el menú o desde el lobby |
 | `vuelta_completada` | `pista`, `duracion_ms` | cada vuelta válida del jugador local en RaceScene (gran premio y carrera multi; nunca por rival) |
 
@@ -275,8 +275,8 @@ La analítica está **APAGADA por default** y es opt-in del administrador del de
 **Activación (paso manual, una sola vez)**:
 
 1. Crear el proyecto en **<https://eu.posthog.com>** con el modo **"Cookieless server hash mode"** habilitado (y, si querés máxima sobriedad, GeoIP deshabilitado en la configuración del proyecto).
-2. Pegar el **Project API token** en [`index.html`](./index.html), en la constante `POSTHOG_TOKEN` del snippet de telemetría. El token es público por diseño (viaja en el HTML estático). **Vacío = analítica apagada** (ni siquiera se carga el SDK).
-3. En desarrollo local (`npm run dev`) no hace falta nada: el snippet además está gateado por hostname y en `localhost`/`file://` no carga nada.
+2. Definir el **Project API token** como variable `VITE_POSTHOG_TOKEN` (issues #27 y #41): en dev, `cp .env.example .env.local` y completarla; en producción, como variable de repo en el paso de build de [`deploy.yml`](./.github/workflows/deploy.yml). El token es público por diseño (viaja al navegador dentro del bundle). **Vacía o ausente = analítica apagada** (ni siquiera se carga el SDK).
+3. En desarrollo local (`npm run dev`) no hace falta nada: el loader ([`src/telemetry/posthogLoader.ts`](./src/telemetry/posthogLoader.ts)) además está gateado por hostname y en `localhost`/`file://` no carga nada.
 
 La telemetría es **fire-and-forget**: `trackEvent` nunca lanza ni bloquea el juego — con el SDK bloqueado (uBlock), sin red o a medio cargar, el juego corre idéntico.
 
@@ -289,7 +289,7 @@ Los workflows corren **solo manualmente** — pestaña **Actions** → elegir wo
 
 Requisitos (una sola vez, quien administra el repo):
 
-1. **Settings → Secrets and variables → Actions → Variables** (no Secrets): `VITE_TRYSTERO_APP_ID` (p. ej. `formulita`).
+1. **Settings → Secrets and variables → Actions → Variables** (no Secrets): `VITE_TRYSTERO_APP_ID` (p. ej. `formulita`). Opcional: `VITE_POSTHOG_TOKEN` (analítica — sin ella queda apagada) y `VITE_TRYSTERO_RELAYS` (trackers custom — sin ella usa los defaults).
 
 > El sitio de Pages no requiere configuración manual: `deploy.yml` usa `actions/configure-pages` con `enablement: true`, así que habilita el sitio (source "GitHub Actions") en el propio run si aún no existe. Sin la variable, en cambio, el sitio se publica igual (el appId es runtime, no build-time), pero el multijugador mostrará el error de configuración faltante al entrar al lobby.
 
@@ -354,7 +354,7 @@ Decisiones clave:
 - **Chat social**: ChatStore (sanitize/throttle por hilo/no leídos/bloqueo), TrysteroChatClient contra hub fake (presencia opt-in, heartbeat, stale, DM/invite) y flujo COMPLETO de 3 clientes (`socialFullFlow.test.ts`), 100% determinista con reloj/timers inyectados.
 - **Carrera en circuito**: pistas validadas (curvatura/banda de duración de vuelta), física y anti-corte (LapTracker por sectores), parrilla determinista, ranking/clasificación, plausibilidad y staleness, protocolo `rstate`/`rfin`/`race-over` y flujos completos practice/multi.
 - **Gran Premio**: roster de 7 rivales determinista por seed, presets de dificultad en orden estricto (fácil < normal < difícil, probados sobre simulación headless a 60 Hz), línea de carrera, payload de resultados con parseo defensivo y récords por pista × dificultad (round-trip, JSON corrupto, storage roto → memoria, claves aisladas).
-- **Telemetría (#27)**: wrapper no-op seguro de [`src/telemetry/analytics.ts`](./src/telemetry/analytics.ts), snippet gateado de `index.html` y ganchos de juego (`partida_iniciada` en menú y lobby, `vuelta_completada` en RaceScene con un LapTracker real de por medio) asertados contra un `window.posthog.capture` espiado, con igualdad EXACTA de properties (sin PII).
+- **Telemetría (#27, loader desde #41)**: wrapper no-op seguro de [`src/telemetry/analytics.ts`](./src/telemetry/analytics.ts), loader gateado de [`src/telemetry/posthogLoader.ts`](./src/telemetry/posthogLoader.ts) (fuera del HTML: token por `VITE_POSTHOG_TOKEN`) y ganchos de juego (`partida_iniciada` en menú y lobby, `vuelta_completada` en RaceScene con un LapTracker real de por medio) asertados contra un `window.posthog.capture` espiado, con igualdad EXACTA de properties (sin PII).
 
 ---
 

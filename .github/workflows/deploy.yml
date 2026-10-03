@@ -7,6 +7,8 @@
 # Requisitos (una sola vez, ver README §Publicación):
 #   1. Settings → Secrets and variables → Actions → Variables:
 #      VITE_TRYSTERO_APP_ID (p. ej. "formulita").
+#      Opcional: VITE_POSTHOG_TOKEN (analítica; sin ella queda apagada) y
+#      VITE_TRYSTERO_RELAYS (trackers custom; sin ella usa los defaults).
 # Pages no requiere configuración manual: configure-pages usa enablement:true
 # y habilita el sitio (source "GitHub Actions") si aún no existe (fix #7).
 #
@@ -60,6 +62,10 @@ jobs:
           # variable el deploy usa los defaults de la librería. Si se define,
           # tiene que ser IGUAL en todas las instalaciones (fragmentación).
           VITE_TRYSTERO_RELAYS: ${{ vars.VITE_TRYSTERO_RELAYS }}
+          # Token de analítica PostHog (opcional, issues #27 y #41): sin la
+          # variable (o vacía) la analítica queda APAGADA en producción — el
+          # loader no carga el SDK. Público por diseño (viaja en el bundle).
+          VITE_POSTHOG_TOKEN: ${{ vars.VITE_POSTHOG_TOKEN }}
 
       - name: Configurar Pages
         uses: actions/configure-pages@v5
