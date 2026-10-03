@@ -98,3 +98,15 @@ export function formatRaceGaps(
   }
   return parts.join(' ');
 }
+
+/**
+ * Indicador de goma del GRAN PREMIO con desgaste activo (#39): porcentaje de
+ * neumático RESTANTE — "NEUMÁTICOS 87%" (100 = goma nueva). El porcentaje se
+ * clampea a [0, 100] y el basura degrada a 0 (sin "NaN%" en pantalla).
+ */
+export function formatWear(remainingPct: number): string {
+  const safe = Number.isFinite(remainingPct)
+    ? Math.min(Math.max(Math.round(remainingPct), 0), 100)
+    : 0;
+  return `NEUMÁTICOS ${safe}%`;
+}

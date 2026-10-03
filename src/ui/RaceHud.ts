@@ -16,15 +16,18 @@
  * - V3 (#14) — línea de gaps a los rivales "+1.2s -0.8s" (`setGaps`) y chip
  *   de contexto "GRAN PREMIO · MÓNACO · DIFÍCIL" (`setInfoChip`): sólo la
  *   rama vs CPU los alimenta (práctica y multi quedan como estaban).
+ * - #39 — indicador "NEUMÁTICOS n%" (`setWear`): sólo con el toggle DESGASTE
+ *   activo; pasa a rojo bajo el umbral crítico. `null` lo oculta.
  */
 
 import Phaser from 'phaser';
-import { RACE, RACE_VS_CPU } from '../config/balance';
-import { formatGrandPrixChip, formatLapBadge, formatLapMs, formatRaceGaps } from './format';
+import { RACE, RACE_VS_CPU, RACE_WEAR } from '../config/balance';
+import { formatGrandPrixChip, formatLapBadge, formatLapMs, formatRaceGaps, formatWear } from './format';
 
 const STROKE_COLOR = '#0c0c14';
 const GOLD_COLOR = '#f7c531';
 const DIM_COLOR = '#c8ccd4';
+const CRITICAL_COLOR = '#e0533c';
 
 export interface RaceHudConfig {
   /** X del borde izquierdo de los textos. */
@@ -41,6 +44,8 @@ export interface RaceHudConfig {
   readonly gapY?: number;
   /** Y del chip de modo/pista/dificultad (centro; V3 #14). */
   readonly infoChipY?: number;
+  /** Y del indicador de neumáticos (centro; #39, bajo el chip). */
+  readonly wearY?: number;
   /** Profundidad en la escena. */
   readonly depth?: number;
 }
@@ -54,6 +59,7 @@ export class RaceHud {
   private readonly positionText: Phaser.GameObjects.Text;
   private readonly gapText: Phaser.GameObjects.Text;
   private readonly infoChipText: Phaser.GameObjects.Text;
+  private readonly wearText: Phaser.GameObjects.Text;
 
   private lastBadge = '';
   private lastLapTime = '';
@@ -61,6 +67,7 @@ export class RaceHud {
   private lastPosition = '';
   private lastGaps = '';
   private lastInfoChip = '';
+  private lastWear = '';
 
   constructor(scene: Phaser.Scene, config: RaceHudConfig = {}) {
     const {
@@ -71,6 +78,7 @@ export class RaceHud {
       positionY = RACE.positionBadgeY,
       gapY = RACE_VS_CPU.gapY,
       infoChipY = RACE_VS_CPU.infoChipY,
+      wearY = RACE_WEAR.hudY,
       depth = 0,
     } = config;
 
@@ -138,6 +146,19 @@ export class RaceHud {
       .setStroke(STROKE_COLOR, 4)
       .setVisible(false);
 
+    // #39 — goma restante con el toggle DESGASTE activo: mismo estilo discreto
+    // del chip (dim + stroke fino), rojo bajo el umbral crítico. Oculto hasta
+    // el primer `setWear` (práctica, multi y GP sin desgaste nunca lo llaman).
+    this.wearText = scene.add
+      .text(x, wearY, '', {
+        fontFamily: 'monospace',
+        fontSize: `${RACE_VS_CPU.infoChipFontSize}px`,
+        color: DIM_COLOR,
+      })
+      .setOrigin(0, 0.5)
+      .setStroke(STROKE_COLOR, 4)
+      .setVisible(false);
+
     this.container.add([
       this.lapBadgeText,
       this.lapTimeText,
@@ -145,6 +166,7 @@ export class RaceHud {
       this.positionText,
       this.gapText,
       this.infoChipText,
+      this.wearText,
     ]);
   }
 
@@ -221,6 +243,29 @@ export class RaceHud {
     }
     this.lastInfoChip = label;
     this.infoChipText.setText(label).setVisible(true);
+  }
+
+  /**
+   * #39 — goma restante del auto PROPIO en % (100 = nueva). Repinta sólo si
+   * cambió el texto; `null` oculta la línea (GP sin desgaste, práctica, multi).
+   * Bajo el umbral crítico el texto pasa a rojo (misma semántica que la barra
+   * CHASIS del modo infinito).
+   */
+  setWear(remainingPct: number | null): void {
+    if (remainingPct === null) {
+      if (this.lastWear.length > 0) {
+        this.lastWear = '';
+        this.wearText.setVisible(false);
+      }
+      return;
+    }
+    const label = formatWear(remainingPct);
+    if (label === this.lastWear) {
+      return;
+    }
+    this.lastWear = label;
+    const critical = Number.isFinite(remainingPct) && remainingPct < RACE_WEAR.hudCriticalPct;
+    this.wearText.setText(label).setColor(critical ? CRITICAL_COLOR : DIM_COLOR).setVisible(true);
   }
 
   destroy(): void {

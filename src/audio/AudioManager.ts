@@ -1256,6 +1256,9 @@ export class AudioManager implements ISfxEngine {
    *   vs CPU lo emite en el GO!; práctica y multi no lo emiten).
    * - `race-overtake` (#14, V3) → SFX de cambio de posición en el ranking
    *   vivo (la escena ya viene con el enfriamiento aplicado).
+   * - `race-contact` (#39) → SFX de golpe entre autos del GRAN PREMIO (el
+   *   mismo `damage` no letal de #10: thump grave, cola mínima — la escena
+   *   ya viene con el enfriamiento aplicado).
    * - `ui-click` → click; `mute` → aplica y persiste el mute.
    *
    * @returns función de desuscripción (el audio vive toda la sesión: no se
@@ -1294,6 +1297,7 @@ export class AudioManager implements ISfxEngine {
       bus.on('game-aborted', () => this.stopEngine()),
       bus.on('race-go', () => this.play('go')),
       bus.on('race-overtake', () => this.play('overtake')),
+      bus.on('race-contact', () => this.play('damage')),
       bus.on('ui-click', () => this.play('click')),
       bus.on('mute', (muted) => this.setMuted(muted)),
     ];

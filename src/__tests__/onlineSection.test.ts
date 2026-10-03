@@ -5,6 +5,7 @@ import { MENU, TRACK_PICKER } from '../config/balance';
 import { onlineMenuButtonLabel } from '../chat/dmView';
 import { PLAYER_PROFILE_REGISTRY_KEY, type PlayerProfile } from '../data/PlayerProfileRepository';
 import { TRACKS } from '../race/tracks';
+import { GP_SETTINGS_STORAGE_KEY, loadGpSettings } from '../race/gpSettings';
 import { GameScene } from '../scenes/GameScene';
 import { MenuScene } from '../scenes/MenuScene';
 import { RaceScene } from '../scenes/RaceScene';
@@ -471,6 +472,9 @@ describe('MenuScene — GRAN PREMIO sigue abriendo el selector de pistas', () =>
 describe('MenuScene — telemetría partida_iniciada (issue #27)', () => {
   afterEach(() => {
     delete window.posthog;
+    // #39: el toggle DESGASTE persiste en localStorage — se limpia para que
+    // el estado de un test no se cuele en el siguiente.
+    window.localStorage.removeItem(GP_SETTINGS_STORAGE_KEY);
   });
 
   function installCapture(): ReturnType<typeof vi.fn> {
@@ -491,7 +495,7 @@ describe('MenuScene — telemetría partida_iniciada (issue #27)', () => {
     expect(capture).toHaveBeenCalledWith('partida_iniciada', { modo: 'entrenar' });
   });
 
-  it('elegir pista en GRAN PREMIO reporta { modo, pista, dificultad } con la dificultad default', () => {
+  it('elegir pista en GRAN PREMIO reporta { modo, pista, dificultad, desgaste } con los defaults', () => {
     const capture = installCapture();
     const harness = createMenuHarness();
 
@@ -503,6 +507,7 @@ describe('MenuScene — telemetría partida_iniciada (issue #27)', () => {
       modo: 'gran_premio',
       pista: TRACKS[0].id,
       dificultad: 'normal', // DEFAULT_CPU_DIFFICULTY, la misma que viaja a RaceScene
+      desgaste: false, // #39: toggle DESGASTE default (arcade).
     });
   });
 
@@ -519,7 +524,26 @@ describe('MenuScene — telemetría partida_iniciada (issue #27)', () => {
       modo: 'gran_premio',
       pista: TRACKS[TRACKS.length - 1].id,
       dificultad: 'hard',
+      desgaste: false,
     });
+  });
+
+  it('el toggle DESGASTE (#39) alternado a SÍ reporta desgaste: true y persiste', () => {
+    const capture = installCapture();
+    const harness = createMenuHarness();
+
+    harness.openTrackPicker();
+    harness.press('DESGASTE: NO'); // Alterna a SÍ (y persiste en storage).
+    harness.press(TRACKS[0].name);
+
+    expect(capture).toHaveBeenCalledWith('partida_iniciada', {
+      modo: 'gran_premio',
+      pista: TRACKS[0].id,
+      dificultad: 'normal',
+      desgaste: true,
+    });
+    // La preferencia queda persistida para la próxima sesión.
+    expect(loadGpSettings(window.localStorage).wearEnabled).toBe(true);
   });
 
   it('con una subpantalla abierta, Enter NO reporta partida (guarda previa al trackEvent)', () => {

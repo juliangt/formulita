@@ -85,6 +85,13 @@ export type GameEvents = {
    * (`race/racePositionSwap`) ANTES de emitir — el bus nunca recibe rafagas.
    */
   'race-overtake': undefined;
+  /**
+   * Contacto entre autos del GRAN PREMIO (#39): golpe sonable (impacto por
+   * encima del mínimo). El enfriamiento (~0.35 s, máximo 1 sonido por
+   * ráfaga de roce) lo aplica la propia RaceScene ANTES de emitir — while
+   * dos autos van pegados, el bus no recibe ráfagas.
+   */
+  'race-contact': undefined;
 };
 
 export class EventBus<TEvents extends object> {
