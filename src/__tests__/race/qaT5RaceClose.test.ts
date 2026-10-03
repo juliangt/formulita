@@ -79,8 +79,10 @@ describe('raceClose — shouldBroadcastRaceOver (autoridad determinista del race
   });
 
   it('tiebreak peerId ASC lexicográfico, el MISMO criterio de raceRanking', () => {
-    expect(shouldBroadcastRaceOver(['qa2', 'qa10'], 'qa10')).toBe(false);
-    expect(shouldBroadcastRaceOver(['qa2', 'qa10'], 'qa2')).toBe(true);
+    // 'qa10' < 'qa2' como string ('1' viene antes que '2'): igual que el
+    // byPeerId de raceRanking — NO es orden numérico.
+    expect(shouldBroadcastRaceOver(['qa2', 'qa10'], 'qa10')).toBe(true);
+    expect(shouldBroadcastRaceOver(['qa2', 'qa10'], 'qa2')).toBe(false);
   });
 });
 

@@ -7,7 +7,6 @@ import {
   parseRaceOverPayload,
   roundRaceFinishPayload,
   roundRaceStatePayload,
-  type RaceFinishPayload,
   type RaceStartInit,
 } from '../../net/protocol';
 import { hashStringToSeed } from '../../net/roomRng';
@@ -18,6 +17,11 @@ import {
 } from '../../race/raceRanking';
 import { LapTracker } from '../../race/lapTracker';
 import { unrollProgress, type RaceRemoteSample } from '../../race/raceRemote';
+import {
+  allPeersResolved,
+  shouldAcceptRaceOver,
+  shouldBroadcastRaceOver,
+} from '../../race/raceClose';
 import { RacePlausibility } from '../../race/racePlausibility';
 import { RaceStaleTracker } from '../../race/raceStale';
 import { assignGridOrder } from '../../race/gridOrder';
@@ -119,9 +123,10 @@ class QaT5CloseClient {
   /** true mientras los `race-over` entrantes se retengan en la cola. */
   holdRaceOver = false;
 
-  private readonly client: FakeNetClient;
   private readonly profile: DriveProfile;
   private readonly clock: { now: () => number };
+  /** El transporte fake (público para el test: leave / sends forzados). */
+  readonly client: FakeNetClient;
   private readonly lapLength: number;
   private readonly halfWidth: number;
   private readonly ownGridS: number;
@@ -243,10 +248,16 @@ class QaT5CloseClient {
       this.distance += (this.profile.speed * TICK_MS) / 1000;
       const raw = this.ownGridS + this.distance;
       const s = raw % this.lapLength;
+      this.lapTracker.update(s, TICK_MS); // dispara onRaceFinished al cierre
+      // El wire lleva el lap POST-update (idem RaceScene: updateLiveRanking
+      // difunde lapsCompleted DESPUÉS del lapTracker.update del frame) — si
+      // se capturara el lap viejo, el tick del cruce mandaría (s envuelto,
+      // lap viejo) y el progreso desenrollado RETROCEDERÍA una vuelta.
       this.lastS = s;
       this.lastLap = this.lapTracker.lapsCompleted;
-      this.lapTracker.update(s, TICK_MS); // dispara onRaceFinished al cierre
-      if (this.ticks <= this.muteAfterTick) {
+      // Idem escena: en el tick del cruce final YA no se difunde (rstate es
+      // sólo para quien compite; broadcastRaceState corta con selfFinished).
+      if (!this.selfFinished && this.ticks <= this.muteAfterTick) {
         this.client.sendRaceState(
           roundRaceStatePayload(
             { s, o: this.profile.lateral, v: this.profile.speed, lap: this.lastLap },
@@ -316,10 +327,22 @@ class QaT5CloseClient {
     );
   }
 
-  /** Espejo de handleRaceOver: la clasificación recibida manda sobre la local. */
+  /**
+   * Espejo de handleRaceOver (#35): la clasificación de la AUTORIDAD manda
+   * sobre la local, UNA sola vez — un duplicado o un no-authority no pisa la
+   * ya aceptada.
+   */
   private acceptRaceOver(peerId: string, standings: RaceFinalStanding[]): void {
+    if (
+      !shouldAcceptRaceOver(
+        peerId,
+        [...this.finishedPeers.keys()],
+        this.raceOverStandings !== null,
+      )
+    ) {
+      return;
+    }
     this.raceOverStandings = standings;
-    void peerId;
   }
 
   /** Réplica del checkRaceEnd + broadcastRaceOverIfWinner de RaceScene. */
@@ -331,10 +354,12 @@ class QaT5CloseClient {
       this.conclude(this.raceOverStandings);
       return;
     }
-    const allFinished = this.players.every((player) =>
-      this.finishedPeers.has(player.peerId),
+    const allResolved = allPeersResolved(
+      this.players.map((player) => player.peerId),
+      [...this.finishedPeers.keys()],
+      [...this.disconnectedPeers],
     );
-    if (allFinished) {
+    if (allResolved) {
       this.broadcastRaceOverIfWinner();
       this.conclude(this.classifyLocally());
       return;
@@ -348,9 +373,15 @@ class QaT5CloseClient {
     }
   }
 
-  /** Espejo de broadcastRaceOverIfWinner: el "ganador" difunde UNA vez. */
+  /**
+   * Espejo de broadcastRaceOverIfWinner (#35): difunde UNA vez la AUTORIDAD
+   * (finisher de peerId menor), no el primer rfin visto localmente.
+   */
   private broadcastRaceOverIfWinner(): void {
-    if (this.raceOverSent || this.firstFinish?.peerId !== this.peerId) {
+    if (
+      this.raceOverSent ||
+      !shouldBroadcastRaceOver([...this.finishedPeers.keys()], this.peerId)
+    ) {
       return;
     }
     this.raceOverSent = true;
@@ -509,7 +540,7 @@ describe('QA #35 T5 (1) — los desconectados no bloquean el cierre', () => {
 
     // Ana sigue en carrera y termina: con ella resueltos TODOS los vivos
     // (beto terminó, carla se fue), la carrera debe cerrar EN ESE MOMENTO.
-    runUntil(clock, [ana, beto], () => ana.selfFinished);
+    runUntil(clock, [ana, beto], () => ana.selfFinishedAt !== null);
     runTicks(clock, [ana, beto], 30); // ventana corta: 3 s << gracia de 30 s
 
     // EL FIX: sin esperar RACE_FINISH_GRACE_MS.
@@ -520,9 +551,11 @@ describe('QA #35 T5 (1) — los desconectados no bloquean el cierre', () => {
     // Misma clasificación en ambos; el caído conserva su fila.
     expect(key(ana.concluded!)).toEqual(key(beto.concluded!));
     const rows = ana.concluded!;
-    expect(rows.find((row) => row.peerId === ana.peerId)!.status).toBe('finished');
-    expect(rows.find((row) => row.peerId === ana.peerId)!.position).toBe(1);
+    // Beto (el más rápido) es el legítimo P1 aunque el cierre lo dispare Ana.
     expect(rows.find((row) => row.peerId === beto.peerId)!.status).toBe('finished');
+    expect(rows.find((row) => row.peerId === beto.peerId)!.position).toBe(1);
+    expect(rows.find((row) => row.peerId === ana.peerId)!.status).toBe('finished');
+    expect(rows.find((row) => row.peerId === ana.peerId)!.position).toBe(2);
     const carlaRow = rows.find((row) => row.peerId === carla.peerId)!;
     expect(carlaRow.status).toBe('disconnected');
     expect(carlaRow.totalMs).toBeNull();
@@ -546,7 +579,7 @@ describe('QA #35 T5 (1) — los desconectados no bloquean el cierre', () => {
     expect(ana.remoteProgress.get(carla.peerId)).toEqual(frozen);
 
     // Ana termina: vivos todos resueltos → cierre inmediato, sin la gracia.
-    runUntil(clock, [ana, beto], () => ana.selfFinished);
+    runUntil(clock, [ana, beto], () => ana.selfFinishedAt !== null);
     runTicks(clock, [ana, beto], 30);
 
     expect(ana.concluded).not.toBeNull();
@@ -575,7 +608,7 @@ describe('QA #35 T5 (2) — autoridad determinista del race-over', () => {
     beto.holdRaceFinish = true;
     ana.holdRaceOver = true;
     beto.holdRaceOver = true;
-    runUntil(clock, [ana, beto], () => ana.selfFinished && beto.selfFinished);
+    runUntil(clock, [ana, beto], () => ana.selfFinishedAt !== null && beto.selfFinishedAt !== null);
     expect(ana.firstFinish!.peerId).toBe(ana.peerId); // cada máquina se cree
     expect(beto.firstFinish!.peerId).toBe(beto.peerId); // ganadora EN LOCAL
 

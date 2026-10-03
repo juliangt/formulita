@@ -56,6 +56,11 @@ import {
 } from '../race/results';
 import { raceEngineSpeed } from '../race/raceAudio';
 import { computeRaceGaps } from '../race/raceGap';
+import {
+  allPeersResolved,
+  shouldAcceptRaceOver,
+  shouldBroadcastRaceOver,
+} from '../race/raceClose';
 import { PositionSwapDetector } from '../race/racePositionSwap';
 import {
   sampleFromProgress,
@@ -539,7 +544,9 @@ export class RaceScene extends Phaser.Scene {
   /** Peers fuera de la carrera sin terminar (leave o stale V3): en la
    *  clasificación final van como `disconnected` con su último progreso. */
   private disconnectedPeers = new Set<string>();
-  /** Primer `rfin` visto (ganador + instante local del arranque de gracia). */
+  /** Primer `rfin` visto: abre la ventana de gracia del cierre (#35: la
+   *  AUTORIDAD del race-over ya no se deriva de acá — es el finisher de
+   *  peerId menor, ver `race/raceClose`). */
   private firstFinish: { peerId: string; at: number } | null = null;
   /** Clasificación recibida por `race-over` (manda sobre la local). */
   private raceOverStandings: RaceFinalStanding[] | null = null;
@@ -1290,9 +1297,14 @@ export class RaceScene extends Phaser.Scene {
   }
 
   /**
-   * Llegó `race-over` del ganador: su clasificación manda sobre la local.
-   * Mismo gate de roster que el `rfin` (un remitente fuera del roster
-   * congelado no puede concluir la carrera de todos).
+   * Llegó `race-over`: su clasificación manda sobre la local. Mismo gate de
+   * roster que el `rfin` (un remitente fuera del roster congelado no puede
+   * concluir la carrera de todos). #35 — y sólo se acepta UNO, del remitente
+   * que es la autoridad (finisher de peerId menor entre MIS finishers
+   * conocidos): un duplicado o un no-authority no pisa la clasificación ya
+   * aceptada. TRADEOFF: con una vista local transitoriamente incompleta se
+   * puede rechazar un race-over legítimo — la conclusión local determinista
+   * y la gracia de respaldo cubren el caso (ver `race/raceClose`).
    */
   private handleRaceOver(peerId: string, payload: unknown): void {
     if (!this.rosterPlayers.some((player) => player.peerId === peerId)) {
@@ -1300,6 +1312,15 @@ export class RaceScene extends Phaser.Scene {
     }
     const parsed = parseRaceOverPayload(payload);
     if (!parsed) {
+      return;
+    }
+    if (
+      !shouldAcceptRaceOver(
+        peerId,
+        [...this.finishedPeers.keys()],
+        this.raceOverStandings !== null,
+      )
+    ) {
       return;
     }
     this.raceOverStandings = parsed.standings;
@@ -1472,11 +1493,14 @@ export class RaceScene extends Phaser.Scene {
 
   /**
    * Condiciones de cierre de la carrera multi, EN ORDEN:
-   * 1) llegó `race-over` del ganador → sus standings mandan;
-   * 2) terminaron todos → el ganador difunde su clasificación y cierra;
-   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra el
-   *    ganador (difundiendo) o cada cliente con SU clasificación local
-   *    (defensa: ganador desaparecido — las reglas determinísticas hacen
+   * 1) llegó `race-over` de la autoridad → sus standings mandan;
+   * 2) todos los peers del roster están resueltos → concluye. #35: los
+   *    desconectados (leave/stale) cuentan como resueltos — jamás mandarán
+   *    `rfin`, así que exigirlos esperaba la gracia completa con rivales
+   *    caídos aunque los vivos ya hubieran terminado;
+   * 3) venció RACE_FINISH_GRACE_MS desde el primer `rfin` → cierra la
+   *    autoridad (difundiendo) o cada cliente con SU clasificación local
+   *    (defensa: autoridad desaparecida — las reglas determinísticas hacen
    *    que la clasificación local coincida con la que habría difundido).
    */
   private checkRaceEnd(): void {
@@ -1487,10 +1511,12 @@ export class RaceScene extends Phaser.Scene {
       this.concludeRace(this.raceOverStandings);
       return;
     }
-    const allFinished = this.rosterPlayers.every((player) =>
-      this.finishedPeers.has(player.peerId),
+    const allResolved = allPeersResolved(
+      this.rosterPlayers.map((player) => player.peerId),
+      [...this.finishedPeers.keys()],
+      [...this.disconnectedPeers],
     );
-    if (allFinished) {
+    if (allResolved) {
       this.broadcastRaceOverIfWinner();
       this.concludeRace(this.buildFinalClassification());
       return;
@@ -1504,9 +1530,18 @@ export class RaceScene extends Phaser.Scene {
     }
   }
 
-  /** El ganador (primer `rfin`) difunde `race-over` UNA vez. */
+  /**
+   * La AUTORIDAD difunde `race-over` UNA vez: el finisher de peerId menor
+   * (tiebreak del ranking), no el primer `rfin` visto localmente — con
+   * cruces casi simultáneos cada máquina se creía ganadora y difundía
+   * standings distintas (#35). Con un único finisher difunde él: sin cambio
+   * de comportamiento.
+   */
   private broadcastRaceOverIfWinner(): void {
-    if (this.raceOverSent || this.firstFinish?.peerId !== this.myPeerId) {
+    if (
+      this.raceOverSent ||
+      !shouldBroadcastRaceOver([...this.finishedPeers.keys()], this.myPeerId)
+    ) {
       return;
     }
     this.raceOverSent = true;
