@@ -3,6 +3,9 @@ import { createGameConfig, GAME_HEIGHT, GAME_WIDTH } from './config/gameConfig';
 import { isDebugMode } from './config/debugFlags';
 import { installDomContainerSync } from './core/domContainerSync';
 import { loadPostHogTelemetry } from './telemetry/posthogLoader';
+import { trackEvent } from './telemetry/analytics';
+import { registerServiceWorker } from './pwa/serviceWorkerRegistration';
+import { createInstallPromptManager } from './pwa/installPrompt';
 
 /** Contenedor DOM donde Phaser monta el canvas. */
 const GAME_CONTAINER_ID = 'game';
@@ -209,4 +212,15 @@ function installBuildTag(debug: boolean): void {
 // arrancar. Nunca lanza: con gates en falso o cualquier error es no-op.
 loadPostHogTelemetry();
 installGestureGuards();
+// PWA instalable (issue #43): registro del service worker (solo producción,
+// fire-and-forget, nunca lanza) y observadores del prompt de instalación con
+// telemetría anónima. SIN preventDefault: el banner nativo de Android sigue
+// funcionando; el manager queda listo para un futuro botón INSTALAR del menú.
+// Antes del bootstrap: si el juego llegara a romper al arrancar, los
+// observadores ya quedaron colgados.
+registerServiceWorker();
+createInstallPromptManager(window, {
+  onInstalled: () => trackEvent('pwa_installed'),
+  onResult: (outcome) => trackEvent('pwa_install_result', { outcome }),
+});
 bootstrap();
