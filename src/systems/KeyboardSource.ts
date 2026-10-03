@@ -34,8 +34,9 @@ export interface KeyboardPluginLike {
   removeKey(key: string | number | KeyLike): unknown;
 }
 
-/** Acciones de input = claves de `IInputState`. */
-type InputAction = keyof IInputState;
+/** Acciones de input binarias = claves booleanas de `IInputState` (el eje
+ * analógico `steerAxis` no va por teclas). */
+type InputAction = Exclude<keyof IInputState, 'steerAxis'>;
 
 /**
  * Mapeo acción → nombres de KeyCodes de Phaser. Cubre las 6 acciones del

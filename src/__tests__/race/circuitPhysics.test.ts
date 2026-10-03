@@ -151,7 +151,7 @@ describe('CircuitPhysics — giro', () => {
   it('a más velocidad, menos giro para el mismo input', () => {
     const slow = stateAtS(100, 60);
     const fast = stateAtS(100, CIRCUIT.maxSpeed);
-    const input = { throttle: true, brake: false, steer: 1 as const };
+    const input = { throttle: true, brake: false, steer: 1 };
     physics.step(slow, DT, input);
     physics.step(fast, DT, input);
     const baseHeading = gentle.sample(100).angle;
@@ -160,11 +160,30 @@ describe('CircuitPhysics — giro', () => {
     expect(slowDelta).toBeGreaterThan(fastDelta);
   });
 
-  it('steer se sanea: cualquier valor fuera de -1|0|1 no gira', () => {
-    const state = stateAtS(100, CIRCUIT.maxSpeed);
-    const heading = state.heading;
-    physics.step(state, DT, { throttle: true, brake: false, steer: 7 as unknown as -1 | 0 | 1 });
-    expect(state.heading).toBe(heading);
+  it('steer analógico (issue #37): medio giro produce la MITAD del delta de heading', () => {
+    const half = stateAtS(100, CIRCUIT.maxSpeed);
+    const full = stateAtS(100, CIRCUIT.maxSpeed);
+    physics.step(half, DT, { throttle: true, brake: false, steer: 0.5 });
+    physics.step(full, DT, { throttle: true, brake: false, steer: 1 });
+    const baseHeading = gentle.sample(100).angle;
+    const halfDelta = Math.abs(half.heading - baseHeading);
+    const fullDelta = Math.abs(full.heading - baseHeading);
+    expect(halfDelta).toBeCloseTo(fullDelta / 2, 10);
+  });
+
+  it('steer se sanea: fuera de rango se CLAMPEA a ±1 y NaN no gira', () => {
+    // Con el eje analógico, un 7 desbocado gira a full (clamp), no se descarta.
+    const clamped = stateAtS(100, CIRCUIT.maxSpeed);
+    const full = stateAtS(100, CIRCUIT.maxSpeed);
+    physics.step(clamped, DT, { throttle: true, brake: false, steer: 7 });
+    physics.step(full, DT, { throttle: true, brake: false, steer: 1 });
+    expect(clamped.heading).toBeCloseTo(full.heading, 10);
+
+    // El caso verdaderamente corrupto (NaN) sigue sin girar.
+    const nan = stateAtS(100, CIRCUIT.maxSpeed);
+    const heading = nan.heading;
+    physics.step(nan, DT, { throttle: true, brake: false, steer: Number.NaN });
+    expect(nan.heading).toBe(heading);
   });
 });
 

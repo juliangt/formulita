@@ -46,8 +46,8 @@ export function createGameConfig(parent: HTMLElement | string): Phaser.Types.Cor
       },
     },
     // Multi-touch real (Fase 2): el default de Phaser es 1 puntero. Doblar
-    // (◀/▶) y acelerar a la vez exige varios dedos simultáneos; 5 alcanza de
-    // sobra para los 6 botones del HUD táctil.
+    // (joystick deslizable, issue #37) y acelerar a la vez exige varios dedos
+    // simultáneos; 5 alcanza de sobra para los controles del HUD táctil.
     //
     // `touch: true` es CLAVE: sin él Phaser solo crea el TouchManager si el
     // navegador reporta soporte táctil en el arranque (Device.input.touch).

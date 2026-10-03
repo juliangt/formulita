@@ -6,15 +6,17 @@ import { afterEach, describe, expect, it } from 'vitest';
  * El issue: con el zoom de cámara sobre RaceScene, el HUD (scrollFactor 0) se
  * dibujaba desplazado respecto de los toques y el botón de pausa caía debajo
  * del minimapa. El fix estructural (PR #25, issue #18) fue la cámara de UI
- * `uiCam` (zoom 1): el HUD se dibuja en px de pantalla 1:1, y `TouchButton`
- * (◀ ▶ FRENO) compara px de pantalla crudos → dibujo == hit. La separación de
- * cámaras YA está cubierta por `raceCameraSplit.test.ts` (acá NO se repite);
- * lo nuevo de #19 es la GEOMETRÍA y el FLUJO:
+ * `uiCam` (zoom 1): el HUD se dibuja en px de pantalla 1:1, y los hit-tests
+ * de `TouchButton`/`SteerJoystick` comparan px de pantalla crudos → dibujo ==
+ * hit. La separación de cámaras YA está cubierta por
+ * `raceCameraSplit.test.ts` (acá NO se repite); lo nuevo de #19 es la
+ * GEOMETRÍA y el FLUJO:
  *
- * 1. Hit-test de ◀ ▶ GAS FRENO en px de pantalla con el pipeline REAL de
- *    Phaser: un toque en el centro del rect dibujado presiona ESE botón y
- *    uno a 10 px fuera no presiona nada (el hitPadding de dedos imprecisos
- *    es 8 < 10).
+ * 1. Hit-test de GAS/FRENO y de la ZONA DEL JOYSTICK (issue #37) en px de
+ *    pantalla con el pipeline REAL de Phaser: un toque en el centro del rect
+ *    dibujado activa ESE control y uno a 10 px fuera no activa nada (el
+ *    hitPadding de dedos imprecisos es 8 < 10). El joystick además responde
+ *    a `pointermove` real con el eje analógico.
  * 2. Geometría pausa-vs-minimapa: el rect clicable real del botón II (leído
  *    del hitArea que Phaser registró) NO intersecta el panel real del
  *    minimapa — "quedó debajo del minimapa" no puede volver.
@@ -52,13 +54,19 @@ interface RaceSceneInternals {
   miniMap: { container: Phaser.GameObjects.Container };
   hudWidgets: { container?: Phaser.GameObjects.Container }[];
   touch: {
-    /** Botones ◀ ▶ GAS FRENO (TouchButton: action/rect/isPressed públicos). */
+    /** Botones GAS FRENO (TouchButton: action/rect/isPressed públicos). */
     buttons: {
       action: string;
       rect: { x: number; y: number; width: number; height: number };
       isPressed: boolean;
       visual: { container: Phaser.GameObjects.Container };
     }[];
+    /** Zona del joystick deslizable (issue #37): isPressed y eje −1..1. */
+    joystick: {
+      rect: { x: number; y: number; width: number; height: number };
+      isPressed: boolean;
+      steerAxis: number;
+    };
     /** true mientras los listeners de pointer estén attachados a la escena. */
     attached: boolean;
   };
@@ -146,6 +154,21 @@ function tap(scene: Phaser.Scene, x: number, y: number, down: boolean): void {
   plugin.update(down ? Phaser.Input.MOUSE_DOWN : Phaser.Input.MOUSE_UP, [pointer]);
 }
 
+/**
+ * Simula un ARRASTRE REAL de Phaser (el `pointermove` que consume el joystick
+ * deslizable, issue #37): reposiciona el activePointer y corre `update` con
+ * el CONST.MOUSE_MOVE que el framework usa por frame.
+ */
+function dragTo(scene: Phaser.Scene, x: number, y: number): void {
+  const pointer = scene.input.manager.activePointer;
+  pointer.x = x;
+  pointer.y = y;
+  const plugin = scene.input as unknown as {
+    update: (type: number, pointers: Phaser.Input.Pointer[]) => boolean;
+  };
+  plugin.update(Phaser.Input.MOUSE_MOVE, [pointer]);
+}
+
 /** Espera (por frames del juego) hasta que `predicate` se cumpla. */
 async function waitFor(
   predicate: () => boolean,
@@ -208,21 +231,22 @@ describe('RaceScene — HUD táctil del circuito (issue #19)', () => {
     game = null;
   });
 
-  it('◀ ▶ FRENO: dibujo == hit — el centro del rect dibujado presiona ESE botón y 10 px fuera no presiona nada', async () => {
+  it('GAS/FRENO y zona del joystick: dibujo == hit — el centro del rect dibujado activa ESE control y 10 px fuera no activa nada', async () => {
     const boot = await bootRaceScene();
     game = boot.game;
     const { scene, internals } = boot;
 
     // MISMA fuente de geometría que RaceTouchControls (cero duplicación):
     // el layout puro sobre el lienzo real de la escena (720×1280). Issue #20:
-    // el circuito ya no es auto-acelerado — el cluster derecho suma el botón
-    // GAS en SU casilla del modo batalla (4 botones: ◀ ▶ + GAS + FRENO).
+    // el circuito ya no es auto-acelerado — GAS en SU casilla del modo
+    // batalla (2 botones: GAS + FRENO). Issue #37: el giro va por la zona
+    // deslizable del joystick (no es un botón).
     const { width, height } = scene.scale;
     const layout = computeRaceTouchLayout(width, height);
-    expect(internals.touch.buttons.length).toBe(4);
+    expect(internals.touch.buttons.length).toBe(2);
 
     for (const button of internals.touch.buttons) {
-      const rect = layout[button.action as keyof typeof layout];
+      const rect = layout[button.action as 'throttle' | 'brake'];
       // El hit-test de la lógica y el layout táctil son EL MISMO rect...
       expect(button.rect).toEqual(rect);
       // ...y el dibujo (PixelButton) está centrado EXACTAMENTE en ese rect:
@@ -252,14 +276,36 @@ describe('RaceScene — HUD táctil del circuito (issue #19)', () => {
       tap(scene, rect.x - 10, centerY, false);
     }
 
-    // Y en el hueco entre ◀ y ▶ (alcanza a ninguno con su padding) tampoco.
-    const gapX = (layout.left.x + layout.left.width + layout.right.x) / 2;
-    const rowY = layout.left.y + layout.left.height / 2;
-    tap(scene, gapX, rowY, true);
+    // Joystick deslizable (issue #37), MISMO hit-test con el pipeline real:
+    // el rect del touch y del layout son el mismo...
+    expect(internals.touch.joystick.rect).toEqual(layout.joystick);
+    const zone = layout.joystick;
+    const zoneCenterX = zone.x + zone.width / 2;
+    const zoneCenterY = zone.y + zone.height / 2;
+    // ...apoyar el dedo en el centro: zona presionada, eje en 0 (zona muerta)
+    // y NINGÚN botón afectado (joystick y botones son controles separados).
+    tap(scene, zoneCenterX, zoneCenterY, true);
+    expect(internals.touch.joystick.isPressed).toBe(true);
+    expect(internals.touch.joystick.steerAxis).toBe(0);
     for (const other of internals.touch.buttons) {
       expect(other.isPressed).toBe(false);
     }
-    tap(scene, gapX, rowY, false);
+    // Deslizar el dedo hacia el tope derecho: eje completo a la derecha.
+    dragTo(scene, zone.x + zone.width, zoneCenterY);
+    expect(internals.touch.joystick.steerAxis).toBe(1);
+    // Soltar: neutro otra vez.
+    tap(scene, zone.x + zone.width, zoneCenterY, false);
+    expect(internals.touch.joystick.isPressed).toBe(false);
+    expect(internals.touch.joystick.steerAxis).toBe(0);
+
+    // Y un toque 10 px por debajo de la zona tampoco activa nada (joystick
+    // incluido).
+    tap(scene, zoneCenterX, zone.y + zone.height + 10, true);
+    expect(internals.touch.joystick.isPressed).toBe(false);
+    for (const other of internals.touch.buttons) {
+      expect(other.isPressed).toBe(false);
+    }
+    tap(scene, zoneCenterX, zone.y + zone.height + 10, false);
   }, 30_000);
 
   it('geometría pausa-vs-minimapa: el rect clicable del botón II no pisa el panel del minimapa', async () => {

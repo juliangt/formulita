@@ -934,8 +934,8 @@ export function laneIndexAtX(x: number, laneCount: number = SPAWN.laneCount): nu
 /* ------------------------------------------------------------------ */
 
 /**
- * Layout y feedback visual de los botones táctiles (TouchSource).
- * Dos clusters en el borde inferior: ◀ ▶ abajo-izquierda y GAS / BRK /
+ * Layout y feedback visual del HUD táctil (TouchSource).
+ * Joystick deslizable de dirección abajo-izquierda (issue #37) y GAS / BRK /
  * TURBO / DRS en grilla 2×2 abajo-derecha (el acelerador en la esquina,
  * donde llega el pulgar derecho).
  *
@@ -966,6 +966,13 @@ export const TOUCH_HUD = {
   pressedScale: 0.9,
   /** Tamaño de fuente de las etiquetas de texto (px). */
   labelFontSize: 30,
+  /* Joystick deslizable de dirección (issue #37): reemplaza los botones ◀ ▶
+   * y ocupa SU MISMO footprint (2 × buttonSize + gap de ancho) para no pisar
+   * el cluster derecho. */
+  /** Zona muerta (px) alrededor del centro: desvíos menores no doblan. */
+  joystickDeadzonePx: 14,
+  /** Lado del knob deslizable (px). */
+  joystickKnobSize: 92,
 } as const;
 
 /* ------------------------------------------------------------------ */

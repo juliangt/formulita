@@ -10,13 +10,16 @@ import { CircuitPhysics } from '../../race/circuitPhysics';
 import type { CarState } from '../../race/circuitPhysics';
 import { TrackPath } from '../../race/trackPath';
 import { computeTouchButtonLayout } from '../../systems/TouchButton';
+import { computeSteerJoystickRect } from '../../systems/SteerJoystick';
 import type { IInputState } from '../../systems/InputSystem';
 
 /**
  * Tests del puente input → física de la RaceScene (issue #9, V1): el mapeo
  * puro `IInputState` → `CircuitInput` (issue #20: gas MANUAL — el throttle
- * pasa tal cual del estado fusionado), las teclas de la carrera y el layout
- * táctil heredado del modo BATALLA (◀ ▶ + GAS + FRENO).
+ * pasa tal cual del estado fusionado; issue #37: el giro sale de
+ * `steerDirection`, eje analógico del joystick o fórmula binaria del
+ * teclado), las teclas de la carrera y el layout táctil (joystick + GAS +
+ * FRENO).
  *
  * Issue #20 (Fase 2): además el PUENTE COMPLETO — el `CircuitInput` que
  * produce `circuitInputFromState` entra a `CircuitPhysics.step` y mueve la
@@ -47,11 +50,22 @@ describe('circuitInputFromState — IInputState → CircuitInput', () => {
     expect(circuitInputFromState(state({ throttle: true, brake: true })).brake).toBe(true);
   });
 
-  it('mapea el giro binario: izquierda −1, derecha +1, ambos se cancelan', () => {
+  it('mapea el giro binario (teclado): izquierda −1, derecha +1, ambos se cancelan', () => {
     expect(circuitInputFromState(state({ left: true })).steer).toBe(-1);
     expect(circuitInputFromState(state({ right: true })).steer).toBe(1);
     expect(circuitInputFromState(state({ left: true, right: true })).steer).toBe(0);
     expect(circuitInputFromState(state({})).steer).toBe(0);
+  });
+
+  it('el eje analógico del joystick (issue #37) pasa tal cual: giro proporcional', () => {
+    expect(circuitInputFromState(state({ steerAxis: -1 })).steer).toBe(-1);
+    expect(circuitInputFromState(state({ steerAxis: 1 })).steer).toBe(1);
+    // Medio deslizo = medio giro (la física lo escala al turn rate).
+    expect(circuitInputFromState(state({ steerAxis: 0.5 })).steer).toBeCloseTo(0.5, 12);
+    expect(circuitInputFromState(state({ steerAxis: -0.25 })).steer).toBeCloseTo(-0.25, 12);
+    // Eje en zona muerta (0): cae a la fórmula binaria, como el teclado.
+    expect(circuitInputFromState(state({ steerAxis: 0, right: true })).steer).toBe(1);
+    expect(circuitInputFromState(state({ steerAxis: 0 })).steer).toBe(0);
   });
 
   it('pasa el freno tal cual (la física le da prioridad sobre el gas)', () => {
@@ -122,12 +136,11 @@ describe('RACE_KEY_BINDINGS — teclado de la carrera', () => {
   });
 });
 
-describe('computeRaceTouchLayout — ◀ ▶ + GAS + FRENO', () => {
-  it('reutiliza las casillas ◀ ▶, GAS y del freno del layout del modo BATALLA', () => {
+describe('computeRaceTouchLayout — joystick + GAS + FRENO (issue #37)', () => {
+  it('el joystick ocupa el footprint de los viejos ◀ ▶ y GAS/FRENO sus casillas del modo BATALLA', () => {
     const race = computeRaceTouchLayout(GAME_WIDTH, GAME_HEIGHT);
     const full = computeTouchButtonLayout(GAME_WIDTH, GAME_HEIGHT);
-    expect(race.left).toEqual(full.left);
-    expect(race.right).toEqual(full.right);
+    expect(race.joystick).toEqual(computeSteerJoystickRect(GAME_WIDTH, GAME_HEIGHT));
     // El GAS ocupa SU casilla del modo batalla: esquina abajo-derecha, donde
     // llega el pulgar derecho (el freno queda a su lado, hacia el centro).
     expect(race.throttle).toEqual(full.throttle);
@@ -135,7 +148,7 @@ describe('computeRaceTouchLayout — ◀ ▶ + GAS + FRENO', () => {
     expect(race.throttle.x).toBeGreaterThan(race.brake.x);
   });
 
-  it('los cuatro botones quedan dentro del lienzo y sin superponerse', () => {
+  it('joystick y botones quedan dentro del lienzo y sin superponerse', () => {
     const race = computeRaceTouchLayout(GAME_WIDTH, GAME_HEIGHT);
     const rects = Object.values(race);
     for (const rect of rects) {
